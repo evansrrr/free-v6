@@ -13,7 +13,11 @@ func TestRenderMasqueConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"type: masque", "server: \"2606:4700:103::1\"", "private-key: private", "public-key: peer", "rules:"} {
+	for _, expected := range []string{
+		"type: masque", "server: \"2606:4700:103::1\"", "private-key: private", "public-key: peer",
+		"log-level: error", "find-process-mode: 'always'", "sniffer:", "enhanced-mode: fake-ip",
+		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🎯 全球直连", "rules:",
+	} {
 		if !strings.Contains(config, expected) {
 			t.Errorf("config missing %q", expected)
 		}
@@ -23,6 +27,12 @@ func TestRenderMasqueConfig(t *testing.T) {
 	}
 	if strings.Contains(config, "server: 162.") {
 		t.Fatal("IPv4 access points must not be included")
+	}
+	if count := strings.Count(config, "    type: http"); count != 10 {
+		t.Fatalf("expected 10 HTTP rule providers, got %d", count)
+	}
+	if strings.Contains(config, "external-controller:") {
+		t.Fatal("renderer should follow gen_masque.py settings and omit external controller")
 	}
 }
 
