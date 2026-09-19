@@ -10,9 +10,10 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目目标是把 
 - Cloudflare WARP 注册和 MASQUE enroll 客户端
 - P-256 私钥转换为 mihomo 所需的 SEC1 Base64
 - mihomo MASQUE 节点 YAML 生成器
+- mihomo 进程的启动、停止和状态查询
 - 可注入 HTTP 客户端的 API 测试边界
 
-尚未实现：Windows TUN/路由接管、mihomo 进程生命周期、DPAPI 凭据保护和 Tauri GUI。
+尚未实现：Windows TUN/路由接管、mihomo 控制 API 健康检查、DPAPI 凭据保护和 Tauri GUI。
 
 ## 开发
 
@@ -22,6 +23,9 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目目标是把 
 go test ./...
 go run ./cmd/freev6 version
 go run ./cmd/freev6 render-config -state state/warp.json -out state/mihomo.yaml
+go run ./cmd/freev6 start -binary C:\\path\\to\\mihomo.exe
+go run ./cmd/freev6 status
+go run ./cmd/freev6 stop
 ```
 
 真实注册会创建新的 WARP 设备并写入本地状态，请先确认符合 Cloudflare 服务条款及所在网络的使用规定：
@@ -41,6 +45,8 @@ internal/mihomo/  mihomo MASQUE 配置生成
 internal/app/     后续承载进程和 Windows 生命周期
 src-tauri/        后续 GUI 外壳预留
 ```
+
+MVP 运行链路是：先执行 `register` 保存设备状态，再执行 `start` 生成 mihomo 配置并启动 mihomo。`start` 会把 PID 和日志写入 `state/`；当前还不会修改系统路由，也不会自动接管所有 IPv4 流量。
 
 ## 设计原则
 

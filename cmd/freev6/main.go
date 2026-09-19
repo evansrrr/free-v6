@@ -33,6 +33,12 @@ func run(args []string) error {
 		return register(args[1:])
 	case "render-config":
 		return renderConfig(args[1:])
+	case "start":
+		return startMihomo(args[1:])
+	case "stop":
+		return stopMihomo(args[1:])
+	case "status":
+		return statusMihomo(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -86,6 +92,81 @@ func renderConfig(args []string) error {
 	return nil
 }
 
+func startMihomo(args []string) error {
+	flags := flag.NewFlagSet("start", flag.ContinueOnError)
+	binaryPath := flags.String("binary", "mihomo.exe", "mihomo executable path")
+	statePath := flags.String("state", filepath.FromSlash("state/warp.json"), "private state file")
+	configPath := flags.String("config", filepath.FromSlash("state/mihomo.yaml"), "mihomo YAML path")
+	pidPath := flags.String("pid-file", filepath.FromSlash("state/mihomo.pid"), "mihomo PID file")
+	logPath := flags.String("log", filepath.FromSlash("state/mihomo.log"), "mihomo log file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	device, err := readDevice(*statePath)
+	if err != nil {
+		return err
+	}
+	config, err := mihomo.Render(device)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(*configPath), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(*configPath, []byte(config), 0o600); err != nil {
+		return fmt.Errorf("write mihomo config: %w", err)
+	}
+	pid, err := mihomo.Start(*binaryPath, *configPath, *pidPath, *logPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("mihomo started: pid %d\n", pid)
+	return nil
+}
+
+func stopMihomo(args []string) error {
+	flags := flag.NewFlagSet("stop", flag.ContinueOnError)
+	pidPath := flags.String("pid-file", filepath.FromSlash("state/mihomo.pid"), "mihomo PID file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := mihomo.Stop(*pidPath); err != nil {
+		return err
+	}
+	fmt.Println("mihomo stopped")
+	return nil
+}
+
+func statusMihomo(args []string) error {
+	flags := flag.NewFlagSet("status", flag.ContinueOnError)
+	pidPath := flags.String("pid-file", filepath.FromSlash("state/mihomo.pid"), "mihomo PID file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	pid, running, err := mihomo.Status(*pidPath)
+	if err != nil {
+		return err
+	}
+	if running {
+		fmt.Printf("mihomo running: pid %d\n", pid)
+	} else {
+		fmt.Println("mihomo stopped")
+	}
+	return nil
+}
+
+func readDevice(path string) (warp.Device, error) {
+	var device warp.Device
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return device, err
+	}
+	if err := json.Unmarshal(data, &device); err != nil {
+		return device, fmt.Errorf("read WARP state: %w", err)
+	}
+	return device, nil
+}
+
 func writeJSON(path string, value any) error {
 	if path == "" {
 		return errors.New("state path is empty")
@@ -103,5 +184,8 @@ func writeJSON(path string, value any) error {
 func printUsage() {
 	fmt.Println("freev6 register [-name name] [-state path]")
 	fmt.Println("freev6 render-config [-state path] [-out path]")
+	fmt.Println("freev6 start [-binary mihomo.exe] [-state path]")
+	fmt.Println("freev6 stop [-pid-file path]")
+	fmt.Println("freev6 status [-pid-file path]")
 	fmt.Println("freev6 version")
 }

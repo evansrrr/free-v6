@@ -11,8 +11,8 @@
 
 ### M2: Runtime
 
+- [x] Start/stop mihomo with PID and log files
 - [ ] Discover and validate mihomo binary
-- [ ] Start/stop mihomo with an isolated working directory
 - [ ] Poll the mihomo controller API and verify IPv6 egress
 - [ ] Crash cleanup and stale-process recovery
 
