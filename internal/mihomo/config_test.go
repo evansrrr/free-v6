@@ -18,6 +18,12 @@ func TestRenderMasqueConfig(t *testing.T) {
 			t.Errorf("config missing %q", expected)
 		}
 	}
+	if count := strings.Count(config, "    type: masque"); count != 28 {
+		t.Fatalf("expected 28 MASQUE nodes, got %d", count)
+	}
+	if strings.Contains(config, "server: 162.") {
+		t.Fatal("IPv4 access points must not be included")
+	}
 }
 
 func TestRenderRejectsIncompleteDevice(t *testing.T) {
