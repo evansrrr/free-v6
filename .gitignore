@@ -1,0 +1,15 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+
+# Local runtime state and secrets
+state/
+*.local.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
