@@ -8,4 +8,4 @@ cargo tauri dev
 cargo tauri build
 ```
 
-The frontend reads `/api/v1/status`, `/api/v1/runtime`, and `/api/v1/settings` from the local helper. Proxy start/stop and WARP registration will be added to the same API. The GUI must not own WARP credentials, mihomo lifecycle, or privileged network operations; those remain in the Go helper.
+The frontend reads `/api/v1/status`, `/api/v1/runtime`, and `/api/v1/settings` from the local helper. Proxy start/stop and WARP registration are also available locally for testing. These action endpoints still need per-launch authentication before public release. The GUI must not own WARP credentials, mihomo lifecycle, or privileged network operations; those remain in the Go helper.
