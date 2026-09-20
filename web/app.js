@@ -86,6 +86,8 @@ function setHelperOffline(message = 'helper 未连接') {
   $('#headerStatus').textContent = message;
   $('#headerDot').className = 'status-dot muted';
   $('#runtimeDescription').textContent = '启动 helper 后检查运行时';
+  $('#adminCheckText').textContent = '等待 helper';
+  $('#warpCheckText').textContent = '等待 helper';
 }
 
 async function refreshBackendState() {
@@ -97,7 +99,12 @@ async function refreshBackendState() {
     renderCidrs();
     setMode(state.mode, false);
     setRunning(Boolean(status.proxy?.running));
-    $('#adminBadge').textContent = status.admin ? '管理员权限已就绪' : '需要管理员权限';
+    $('#adminCheckIcon').textContent = status.admin ? '✓' : '!';
+    $('#adminCheckIcon').className = `check-icon ${status.admin ? 'ready' : 'pending'}`;
+    $('#adminCheckText').textContent = status.admin ? '已获得管理员权限' : '请重新以管理员启动 GUI';
+    $('#warpCheckIcon').textContent = status.warp?.registered ? '✓' : '!';
+    $('#warpCheckIcon').className = `check-icon ${status.warp?.registered ? 'ready' : 'pending'}`;
+    $('#warpCheckText').textContent = status.warp?.registered ? '设备已注册' : '请在核心页注册 WARP';
     $('#runtimeValue').textContent = runtime.present ? '核心已就绪' : '需要下载核心';
     $('#runtimeDescription').textContent = runtime.present ? 'mihomo Alpha 已找到' : '安装目录中未找到核心';
     $('#runtimeName').textContent = runtime.present ? 'mihomo Alpha 已就绪' : '未发现 mihomo 核心';

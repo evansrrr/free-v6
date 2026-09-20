@@ -78,12 +78,14 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 	if settingsErr != nil {
 		currentSettings = settings{Mode: mihomo.ModeRule}
 	}
+	_, warpErr := os.Stat(filepath.Join(h.root, "state", "warp.json"))
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok":         true,
 		"root":       h.root,
 		"admin":      admin,
 		"adminError": adminErr,
 		"proxy":      map[string]any{"running": running, "pid": pid, "error": errorText(statusErr)},
+		"warp":       map[string]any{"registered": warpErr == nil},
 		"settings":   currentSettings,
 	})
 }
