@@ -2,6 +2,7 @@ package mihomo
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/yourname/freev6/internal/warp"
@@ -29,16 +30,26 @@ var ruleSets = []struct {
 	Group string
 	URL   string
 }{
-	{"🎯 全球直连", "https://raw.githubusercontent.com/cmliu/ACL4SSR/refs/heads/main/Clash/CFnat.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/UnBan.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/cmliu/ACL4SSR/refs/heads/main/Clash/CFnat.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/UnBan.list"},
 	{"🛑 全球拦截", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/GoogleCN.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/SteamCN.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/GoogleCN.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/SteamCN.list"},
 	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ProxyLite.list"},
 	{"🚀 节点选择", "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/CMBlog.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list"},
-	{"🎯 全球直连", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list"},
+	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list"},
+}
+
+const (
+	ModeRule   = "rule"
+	ModeGlobal = "global"
+)
+
+type RenderOptions struct {
+	Mode        string
+	CampusCIDRs []string
 }
 
 const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
@@ -49,8 +60,8 @@ const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
 
 mixed-port: 7890
 allow-lan: false
-mode: rule
 log-level: error
+external-controller: 127.0.0.1:9090
 ipv6: true
 unified-delay: true
 tcp-concurrent: true
@@ -88,31 +99,59 @@ dns:
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
+    - 2606:4700:4700::1111
+    - 2606:4700:4700::1001
+    - 2400:3200::1
+    - 2400:3200:baba::1
   nameserver:
     - https://223.5.5.5/dns-query
     - https://1.12.12.12/dns-query
+    - 2606:4700:4700::1111
+    - 2606:4700:4700::1001
+    - 2400:3200::1
+    - 2400:3200:baba::1
   proxy-server-nameserver:
     - https://223.5.5.5/dns-query
+    - 2606:4700:4700::1111
+    - 2400:3200::1
   nameserver-policy:
     'geosite:cn,private':
       - https://223.5.5.5/dns-query
       - https://1.12.12.12/dns-query
+      - 2400:3200::1
+      - 2400:3200:baba::1
     'geosite:geolocation-!cn':
       - https://1.1.1.1/dns-query
       - https://8.8.8.8/dns-query
+      - 2606:4700:4700::1111
+      - 2606:4700:4700::1001
 
-proxies:
 `
 
 func Render(w warp.Device) (string, error) {
+	return RenderWithOptions(w, RenderOptions{Mode: ModeRule})
+}
+
+func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	for name, value := range map[string]string{"private key": w.PrivateKey, "peer public key": w.PeerPublicKey, "IPv4": w.IPv4, "IPv6": w.IPv6} {
 		if strings.TrimSpace(value) == "" {
 			return "", fmt.Errorf("missing %s", name)
 		}
 	}
+	if options.Mode == "" {
+		options.Mode = ModeRule
+	}
+	if options.Mode != ModeRule && options.Mode != ModeGlobal {
+		return "", fmt.Errorf("unsupported mihomo mode %q", options.Mode)
+	}
+	campusCIDRs, err := normalizeCIDRs(options.CampusCIDRs)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	b.WriteString(configHeader)
+	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
 	var names []string
 	for _, endpoint := range endpoints {
 		name := endpointName(endpoint.Server, endpoint.Port)
@@ -121,24 +160,46 @@ func Render(w warp.Device) (string, error) {
 	}
 
 	b.WriteString("\nproxy-groups:\n")
-	b.WriteString("  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n      - DIRECT\n\n")
+	b.WriteString("  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n\n")
+	b.WriteString("  - name: GLOBAL\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n\n")
 	writeProxyGroup(&b, "☑️ 手动切换", "select", "", names)
 	writeProxyGroup(&b, "♻️ 自动选择", "url-test", "    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    lazy: false\n", names)
 	writeProxyGroup(&b, "🔄 故障转移", "fallback", "    url: http://www.gstatic.com/generate_204\n    interval: 180\n", names)
-	b.WriteString("  - name: 🎯 全球直连\n    type: select\n    proxies:\n      - DIRECT\n      - 🚀 节点选择\n      - ♻️ 自动选择\n\n")
-	b.WriteString("  - name: 🛑 全球拦截\n    type: select\n    proxies:\n      - REJECT\n      - DIRECT\n\n")
-	b.WriteString("  - name: 🐟 漏网之鱼\n    type: select\n    proxies:\n      - 🚀 节点选择\n      - 🎯 全球直连\n      - ♻️ 自动选择\n\n")
+	b.WriteString("  - name: 🛑 全球拦截\n    type: select\n    proxies:\n      - REJECT\n\n")
+	b.WriteString("  - name: 🐟 漏网之鱼\n    type: select\n    proxies:\n      - 🚀 节点选择\n      - ♻️ 自动选择\n\n")
 
 	b.WriteString("rule-providers:\n")
 	for i, ruleSet := range ruleSets {
 		fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
 	}
 	b.WriteString("\nrules:\n")
+	for _, cidr := range campusCIDRs {
+		kind := "IP-CIDR"
+		if strings.Contains(cidr, ":") {
+			kind = "IP-CIDR6"
+		}
+		fmt.Fprintf(&b, "  - %s,%s,DIRECT,no-resolve\n", kind, cidr)
+	}
 	for i, ruleSet := range ruleSets {
 		fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
 	}
-	b.WriteString("  - GEOIP,LAN,🎯 全球直连,no-resolve\n  - GEOIP,CN,🎯 全球直连\n  - MATCH,🐟 漏网之鱼\n")
+	b.WriteString("  - GEOIP,LAN,DIRECT,no-resolve\n  - MATCH,🚀 节点选择\n")
 	return b.String(), nil
+}
+
+func normalizeCIDRs(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		cidr := strings.TrimSpace(value)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return nil, fmt.Errorf("invalid campus CIDR %q: %w", cidr, err)
+		}
+		result = append(result, cidr)
+	}
+	return result, nil
 }
 
 func writeProxyGroup(b *strings.Builder, name, groupType, options string, names []string) {

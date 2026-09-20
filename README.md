@@ -1,6 +1,6 @@
 # freev6
 
-Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目目标是把 Cloudflare WARP 设备注册、MASQUE 密钥 enroll、mihomo 配置生成和本地进程控制拆成可测试的核心模块，之后再接入 Tauri GUI。
+Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目包含 Go 核心、Material You Tauri GUI 和 mihomo helper sidecar；特权网络动作仍通过后端 API 收口。
 
 ## 当前阶段
 
@@ -13,7 +13,7 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目目标是把 
 - mihomo 进程的启动、停止和状态查询
 - 可注入 HTTP 客户端的 API 测试边界
 
-尚未实现：Windows TUN/路由接管、mihomo 控制 API 健康检查、DPAPI 凭据保护和 Tauri GUI。
+尚未实现：GUI 触发 WARP 注册与代理启停的完整 API、Windows TUN/路由恢复闭环、运行时完整性校验和 DPAPI 凭据保护。
 
 ## 开发
 
@@ -23,10 +23,16 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目目标是把 
 go test ./...
 go run ./cmd/freev6 version
 go run ./cmd/freev6 render-config -state state/warp.json -out state/mihomo.yaml
-go run ./cmd/freev6 start -binary C:\\path\\to\\mihomo.exe
+go run ./cmd/freev6 start -state state/warp.json -campus-cidr 10.0.0.0/8,172.16.0.0/12
 go run ./cmd/freev6 status
 go run ./cmd/freev6 stop
 ```
+
+默认生成 `tun + rule` 配置，所有非本地流量经过 WARP；只有通过 `-campus-cidr` 明确添加的校园网段和局域网规则允许 `DIRECT`。校园网网段应按实际认证网关、门户、DNS 和内网服务填写，不能把公网网段加入绕过列表。
+
+需要全局模式时使用 `-mode global`。它仍然不提供外部 `DIRECT` 出口，只是让 mihomo 的 `GLOBAL` 组接管所有连接。节点选择仍在 `🚀 节点选择` 组内完成，可选择自动测速、故障转移或单个节点。
+
+Windows TUN 会创建虚拟网卡并修改路由/DNS，`start` 会先检查管理员权限。项目已加入 Windows 网卡、默认网关和 DNS 快照采集基础；关闭 mihomo 前仍需要完成快照持久化、路由/DNS 恢复和异常退出清理。
 
 真实注册会创建新的 WARP 设备并写入本地状态，请先确认符合 Cloudflare 服务条款及所在网络的使用规定：
 
@@ -46,7 +52,7 @@ internal/app/     后续承载进程和 Windows 生命周期
 src-tauri/        后续 GUI 外壳预留
 ```
 
-MVP 运行链路是：先执行 `register` 保存设备状态，再执行 `start` 生成 mihomo 配置并启动 mihomo。`start` 会把 PID 和日志写入 `state/`；当前还不会修改系统路由，也不会自动接管所有 IPv4 流量。
+MVP 运行链路是：先执行 `register` 保存设备状态，再执行 `start` 自动发现并启动安装目录 `runtime/` 或开发目录 `state/` 中的 mihomo Alpha。启动会生成带回环控制端点的配置，检查代理组并验证 IPv6 出口；同时支持 `-binary` 显式覆盖、`-mode rule|global`、`-campus-cidr` 和 `-egress-url` 参数。
 
 ## 设计原则
 

@@ -1,6 +1,9 @@
 # Build output
 /bin/
 /dist/
+/target/
+src-tauri/target/
+src-tauri/gen/
 *.exe
 *.test
 

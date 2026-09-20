@@ -16,8 +16,8 @@ func Start(binaryPath, configPath, pidPath, logPath string) (int, error) {
 	if strings.TrimSpace(binaryPath) == "" {
 		return 0, errors.New("mihomo binary path is empty")
 	}
-	if pid, err := readPID(pidPath); err == nil && IsRunning(pid) {
-		return 0, ErrAlreadyRunning
+	if err := ensurePIDAvailable(pidPath, IsRunning); err != nil {
+		return 0, err
 	}
 	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
 		return 0, fmt.Errorf("create runtime directory: %w", err)
@@ -47,7 +47,8 @@ func Start(binaryPath, configPath, pidPath, logPath string) (int, error) {
 func Stop(pidPath string) error {
 	pid, err := readPID(pidPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "invalid pid file") {
+			_ = os.Remove(pidPath)
 			return nil
 		}
 		return err
@@ -61,10 +62,31 @@ func Stop(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
+func ensurePIDAvailable(path string, running func(int) bool) error {
+	pid, err := readPID(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("remove invalid mihomo pid file: %w", removeErr)
+		}
+		return nil
+	}
+	if running(pid) {
+		return ErrAlreadyRunning
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale mihomo pid file: %w", err)
+	}
+	return nil
+}
+
 func Status(pidPath string) (pid int, running bool, err error) {
 	pid, err = readPID(pidPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "invalid pid file") {
+			_ = os.Remove(pidPath)
 			return 0, false, nil
 		}
 		return 0, false, err

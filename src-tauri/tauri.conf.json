@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "freev6",
+  "version": "0.1.0",
+  "identifier": "dev.freev6.desktop",
+  "build": {
+    "beforeDevCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper",
+    "beforeBuildCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper",
+    "frontendDist": "../web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "freev6",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 650,
+        "resizable": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "externalBin": ["binaries/freev6-helper"],
+    "icon": []
+  }
+}
