@@ -192,6 +192,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if input.EgressURL == "" {
 		input.EgressURL = "https://api64.ipify.org"
 	}
+	if err := mihomo.CheckListenPorts(); err != nil {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first"})
+		return
+	}
 	if runtime.GOOS == "windows" {
 		adminCtx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
 		defer cancel()
@@ -260,13 +264,13 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if err := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); err != nil {
 		_ = mihomo.Stop(pidPath)
 		restore()
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
 		return
 	}
 	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090"); err != nil {
 		_ = mihomo.Stop(pidPath)
 		restore()
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
 		return
 	}
 	if egress, err := mihomo.ProbeIPv6Egress(ctx, input.EgressURL); err != nil {
@@ -421,4 +425,21 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+func diagnosticError(err error, logPath string) string {
+	message := err.Error()
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		return message
+	}
+	const maxTail = 4000
+	if len(data) > maxTail {
+		data = data[len(data)-maxTail:]
+	}
+	logTail := strings.TrimSpace(string(data))
+	if logTail == "" {
+		return message
+	}
+	return message + "; mihomo log: " + logTail
 }

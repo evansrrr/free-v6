@@ -17,6 +17,8 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目包含 Go 核
 
 Windows GUI 版本启动时会请求管理员权限。请在 UAC 提示中选择“是”，否则无法创建 TUN 虚拟网卡或修改 DNS/路由。GUI 会自动启动 Go helper，并从安装目录的 `runtime/` 中查找 mihomo Alpha 核心。
 
+启动免流前请先退出 FlClash、Clash、其他代理客户端以及占用本地 DNS 的软件。freev6 使用 `7890` 作为本地代理端口、`1053` 作为 DNS 端口、`9090` 作为控制端口；端口被占用时 GUI 会直接显示占用冲突。
+
 ## 开发
 
 需要 Go 1.25+ 和 Git。

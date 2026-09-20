@@ -25,7 +25,7 @@ func Start(binaryPath, configPath, pidPath, logPath string) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return 0, fmt.Errorf("create log directory: %w", err)
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("open mihomo log: %w", err)
 	}
