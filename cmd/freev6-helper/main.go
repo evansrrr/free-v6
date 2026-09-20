@@ -11,21 +11,34 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yourname/freev6/internal/mihomo"
 	"github.com/yourname/freev6/internal/network"
+	"github.com/yourname/freev6/internal/warp"
 )
 
 const listenAddress = "127.0.0.1:13335"
 
 type helper struct {
 	root string
+	mu   sync.Mutex
 }
 
 type settings struct {
 	Mode        string   `json:"mode"`
 	CampusCIDRs []string `json:"campusCidrs"`
+}
+
+type proxyRequest struct {
+	Mode        string   `json:"mode"`
+	CampusCIDRs []string `json:"campusCidrs"`
+	EgressURL   string   `json:"egressUrl"`
+}
+
+type registerRequest struct {
+	Name string `json:"name"`
 }
 
 func main() {
@@ -35,6 +48,9 @@ func main() {
 	mux.HandleFunc("/api/v1/status", h.status)
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
 	mux.HandleFunc("/api/v1/settings", h.settings)
+	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)
+	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
+	mux.HandleFunc("/api/v1/warp/register", h.registerWarp)
 	server := &http.Server{Addr: listenAddress, Handler: withCORS(mux), ReadHeaderTimeout: 5 * time.Second}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic(err)
@@ -135,6 +151,167 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
+func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var input proxyRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if input.Mode == "" {
+		input.Mode = mihomo.ModeRule
+	}
+	if input.EgressURL == "" {
+		input.EgressURL = "https://api64.ipify.org"
+	}
+	if runtime.GOOS == "windows" {
+		adminCtx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+		defer cancel()
+		admin, err := network.IsAdministrator(adminCtx)
+		if err != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if !admin {
+			writeJSON(writer, http.StatusForbidden, map[string]string{"error": "administrator privileges are required to start mihomo TUN"})
+			return
+		}
+	}
+	device, err := readDevice(filepath.Join(h.root, "state", "warp.json"))
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err)})
+		return
+	}
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	stateDir := filepath.Join(h.root, "state")
+	configPath := filepath.Join(stateDir, "mihomo.yaml")
+	pidPath := filepath.Join(stateDir, "mihomo.pid")
+	logPath := filepath.Join(stateDir, "mihomo.log")
+	snapshotPath := filepath.Join(stateDir, "network-snapshot.json")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})
+		return
+	}
+	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
+	snapshot, err := network.CaptureSnapshot(snapshotCtx)
+	snapshotCancel()
+	if err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	restore := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = network.RestoreSnapshot(ctx, snapshot)
+	}
+	binaryPath, err := mihomo.DiscoverBinary(h.root)
+	if err != nil {
+		restore()
+		writeJSON(writer, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := mihomo.Start(binaryPath, configPath, pidPath, logPath); err != nil {
+		restore()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	if err := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); err != nil {
+		_ = mihomo.Stop(pidPath)
+		restore()
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090"); err != nil {
+		_ = mihomo.Stop(pidPath)
+		restore()
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if egress, err := mihomo.ProbeIPv6Egress(ctx, input.EgressURL); err != nil {
+		_ = mihomo.Stop(pidPath)
+		restore()
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	} else {
+		_ = h.saveSettings(settings{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
+		writeJSON(writer, http.StatusOK, map[string]any{"running": true, "egress": egress.Address})
+	}
+}
+
+func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
+	if err := mihomo.Stop(pidPath); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
+	snapshot, err := network.LoadSnapshot(snapshotPath)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
+		restoreErr := network.RestoreSnapshot(ctx, snapshot)
+		cancel()
+		if restoreErr != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
+			return
+		}
+		_ = os.Remove(snapshotPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"running": false})
+}
+
+func (h *helper) registerWarp(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var input registerRequest
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		input.Name = "freev6-windows"
+	}
+	device, err := warp.NewClient(nil).Register(request.Context(), input.Name)
+	if err != nil {
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := writePrivateJSON(filepath.Join(h.root, "state", "warp.json"), device); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"registered": true, "deviceId": device.DeviceID})
+}
+
 func (h *helper) loadSettings() (settings, error) {
 	var current settings
 	data, err := os.ReadFile(filepath.Join(h.root, "config", "settings.json"))
@@ -145,6 +322,41 @@ func (h *helper) loadSettings() (settings, error) {
 		return current, err
 	}
 	return current, nil
+}
+
+func (h *helper) saveSettings(current settings) error {
+	path := filepath.Join(h.root, "config", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(current, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func readDevice(path string) (warp.Device, error) {
+	var device warp.Device
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return device, err
+	}
+	if err := json.Unmarshal(data, &device); err != nil {
+		return device, err
+	}
+	return device, nil
+}
+
+func writePrivateJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 func executableRoot() string {

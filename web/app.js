@@ -5,6 +5,7 @@ const state = {
   cidrs: [],
   logs: ['等待 helper 连接...'],
   helperOnline: false,
+  egress: '',
 };
 
 const API_BASE = 'http://127.0.0.1:13335/api/v1';
@@ -32,7 +33,14 @@ function renderCidrs() {
   $('#cidrList').innerHTML = state.cidrs.length ? state.cidrs.map((cidr, index) => `<span class="chip">${cidr}<button type="button" data-remove-cidr="${index}" aria-label="删除 ${cidr}">×</button></span>`).join('') : '<span class="empty-state">还没有自定义网段</span>';
 }
 
-function setMode(mode) {
+function persistSettings() {
+  if (!state.helperOnline) return;
+  api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs }) })
+    .then(() => addLog('设置已保存'))
+    .catch((error) => addLog(`保存设置失败: ${error.message}`));
+}
+
+function setMode(mode, persist = true) {
   state.mode = mode;
   const isRule = mode === 'rule';
   $$('.segment').forEach((item) => item.classList.toggle('active', item.dataset.mode === mode));
@@ -40,10 +48,12 @@ function setMode(mode) {
   $('#modeButton').textContent = isRule ? '规则模式' : '全局模式';
   $('#modeHelp').textContent = isRule ? '校园网网段直连，其他流量全部进入 WARP。适合日常使用。' : '所有非局域网流量进入 WARP，适合需要完整接管的场景。';
   addLog(`切换为${isRule ? '规则' : '全局'}模式`);
+  if (persist) persistSettings();
 }
 
-function setRunning(running) {
+function setRunning(running, egress = '') {
   state.running = running;
+  state.egress = egress;
   const button = $('#proxyToggle');
   $('#proxyHeadline').textContent = running ? '免流已开启' : '准备就绪';
   $('#proxyDescription').textContent = running ? 'mihomo 正在接管非校园网流量，连接经过 WARP IPv6 隧道。' : '启动 mihomo 后，所有非校园网流量将通过 WARP IPv6 隧道。';
@@ -54,7 +64,7 @@ function setRunning(running) {
   $('#headerDot').className = `status-dot ${running ? 'live' : 'muted'}`;
   $('#networkPill').textContent = running ? '已连接' : '待检测';
   $('#networkPill').className = `status-pill ${running ? 'success' : 'warning'}`;
-  $('#egressValue').textContent = running ? '2606:4700:xxxx' : '未检测';
+  $('#egressValue').textContent = running ? (egress || 'IPv6 已连接') : '未检测';
   $('#nodeValue').textContent = running ? '自动选择' : '未选择';
   $('#tunValue').textContent = running ? '已启用' : '未启动';
   $('.quality-bar span').style.width = running ? '86%' : '24%';
@@ -85,7 +95,7 @@ async function refreshBackendState() {
     state.mode = status.settings?.mode || state.mode;
     state.cidrs = status.settings?.campusCidrs || state.cidrs;
     renderCidrs();
-    setMode(state.mode);
+    setMode(state.mode, false);
     setRunning(Boolean(status.proxy?.running));
     $('#adminBadge').textContent = status.admin ? '管理员权限已就绪' : '需要管理员权限';
     $('#runtimeValue').textContent = runtime.present ? '核心已就绪' : '需要下载核心';
@@ -115,6 +125,7 @@ function addCidr() {
   input.setCustomValidity('');
   renderCidrs();
   addLog(`添加校园网段: ${value}`);
+  persistSettings();
 }
 
 function renderLogs() {
@@ -130,9 +141,28 @@ $$('.nav-item[data-view]').forEach((item) => item.addEventListener('click', () =
 $$('[data-view-target]').forEach((item) => item.addEventListener('click', () => showView(item.dataset.viewTarget)));
 $$('.segment').forEach((item) => item.addEventListener('click', () => setMode(item.dataset.mode)));
 $('#modeButton').addEventListener('click', () => setMode(state.mode === 'rule' ? 'global' : 'rule'));
-$('#proxyToggle').addEventListener('click', () => {
-  setRunning(!state.running);
-  addLog(state.helperOnline ? '已连接 helper，启动/停止 API 尚未接入' : '请求启动/停止免流失败：helper 未连接');
+$('#proxyToggle').addEventListener('click', async () => {
+  if (!state.helperOnline) {
+    addLog('请求启动/停止免流失败：helper 未连接');
+    return;
+  }
+  const button = $('#proxyToggle');
+  button.disabled = true;
+  try {
+    if (state.running) {
+      await api('/proxy/stop', { method: 'POST' });
+      setRunning(false);
+      addLog('免流模式已停止');
+    } else {
+      const result = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, egressUrl: 'https://api64.ipify.org' }) });
+      setRunning(true, result.egress);
+      addLog('免流模式已启动');
+    }
+  } catch (error) {
+    addLog(`免流操作失败: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
 });
 $('#addCidr').addEventListener('click', addCidr);
 $('#cidrInput').addEventListener('keydown', (event) => { if (event.key === 'Enter') addCidr(); });
@@ -146,6 +176,18 @@ $('#cidrList').addEventListener('click', (event) => {
 $('#refreshButton').addEventListener('click', refreshBackendState);
 $('#checkCore').addEventListener('click', () => addLog('检查 runtime/mihomo-windows-amd64-v3.exe（演示状态）'));
 $('#downloadCore').addEventListener('click', () => addLog('请求下载 mihomo Alpha（需要后端 API）'));
+$('#registerWarp').addEventListener('click', async () => {
+  if (!state.helperOnline) {
+    addLog('WARP 注册失败：helper 未连接');
+    return;
+  }
+  try {
+    await api('/warp/register', { method: 'POST', body: JSON.stringify({ name: 'freev6-windows' }) });
+    addLog('WARP 注册成功');
+  } catch (error) {
+    addLog(`WARP 注册失败: ${error.message}`);
+  }
+});
 $('#logsButton').addEventListener('click', () => { $('#logDrawer').classList.add('open'); $('#scrim').classList.add('open'); });
 $('#closeLogs').addEventListener('click', () => { $('#logDrawer').classList.remove('open'); $('#scrim').classList.remove('open'); });
 $('#scrim').addEventListener('click', () => { $('#logDrawer').classList.remove('open'); $('#scrim').classList.remove('open'); });
