@@ -182,7 +182,29 @@ $('#cidrList').addEventListener('click', (event) => {
 });
 $('#refreshButton').addEventListener('click', refreshBackendState);
 $('#checkCore').addEventListener('click', () => addLog('检查 runtime/mihomo-windows-amd64-v3.exe（演示状态）'));
-$('#downloadCore').addEventListener('click', () => addLog('请求下载 mihomo Alpha（需要后端 API）'));
+$('#downloadCore').addEventListener('click', async () => {
+  if (!state.helperOnline) {
+    addLog('下载核心失败：helper 未连接');
+    return;
+  }
+  const button = $('#downloadCore');
+  button.disabled = true;
+  button.textContent = '下载中...';
+  try {
+    const result = await api('/runtime/download', { method: 'POST' });
+    $('#runtimeValue').textContent = '核心已就绪';
+    $('#runtimeDescription').textContent = `${result.version} 已安装`;
+    $('#runtimeName').textContent = 'mihomo Alpha 已就绪';
+    $('#runtimePill').textContent = '已安装';
+    $('#runtimePill').className = 'status-pill success';
+    addLog(`mihomo Alpha 下载完成: ${result.version}`);
+  } catch (error) {
+    addLog(`下载核心失败: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = '自动下载核心';
+  }
+});
 $('#registerWarp').addEventListener('click', async () => {
   if (!state.helperOnline) {
     addLog('WARP 注册失败：helper 未连接');

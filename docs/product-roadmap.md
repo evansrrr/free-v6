@@ -82,6 +82,7 @@ Before public release, replace the loopback bearer token with a Windows named pi
 ### M2.1 Runtime ownership and health
 
 - [x] Discover the architecture-matching mihomo Alpha binary in `runtime/` with a development `state/` fallback.
+- [x] Download the latest Windows amd64 Alpha asset into `runtime/` after release metadata and checksum validation.
 - [x] Wait for the loopback mihomo controller after process startup and clean up on readiness failure.
 - [x] Verify the controller `/version` response and required node-selection proxy group before reporting startup success.
 - [x] Probe a real IPv6 egress address before reporting the proxy as started.

@@ -47,6 +47,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/status", h.status)
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
+	mux.HandleFunc("/api/v1/runtime/download", h.downloadRuntime)
 	mux.HandleFunc("/api/v1/settings", h.settings)
 	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)
 	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
@@ -103,6 +104,26 @@ func (h *helper) runtime(writer http.ResponseWriter, request *http.Request) {
 		"error":        errorText(err),
 		"platform":     runtime.GOOS,
 		"architecture": runtime.GOARCH,
+	})
+}
+
+func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 3*time.Minute)
+	defer cancel()
+	result, err := mihomo.DownloadLatest(ctx, h.root)
+	if err != nil {
+		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"present": true,
+		"version": result.Version,
+		"path":    result.Path,
+		"sha256":  result.SHA256,
 	})
 }
 
