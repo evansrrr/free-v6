@@ -161,8 +161,8 @@ $('#proxyToggle').addEventListener('click', async () => {
       setRunning(false);
       addLog('免流模式已停止');
     } else {
-      const result = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, egressUrl: 'https://api64.ipify.org' }) });
-      setRunning(true, result.egress);
+      const result = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs }) });
+      setRunning(true);
       addLog('免流模式已启动');
     }
   } catch (error) {

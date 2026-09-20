@@ -34,7 +34,6 @@ type settings struct {
 type proxyRequest struct {
 	Mode        string   `json:"mode"`
 	CampusCIDRs []string `json:"campusCidrs"`
-	EgressURL   string   `json:"egressUrl"`
 }
 
 type registerRequest struct {
@@ -189,9 +188,6 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if input.Mode == "" {
 		input.Mode = mihomo.ModeRule
 	}
-	if input.EgressURL == "" {
-		input.EgressURL = "https://api64.ipify.org"
-	}
 	if err := mihomo.CheckListenPorts(); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first"})
 		return
@@ -273,15 +269,8 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
 		return
 	}
-	if egress, err := mihomo.ProbeIPv6Egress(ctx, input.EgressURL); err != nil {
-		_ = mihomo.Stop(pidPath)
-		restore()
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	} else {
-		_ = h.saveSettings(settings{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
-		writeJSON(writer, http.StatusOK, map[string]any{"running": true, "egress": egress.Address})
-	}
+	_ = h.saveSettings(settings{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
+	writeJSON(writer, http.StatusOK, map[string]any{"running": true})
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {

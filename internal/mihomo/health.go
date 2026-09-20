@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	netURL "net/url"
 	"strings"
 	"time"
 )
@@ -93,11 +94,38 @@ func WaitHealthy(ctx context.Context, address string, interval time.Duration) (C
 	}
 }
 
-func ProbeIPv6Egress(ctx context.Context, url string) (EgressStatus, error) {
+func ProbeIPv6Egress(ctx context.Context, url string, proxyAddr string) (EgressStatus, error) {
 	if url == "" {
 		return EgressStatus{}, fmt.Errorf("IPv6 egress URL is empty")
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	transport := &http.Transport{}
+	if proxyAddr != "" {
+		proxyURL, err := netURL.Parse("http://" + proxyAddr)
+		if err != nil {
+			return EgressStatus{}, fmt.Errorf("parse proxy address %q: %w", proxyAddr, err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
+	var lastErr error
+	for attempt := 0; attempt < 12; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return EgressStatus{}, fmt.Errorf("IPv6 egress probe timed out: %w (last: %v)", ctx.Err(), lastErr)
+			case <-time.After(3 * time.Second):
+			}
+		}
+		status, err := probeIPv6EgressOnce(ctx, client, url)
+		if err == nil {
+			return status, nil
+		}
+		lastErr = err
+	}
+	return EgressStatus{}, fmt.Errorf("IPv6 egress probe failed after retries: %w", lastErr)
+}
+
+func probeIPv6EgressOnce(ctx context.Context, client *http.Client, url string) (EgressStatus, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return EgressStatus{}, err

@@ -20,11 +20,27 @@ var requiredListenPorts = []ListenPort{
 
 func CheckListenPorts() error {
 	for _, port := range requiredListenPorts {
-		listener, err := net.Listen(port.Network, port.Address)
+		listener, err := listenPort(port)
 		if err != nil {
 			return fmt.Errorf("mihomo %s port %s is unavailable: %w", port.Name, port.Address, err)
 		}
 		_ = listener.Close()
 	}
 	return nil
+}
+
+type closableListener interface {
+	Close() error
+}
+
+func listenPort(port ListenPort) (closableListener, error) {
+	if port.Network == "udp" {
+		return net.ListenPacket(port.Network, port.Address)
+	}
+
+	listener, err := net.Listen(port.Network, port.Address)
+	if err != nil {
+		return nil, err
+	}
+	return listener, nil
 }

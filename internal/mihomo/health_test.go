@@ -79,7 +79,7 @@ func TestProbeIPv6Egress(t *testing.T) {
 	}))
 	defer server.Close()
 
-	status, err := ProbeIPv6Egress(context.Background(), server.URL)
+	status, err := ProbeIPv6Egress(context.Background(), server.URL, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestProbeIPv6EgressRejectsIPv4(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if _, err := ProbeIPv6Egress(context.Background(), server.URL); err == nil {
+	if _, err := ProbeIPv6Egress(context.Background(), server.URL, ""); err == nil {
 		t.Fatal("expected IPv4 egress to be rejected")
 	}
 }

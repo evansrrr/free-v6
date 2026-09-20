@@ -109,7 +109,6 @@ func startMihomo(args []string) error {
 	snapshotPath := flags.String("network-snapshot", filepath.FromSlash("state/network-snapshot.json"), "network snapshot path")
 	mode := flags.String("mode", mihomo.ModeRule, "mihomo mode: rule or global")
 	campusCIDRs := flags.String("campus-cidr", "", "comma-separated campus CIDRs allowed to bypass WARP")
-	egressURL := flags.String("egress-url", "https://api64.ipify.org", "IPv6 egress probe URL")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -176,11 +175,6 @@ func startMihomo(args []string) error {
 		return err
 	}
 	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090"); err != nil {
-		_ = mihomo.Stop(pidPathValue)
-		restoreSnapshot()
-		return err
-	}
-	if _, err := mihomo.ProbeIPv6Egress(ctx, *egressURL); err != nil {
 		_ = mihomo.Stop(pidPathValue)
 		restoreSnapshot()
 		return err
@@ -287,7 +281,7 @@ func resolveRootPath(root, value string) string {
 func printUsage() {
 	fmt.Println("freev6 register [-name name] [-state path]")
 	fmt.Println("freev6 render-config [-state path] [-out path] [-mode rule|global] [-campus-cidr cidr1,cidr2]")
-	fmt.Println("freev6 start [-root path] [-binary path] [-state path] [-mode rule|global] [-campus-cidr cidr1,cidr2] [-egress-url url]")
+	fmt.Println("freev6 start [-root path] [-binary path] [-state path] [-mode rule|global] [-campus-cidr cidr1,cidr2]")
 	fmt.Println("freev6 stop [-root path] [-pid-file path] [-network-snapshot path]")
 	fmt.Println("freev6 status [-root path] [-pid-file path]")
 	fmt.Println("freev6 version")
