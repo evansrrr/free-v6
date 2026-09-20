@@ -15,6 +15,8 @@ Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目包含 Go 核
 
 尚未实现：GUI 触发 WARP 注册与代理启停的完整 API、Windows TUN/路由恢复闭环、运行时完整性校验和 DPAPI 凭据保护。
 
+Windows GUI 版本启动时会请求管理员权限。请在 UAC 提示中选择“是”，否则无法创建 TUN 虚拟网卡或修改 DNS/路由。GUI 会自动启动 Go helper，并从安装目录的 `runtime/` 中查找 mihomo Alpha 核心。
+
 ## 开发
 
 需要 Go 1.25+ 和 Git。

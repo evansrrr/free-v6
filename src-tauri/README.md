@@ -1,6 +1,6 @@
 # freev6 Tauri shell
 
-The initial Tauri 2 shell loads the Material You interface from `../web`, provides a Windows tray menu, and packages with the NSIS target. It starts `freev6-helper` as a sidecar and passes the installation root through `FREEV6_ROOT`.
+The initial Tauri 2 shell loads the Material You interface from `../web`, provides a Windows tray menu, and packages with the NSIS target. On Windows it requests administrator permission at launch; `freev6-helper` runs as a sidecar in the same elevated context and receives the installation root through `FREEV6_ROOT`.
 
 ```powershell
 cargo check --manifest-path src-tauri/Cargo.toml

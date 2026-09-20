@@ -120,6 +120,7 @@ Checkpoint: uninstall/upgrade does not silently delete credentials, and diagnost
 - [x] Add the initial Tauri 2 shell, tray lifecycle, and Material You frontend to this repository.
 - [x] Start the Go helper as a Tauri sidecar and connect read-only status/runtime/settings views.
 - [x] Add local helper API actions for WARP registration and proxy start/stop.
+- [x] Request Windows administrator permission at GUI launch so the helper inherits the elevated context.
 - [ ] Protect helper actions with a per-launch bearer token or Windows named pipe before release.
 - On launch, check helper availability, install root, architecture, and mihomo runtime presence.
 - Provide first-run flow: download runtime, register WARP, choose campus CIDRs, test readiness, activate.
