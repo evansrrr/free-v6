@@ -38,7 +38,7 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 	if response.StatusCode != http.StatusOK {
 		return DownloadResult{}, fmt.Errorf("mihomo runtime download returned HTTP %s", response.Status)
 	}
-	temporary, err := os.CreateTemp("", "freev6-mihomo-*")
+	temporary, err := os.CreateTemp("", "freev6-mihomo-*.zip")
 	if err != nil {
 		return DownloadResult{}, err
 	}

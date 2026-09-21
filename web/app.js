@@ -335,13 +335,14 @@ async function refreshBackendState() {
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
-    updateConnectionChip(true);
 
-    // Runtime info
+    // Runtime info — must complete before updating chip
     try {
       const runtime = await api('/runtime');
       state.runtimePresent = runtime.present;
     } catch (_) { /* ignore */ }
+
+    updateConnectionChip(true);
 
     state.warpRegistered = status.warp?.registered || false;
     updateSettingsUI();
@@ -349,6 +350,8 @@ async function refreshBackendState() {
     addLog('已连接 freev6 helper');
   } catch (error) {
     state.helperOnline = false;
+    state.runtimePresent = false;
+    updateConnectionChip(false);
     addLog(`helper 不可用: ${error.message}`, true);
   }
 }
@@ -413,6 +416,11 @@ async function pollStatus() {
     const status = await api('/status');
     if (!state.helperOnline) {
       state.helperOnline = true;
+      // Check runtime presence on first reconnect
+      try {
+        const runtime = await api('/runtime');
+        state.runtimePresent = runtime.present;
+      } catch (_) {}
       updateConnectionChip(true);
       addLog('已连接 freev6 helper');
     }
