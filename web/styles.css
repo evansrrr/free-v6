@@ -1,8 +1,9 @@
-﻿/* freev6 — Modern Tool SaaS dark theme */
+﻿/* freev6 — Modern Tool SaaS theme (dark default, light + system) */
 
 /* ── Design Tokens ────────────────────────────────────────────── */
 
 :root {
+  /* Dark theme (default) */
   --md-primary: #7eaaff;
   --md-on-primary: #001d3a;
   --md-primary-container: #1a3a6b;
@@ -54,6 +55,84 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-decelerate: cubic-bezier(0, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ── Light theme tokens ───────────────────────────────────────── */
+
+[data-theme="light"] {
+  --md-primary: #0058cc;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #d6e3ff;
+  --md-on-primary-container: #001a41;
+  --md-secondary: #565e71;
+  --md-on-secondary: #ffffff;
+  --md-secondary-container: #dae2f9;
+  --md-on-secondary-container: #131c2b;
+  --md-tertiary: #6e5676;
+  --md-on-tertiary: #ffffff;
+  --md-tertiary-container: #f7d8ff;
+  --md-on-tertiary-container: #271330;
+  --md-surface: #f8f9ff;
+  --md-surface-dim: #d8d9e0;
+  --md-surface-container-lowest: #ffffff;
+  --md-surface-container-low: #f2f3fa;
+  --md-surface-container: #ecedf4;
+  --md-surface-container-high: #e6e8ef;
+  --md-surface-container-highest: #e1e2e9;
+  --md-on-surface: #191c22;
+  --md-on-surface-variant: #44474f;
+  --md-inverse-surface: #2e3036;
+  --md-inverse-on-surface: #eff0f7;
+  --md-outline: #74777f;
+  --md-outline-variant: #c4c6cf;
+  --green: #1a7d46;
+  --green-container: #b5f1ca;
+  --orange: #8b5000;
+  --orange-container: #ffdcba;
+  --red: #ba1a1a;
+  --red-container: #ffdad6;
+  --shadow-fab: 0 4px 16px rgba(0,0,0,.12);
+  --shadow-drawer: -8px 0 24px rgba(0,0,0,.08);
+}
+
+/* ── System preference auto-switch ────────────────────────────── */
+
+@media (prefers-color-scheme: light) {
+  [data-theme="system"] {
+    --md-primary: #0058cc;
+    --md-on-primary: #ffffff;
+    --md-primary-container: #d6e3ff;
+    --md-on-primary-container: #001a41;
+    --md-secondary: #565e71;
+    --md-on-secondary: #ffffff;
+    --md-secondary-container: #dae2f9;
+    --md-on-secondary-container: #131c2b;
+    --md-tertiary: #6e5676;
+    --md-on-tertiary: #ffffff;
+    --md-tertiary-container: #f7d8ff;
+    --md-on-tertiary-container: #271330;
+    --md-surface: #f8f9ff;
+    --md-surface-dim: #d8d9e0;
+    --md-surface-container-lowest: #ffffff;
+    --md-surface-container-low: #f2f3fa;
+    --md-surface-container: #ecedf4;
+    --md-surface-container-high: #e6e8ef;
+    --md-surface-container-highest: #e1e2e9;
+    --md-on-surface: #191c22;
+    --md-on-surface-variant: #44474f;
+    --md-inverse-surface: #2e3036;
+    --md-inverse-on-surface: #eff0f7;
+    --md-outline: #74777f;
+    --md-outline-variant: #c4c6cf;
+    --green: #1a7d46;
+    --green-container: #b5f1ca;
+    --orange: #8b5000;
+    --orange-container: #ffdcba;
+    --red: #ba1a1a;
+    --red-container: #ffdad6;
+    --shadow-fab: 0 4px 16px rgba(0,0,0,.12);
+    --shadow-drawer: -8px 0 24px rgba(0,0,0,.08);
+  }
 }
 
 /* ── Reset ────────────────────────────────────────────────────── */
@@ -393,13 +472,15 @@ a { color: var(--md-primary); text-decoration: none; }
   z-index: 60;
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
+  display: none;
 }
+.proxy-fab.visible { display: flex; }
 .proxy-fab:hover { transform: translateY(-3px); }
 .proxy-fab.running { background: var(--green-container); color: var(--green); }
 
 /* ── Settings ─────────────────────────────────────────────────── */
 
-.settings-groups { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
+.settings-groups { display: flex; flex-direction: column; gap: 12px; }
 .settings-group { background: var(--md-surface-container); border-radius: var(--radius-md); overflow: hidden; }
 .settings-group-title { padding: 12px 16px 6px; font-size: 11px; font-weight: 700; color: var(--md-primary); letter-spacing: .06em; text-transform: uppercase; }
 .setting-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; transition: background 150ms; }
@@ -463,6 +544,5 @@ a { color: var(--md-primary); text-decoration: none; }
   .page-title { font-size: 17px; }
   .node-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
   .fab { bottom: 64px; right: 12px; padding: 10px 16px; font-size: 12px; }
-  .settings-groups { max-width: 100%; }
   .setting-item { padding: 10px 12px; }
 }

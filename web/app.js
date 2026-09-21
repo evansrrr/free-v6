@@ -103,6 +103,8 @@ function showView(view) {
     newView.classList.add('active');
     state.activeView = view;
     $('#pageTitle').textContent = VIEW_TITLES[view] || view;
+    // Proxy FAB only on dashboard
+    $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
   }, oldView ? 80 : 0);
 
   // Update nav highlighting immediately
@@ -779,20 +781,44 @@ function addCidr() {
 }
 
 function applyTheme(theme) {
-  // For now, dark is the only implemented theme
-  // Future: toggle CSS variables for light mode
   document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('freev6-theme', theme); } catch (_) {}
+  // Listen for system changes when in system mode
+  if (theme === 'system') {
+    if (!state._systemThemeListener) {
+      state._systemThemeListener = window.matchMedia('(prefers-color-scheme: light)');
+      state._systemThemeListener.addEventListener('change', () => {
+        // CSS variables auto-switch via [data-theme="system"] + media query
+        // No JS action needed, but we can log
+      });
+    }
+  }
+}
+
+function loadSavedTheme() {
+  try {
+    const saved = localStorage.getItem('freev6-theme');
+    if (saved) {
+      applyTheme(saved);
+      const select = $('#themeSelect');
+      if (select) select.value = saved;
+    }
+  } catch (_) {}
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
 
 function init() {
+  loadSavedTheme();
   wireEvents();
   wireProxyEvents();
   wireSettingsEvents();
   renderLogs();
   initChart();
   refreshBackendState();
+
+  // Show proxy FAB on initial dashboard view
+  $('#proxyToggle')?.classList.add('visible');
 
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
