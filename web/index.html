@@ -3,90 +3,211 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#f8f9ff" />
+  <meta name="theme-color" content="#121318" />
   <title>freev6</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="app-shell">
+
+    <!-- ── Navigation Rail ─────────────────────────────────────── -->
     <aside class="rail" aria-label="主导航">
       <div class="brand-mark" aria-label="freev6">f<span>6</span></div>
       <nav class="nav-list">
-        <button class="nav-item active" data-view="overview" aria-label="总览"><span class="nav-icon">⌂</span><span>总览</span></button>
-        <button class="nav-item" data-view="settings" aria-label="设置"><span class="nav-icon">⚙</span><span>设置</span></button>
-        <button class="nav-item" data-view="runtime" aria-label="核心"><span class="nav-icon">◈</span><span>核心</span></button>
+        <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
+          <span class="nav-icon">📊</span><span>仪表盘</span>
+        </button>
+        <button class="nav-item" data-view="proxies" aria-label="代理">
+          <span class="nav-icon">🌐</span><span>代理</span>
+        </button>
+        <button class="nav-item" data-view="settings" aria-label="设置">
+          <span class="nav-icon">⚙️</span><span>设置</span>
+        </button>
       </nav>
-      <button class="nav-item bottom-item" id="logsButton" aria-label="打开日志"><span class="nav-icon">≡</span><span>日志</span></button>
+      <button class="nav-item bottom-item" id="logsButton" aria-label="日志">
+        <span class="nav-icon">📋</span><span>日志</span>
+      </button>
     </aside>
 
-    <main class="main-content">
+    <main class="main-content" id="mainContent">
+
+      <!-- ── Top Bar ─────────────────────────────────────────── -->
       <header class="topbar">
-        <div>
-          <p class="eyebrow">校园网 IPv6 助手</p>
-          <h1 id="pageTitle">总览</h1>
-        </div>
+        <h1 class="page-title" id="pageTitle">仪表盘</h1>
         <div class="topbar-actions">
-          <span class="connection-chip"><span class="status-dot muted" id="headerDot"></span><span id="headerStatus">核心未连接</span></span>
-          <button class="icon-button" id="refreshButton" title="刷新状态" aria-label="刷新状态">↻</button>
-          <button class="avatar" title="用户设置" aria-label="用户设置">F</button>
+          <span class="connection-chip" id="connectionChip">
+            <span class="status-dot" id="headerDot"></span>
+            <span id="headerStatus">未连接</span>
+          </span>
+          <button class="icon-btn" id="refreshButton" title="刷新" aria-label="刷新">↻</button>
         </div>
       </header>
 
-      <section class="view active" id="overviewView">
-        <div class="hero-grid">
-          <section class="surface hero-card">
-            <div class="hero-copy">
-              <span class="section-label">免流模式</span>
-              <h2 id="proxyHeadline">准备就绪</h2>
-              <p id="proxyDescription">启动 mihomo 后，所有非校园网流量将通过 WARP IPv6 隧道。</p>
-              <div class="hero-actions">
-                <button class="filled-button" id="proxyToggle"><span class="button-symbol">▶</span><span>启动免流</span></button>
-                <button class="tonal-button" id="modeButton">规则模式</button>
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <!-- PAGE 1: Dashboard                                      -->
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <section class="view active" id="dashboardView">
+        <div class="dashboard-grid">
+
+          <!-- Traffic Chart -->
+          <div class="card card-traffic">
+            <div class="card-header">
+              <div class="card-header-icon">📈</div>
+              <div class="card-header-text">
+                <h3>实时流量</h3>
+                <p>最近 60 秒</p>
+              </div>
+              <div class="traffic-speeds">
+                <div class="speed-item">
+                  <span class="speed-dot upload"></span>
+                  <span>↑</span>
+                  <span class="speed-value" id="speedUp">0 B/s</span>
+                </div>
+                <div class="speed-item">
+                  <span class="speed-dot download"></span>
+                  <span>↓</span>
+                  <span class="speed-value" id="speedDown">0 B/s</span>
+                </div>
               </div>
             </div>
-            <div class="orbital-status" id="orbitalStatus" aria-label="免流状态">
-              <div class="orbital-core">OFF</div>
-              <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+            <div class="traffic-chart-wrap">
+              <canvas id="trafficCanvas"></canvas>
             </div>
-          </section>
-          <section class="surface network-card">
-            <div class="card-heading"><div><span class="section-label">连接质量</span><h3>网络状态</h3></div><span class="status-pill warning" id="networkPill">待检测</span></div>
-            <div class="metric-row"><span>IPv6 出口</span><strong id="egressValue">未检测</strong></div>
-            <div class="metric-row"><span>当前节点</span><strong id="nodeValue">未选择</strong></div>
-            <div class="metric-row"><span>虚拟网卡</span><strong id="tunValue">未启动</strong></div>
-            <div class="quality-bar"><span></span></div>
-          </section>
-        </div>
+          </div>
 
-        <div class="section-heading"><div><span class="section-label">快速配置</span><h2>运行参数</h2></div><button class="text-button" data-view-target="settings">全部设置 <span>→</span></button></div>
-        <div class="quick-grid">
-          <article class="surface quick-card clickable" data-view-target="settings"><div class="quick-icon blue">⌁</div><div><span class="card-kicker">流量策略</span><h3 id="modeValue">规则模式</h3><p>校园网段直连，其余流量走 WARP</p></div><span class="arrow">›</span></article>
-          <article class="surface quick-card clickable" data-view-target="settings"><div class="quick-icon green">⌘</div><div><span class="card-kicker">校园网绕过</span><h3 id="cidrValue">未添加网段</h3><p>为登录页和校内服务保留直连</p></div><span class="arrow">›</span></article>
-          <article class="surface quick-card clickable" data-view-target="runtime"><div class="quick-icon orange">◈</div><div><span class="card-kicker">mihomo Alpha</span><h3 id="runtimeValue">检查核心</h3><p id="runtimeDescription">安装目录中查找运行时</p></div><span class="arrow">›</span></article>
-        </div>
+          <!-- Proxy Toggle -->
+          <div class="card card-toggle toggle-card" id="proxyToggle">
+            <div class="toggle-track">
+              <span class="toggle-icon" id="toggleIcon">▶</span>
+            </div>
+            <span class="toggle-label" id="toggleLabel">启动免流</span>
+            <span class="toggle-status" id="toggleStatus">点击启动 mihomo</span>
+          </div>
 
-        <div class="info-banner"><span class="banner-icon">i</span><div><strong>首次使用</strong><p>请先确认已连接校园网 IPv6，并完成 WARP 注册。freev6 不会把你的私钥交给界面。</p></div><button class="close-banner" aria-label="关闭提示">×</button></div>
+          <!-- Mode Selector -->
+          <div class="card card-mode">
+            <div class="card-header">
+              <div class="card-header-icon">🏷</div>
+              <div class="card-header-text">
+                <h3>出站模式</h3>
+                <p>选择流量策略</p>
+              </div>
+            </div>
+            <div class="mode-options" id="modeOptions">
+              <div class="mode-option selected" data-mode="rule">
+                <div class="mode-radio"></div>
+                <div class="mode-option-text">
+                  <h4>规则模式</h4>
+                  <p>校园网直连，其余走 WARP</p>
+                </div>
+              </div>
+              <div class="mode-option" data-mode="global">
+                <div class="mode-radio"></div>
+                <div class="mode-option-text">
+                  <h4>全局模式</h4>
+                  <p>所有流量走 WARP 隧道</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Network Detection -->
+          <div class="card card-network">
+            <div class="card-header">
+              <div class="card-header-icon">🌐</div>
+              <div class="card-header-text">
+                <h3>网络检测</h3>
+                <p>出口与本机地址</p>
+              </div>
+            </div>
+            <div class="network-section">
+              <div class="network-row">
+                <div class="network-row-label">🌍 出口 IP</div>
+                <div class="network-row-value" id="egressIP">--</div>
+              </div>
+              <div class="network-sep"></div>
+              <div class="network-row">
+                <div class="network-row-label">📡 内网 IPv4</div>
+                <div class="network-row-value" id="localIPv4">--</div>
+              </div>
+              <div class="network-row">
+                <div class="network-row-label">📡 内网 IPv6</div>
+                <div class="network-row-value" id="localIPv6">--</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Traffic Stats -->
+          <div class="card card-stats">
+            <div class="card-header">
+              <div class="card-header-icon">📊</div>
+              <div class="card-header-text">
+                <h3>流量统计</h3>
+                <p>本次会话累计</p>
+              </div>
+            </div>
+            <div class="stats-ring-wrap">
+              <svg class="stats-ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle cx="18" cy="18" r="15.5" stroke="var(--md-surface-container-highest)" stroke-width="3" />
+                <circle cx="18" cy="18" r="15.5" stroke="var(--md-primary)" stroke-width="3"
+                        stroke-dasharray="97.4" stroke-dashoffset="97.4" transform="rotate(-90 18 18)"
+                        id="ringUpload" />
+                <circle cx="18" cy="18" r="12" stroke="var(--md-surface-container-highest)" stroke-width="3" />
+                <circle cx="18" cy="18" r="12" stroke="var(--md-tertiary)" stroke-width="3"
+                        stroke-dasharray="75.4" stroke-dashoffset="75.4" transform="rotate(-90 18 18)"
+                        id="ringDownload" />
+              </svg>
+              <div class="stats-legend">
+                <div class="stats-legend-item">
+                  <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
+                  <span class="stats-legend-text">上传</span>
+                  <span class="stats-legend-value" id="totalUp">0 B</span>
+                </div>
+                <div class="stats-legend-item">
+                  <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
+                  <span class="stats-legend-text">下载</span>
+                  <span class="stats-legend-value" id="totalDown">0 B</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /dashboard-grid -->
       </section>
 
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <!-- PAGE 2: Proxies                                        -->
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <section class="view" id="proxiesView">
+        <div class="empty-state">
+          <span class="empty-state-icon">🌐</span>
+          <span>代理页面 - Phase 2 实现</span>
+        </div>
+      </section>
+
+      <!-- ═══════════════════════════════════════════════════════ -->
+      <!-- PAGE 3: Settings                                       -->
+      <!-- ═══════════════════════════════════════════════════════ -->
       <section class="view" id="settingsView">
-        <div class="view-intro"><span class="section-label">偏好设置</span><h2>让连接适合你的校园网</h2><p>这些设置会在下一次启动免流模式时生成新的 mihomo 配置。</p></div>
-        <div class="settings-layout">
-          <section class="surface settings-panel"><div class="card-heading"><div><span class="section-label">工作模式</span><h3>流量接管方式</h3></div></div><div class="segmented" role="group" aria-label="流量模式"><button class="segment active" data-mode="rule">规则模式</button><button class="segment" data-mode="global">全局模式</button></div><p class="helper-text" id="modeHelp">校园网网段直连，其他流量全部进入 WARP。适合日常使用。</p></section>
-          <section class="surface settings-panel"><div class="card-heading"><div><span class="section-label">校园网绕过</span><h3>内网网段</h3></div><span class="count-badge" id="cidrCount">0</span></div><p class="helper-text">只填写校园网私有或认证网段，不要加入公网地址。</p><div class="input-row"><input id="cidrInput" placeholder="例如 10.0.0.0/8" autocomplete="off" /><button class="tonal-button" id="addCidr">添加</button></div><div class="chip-list" id="cidrList"><span class="empty-state">还没有自定义网段</span></div></section>
-          <section class="surface settings-panel"><div class="card-heading"><div><span class="section-label">DNS 策略</span><h3>解析服务器</h3></div><span class="status-pill success">IPv6 优先</span></div><div class="dns-list"><div><strong>Cloudflare</strong><span>2606:4700:4700::1111</span></div><div><strong>阿里 DNS</strong><span>2400:3200::1</span></div></div><button class="text-button">编辑 DNS <span>→</span></button></section>
+        <div class="empty-state">
+          <span class="empty-state-icon">⚙️</span>
+          <span>设置页面 - Phase 3 实现</span>
         </div>
       </section>
 
-      <section class="view" id="runtimeView">
-        <div class="view-intro"><span class="section-label">运行时</span><h2>mihomo Alpha 核心</h2><p>核心文件独立于界面更新，放在安装目录的 runtime 文件夹中。</p></div>
-        <section class="surface runtime-panel"><div class="runtime-status"><div class="runtime-logo">◈</div><div><span class="section-label">Windows x64</span><h3 id="runtimeName">未发现 mihomo 核心</h3><p id="runtimePath">runtime/mihomo-windows-amd64-v3.exe</p></div><span class="status-pill warning" id="runtimePill">需要下载</span></div><div class="runtime-divider"></div><div class="runtime-meta"><div><span>版本</span><strong id="runtimeVersion">--</strong></div><div><span>校验状态</span><strong id="runtimeHash">等待检查</strong></div><div><span>控制端口</span><strong>127.0.0.1:9090</strong></div></div><div class="runtime-actions"><button class="filled-button" id="registerWarp">注册 WARP</button><button class="tonal-button" id="downloadCore">自动下载核心</button><button class="tonal-button" id="checkCore">重新检查</button></div></section>
-        <section class="surface checklist"><div class="card-heading"><div><span class="section-label">准备清单</span><h3>启动前检查</h3></div></div><div class="check-row"><span class="check-icon pending" id="adminCheckIcon">○</span><span>管理员权限</span><small id="adminCheckText">启动 TUN 时检查</small></div><div class="check-row"><span class="check-icon pending" id="warpCheckIcon">○</span><span>WARP 注册状态</span><small id="warpCheckText">首次启动前完成</small></div><div class="check-row"><span class="check-icon pending">○</span><span>校园网 IPv6</span><small>等待网络检测</small></div></section>
-      </section>
     </main>
   </div>
 
+  <!-- ── Log Drawer ──────────────────────────────────────────── -->
   <div class="scrim" id="scrim"></div>
-  <aside class="log-drawer" id="logDrawer" aria-label="运行日志"><div class="drawer-heading"><div><span class="section-label">诊断</span><h2>运行日志</h2></div><button class="icon-button" id="closeLogs" aria-label="关闭日志">×</button></div><div class="log-list" id="logList"><div class="log-entry"><time>现在</time><span>等待 helper 连接...</span></div></div></aside>
+  <aside class="log-drawer" id="logDrawer" aria-label="运行日志">
+    <div class="drawer-header">
+      <h2>运行日志</h2>
+      <button class="icon-btn" id="closeLogs" aria-label="关闭日志">✕</button>
+    </div>
+    <div class="log-list" id="logList"></div>
+  </aside>
+
   <script src="app.js"></script>
 </body>
 </html>
