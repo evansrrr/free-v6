@@ -303,12 +303,12 @@ function updateStatsRing() {
   const downloadRing = $('#ringDownload');
 
   // outer circle circumference = 2 * PI * 15.5 ≈ 97.4
-  // inner circle circumference = 2 * PI * 12 ≈ 75.4
+  // inner circle circumference = 2 * PI * 11.5 ≈ 72.3
   if (uploadRing) {
     uploadRing.setAttribute('stroke-dashoffset', String(97.4 * (1 - uploadPct)));
   }
   if (downloadRing) {
-    downloadRing.setAttribute('stroke-dashoffset', String(75.4 * (1 - downloadPct)));
+    downloadRing.setAttribute('stroke-dashoffset', String(72.3 * (1 - downloadPct)));
   }
 
   $('#totalUp').textContent = formatBytes(state.totalUpload);
