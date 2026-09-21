@@ -179,19 +179,139 @@
       <!-- PAGE 2: Proxies                                        -->
       <!-- ═══════════════════════════════════════════════════════ -->
       <section class="view" id="proxiesView">
-        <div class="empty-state">
-          <span class="empty-state-icon">🌐</span>
-          <span>代理页面 - Phase 2 实现</span>
+        <!-- Proxy Group Tabs -->
+        <div class="proxy-tabs-wrap">
+          <div class="proxy-tabs" id="proxyTabs"></div>
         </div>
+
+        <!-- Node Grid -->
+        <div class="proxy-toolbar">
+          <input class="proxy-search" id="proxySearch" placeholder="搜索节点…" autocomplete="off" />
+          <button class="proxy-sort-btn" id="proxySortBtn" title="按延迟排序">按延迟排序</button>
+        </div>
+        <div class="node-grid" id="nodeGrid">
+          <div class="empty-state">
+            <span class="empty-state-icon">🌐</span>
+            <span>请先启动免流模式以加载节点列表</span>
+          </div>
+        </div>
+
+        <!-- Delay Test FAB -->
+        <button class="fab" id="delayTestFab" title="延迟测试">
+          <span class="fab-icon" id="fabIcon">⚡</span>
+          <span class="fab-label" id="fabLabel">测试延迟</span>
+        </button>
       </section>
 
       <!-- ═══════════════════════════════════════════════════════ -->
       <!-- PAGE 3: Settings                                       -->
       <!-- ═══════════════════════════════════════════════════════ -->
       <section class="view" id="settingsView">
-        <div class="empty-state">
-          <span class="empty-state-icon">⚙️</span>
-          <span>设置页面 - Phase 3 实现</span>
+        <div class="settings-groups">
+
+          <!-- 外观 -->
+          <div class="settings-group">
+            <div class="settings-group-title">🎨 外观</div>
+            <div class="setting-item">
+              <div class="setting-icon">🌙</div>
+              <div class="setting-text">
+                <div class="setting-label">主题</div>
+                <div class="setting-desc">深色 / 浅色 / 跟随系统</div>
+              </div>
+              <select class="setting-select" id="themeSelect">
+                <option value="dark" selected>深色</option>
+                <option value="light">浅色</option>
+                <option value="system">跟随系统</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 代理 -->
+          <div class="settings-group">
+            <div class="settings-group-title">🌐 代理</div>
+            <div class="setting-item">
+              <div class="setting-icon">🏷</div>
+              <div class="setting-text">
+                <div class="setting-label">工作模式</div>
+                <div class="setting-desc">规则模式：校园网直连；全局模式：全部走 WARP</div>
+              </div>
+              <div class="setting-segmented" id="settingsModeGroup">
+                <button class="setting-seg active" data-mode="rule">规则</button>
+                <button class="setting-seg" data-mode="global">全局</button>
+              </div>
+            </div>
+            <div class="setting-item clickable" id="cidrSettingItem">
+              <div class="setting-icon">🏫</div>
+              <div class="setting-text">
+                <div class="setting-label">校园网段</div>
+                <div class="setting-desc" id="cidrDesc">管理绕过 WARP 的 CIDR 网段</div>
+              </div>
+              <span class="setting-arrow">›</span>
+            </div>
+          </div>
+
+          <!-- 核心 -->
+          <div class="settings-group">
+            <div class="settings-group-title">🔧 核心</div>
+            <div class="setting-item">
+              <div class="setting-icon">◈</div>
+              <div class="setting-text">
+                <div class="setting-label">mihomo 版本</div>
+                <div class="setting-desc" id="runtimeVersion">检查中…</div>
+              </div>
+              <span class="setting-pill" id="runtimePill">--</span>
+            </div>
+            <div class="setting-item">
+              <div class="setting-icon">📥</div>
+              <div class="setting-text">
+                <div class="setting-label">下载核心</div>
+                <div class="setting-desc">自动下载最新 mihomo Alpha</div>
+              </div>
+              <button class="setting-btn" id="downloadCore">下载</button>
+            </div>
+            <div class="setting-item">
+              <div class="setting-icon">🔑</div>
+              <div class="setting-text">
+                <div class="setting-label">注册 WARP</div>
+                <div class="setting-desc" id="warpStatus">检查中…</div>
+              </div>
+              <button class="setting-btn" id="registerWarp">注册</button>
+            </div>
+          </div>
+
+          <!-- 关于 -->
+          <div class="settings-group">
+            <div class="settings-group-title">ℹ️ 关于</div>
+            <div class="setting-item">
+              <div class="setting-icon">📦</div>
+              <div class="setting-text">
+                <div class="setting-label">版本</div>
+                <div class="setting-desc">freev6 v0.1.0</div>
+              </div>
+            </div>
+            <div class="setting-item">
+              <div class="setting-icon">📄</div>
+              <div class="setting-text">
+                <div class="setting-label">许可证</div>
+                <div class="setting-desc">MIT License</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- CIDR Sub-page (overlay) -->
+        <div class="cidr-page" id="cidrPage" style="display:none">
+          <div class="cidr-page-header">
+            <button class="icon-btn" id="cidrBack" aria-label="返回">←</button>
+            <h2>校园网段</h2>
+          </div>
+          <p class="cidr-hint">只填写校园网私有或认证网段，不要加入公网地址。</p>
+          <div class="cidr-input-row">
+            <input class="cidr-input" id="cidrInput" placeholder="例如 10.0.0.0/8" autocomplete="off" />
+            <button class="setting-btn" id="addCidr">添加</button>
+          </div>
+          <div class="cidr-list" id="cidrList"></div>
         </div>
       </section>
 

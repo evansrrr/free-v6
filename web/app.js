@@ -19,6 +19,10 @@ const state = {
   localIPv4: '--',
   localIPv6: '--',
 
+  // Runtime
+  runtimePresent: false,
+  warpRegistered: false,
+
   // Logs
   logs: [],
 };
@@ -316,11 +320,14 @@ async function refreshBackendState() {
     setMode(state.mode, false);
     setRunning(Boolean(status.proxy?.running));
 
-    // Runtime info (optional, for future settings page)
+    // Runtime info
     try {
       const runtime = await api('/runtime');
       state.runtimePresent = runtime.present;
     } catch (_) { /* ignore */ }
+
+    state.warpRegistered = status.warp?.registered || false;
+    updateSettingsUI();
 
     addLog('已连接 freev6 helper');
   } catch (error) {
@@ -468,10 +475,378 @@ function wireEvents() {
   $('#refreshButton')?.addEventListener('click', refreshBackendState);
 }
 
+/* ── Proxy Page ───────────────────────────────────────────────── */
+
+const PROXY_GROUP_ORDER = ['🚀 节点选择', '☑️ 手动切换', '♻️ 自动选择', '🔄 故障转移', '🛑 全球拦截', '🐟 漏网之鱼', 'GLOBAL'];
+
+async function fetchProxies() {
+  if (!state.helperOnline) return;
+  try {
+    // Use mihomo controller directly
+    const resp = await fetch('http://127.0.0.1:9090/proxies');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const groups = {};
+    for (const [name, info] of Object.entries(data.proxies || {})) {
+      if (info.type === 'Selector' || info.type === 'URLTest' || info.type === 'Fallback') {
+        groups[name] = {
+          type: info.type,
+          now: info.now || '',
+          all: info.all || [],
+        };
+      }
+    }
+    state.proxyGroups = groups;
+    if (!state.activeGroup || !groups[state.activeGroup]) {
+      state.activeGroup = Object.keys(groups)[0] || '';
+    }
+    renderProxyTabs();
+    renderNodeGrid();
+  } catch (_) { /* mihomo not reachable */ }
+}
+
+function renderProxyTabs() {
+  const el = $('#proxyTabs');
+  if (!el) return;
+  const groups = Object.keys(state.proxyGroups);
+  // Sort by preferred order
+  groups.sort((a, b) => {
+    const ai = PROXY_GROUP_ORDER.indexOf(a);
+    const bi = PROXY_GROUP_ORDER.indexOf(b);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
+  el.innerHTML = groups.map(g => {
+    const cls = g === state.activeGroup ? ' active' : '';
+    return `<button class="proxy-tab${cls}" data-group="${g}">${g}</button>`;
+  }).join('');
+
+  // Wire tab clicks
+  el.querySelectorAll('.proxy-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      state.activeGroup = tab.dataset.group;
+      state.searchQuery = '';
+      state.sortByDelay = false;
+      const search = $('#proxySearch');
+      if (search) search.value = '';
+      renderProxyTabs();
+      renderNodeGrid();
+    });
+  });
+}
+
+function renderNodeGrid() {
+  const el = $('#nodeGrid');
+  if (!el) return;
+
+  const group = state.proxyGroups[state.activeGroup];
+  if (!group || !group.all.length) {
+    el.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🌐</span><span>请先启动免流模式以加载节点列表</span></div>';
+    return;
+  }
+
+  let nodes = [...group.all];
+
+  // Filter by search
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    nodes = nodes.filter(n => n.toLowerCase().includes(q));
+  }
+
+  // Sort by delay
+  if (state.sortByDelay) {
+    nodes.sort((a, b) => {
+      const da = state.proxyDelays[a] ?? Infinity;
+      const db = state.proxyDelays[b] ?? Infinity;
+      return da - db;
+    });
+  }
+
+  if (!nodes.length) {
+    el.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🔍</span><span>没有匹配的节点</span></div>';
+    return;
+  }
+
+  el.innerHTML = nodes.map(name => {
+    const selected = name === group.now;
+    const delay = state.proxyDelays[name];
+    const testing = state.testingDelay && delay === undefined;
+    let latencyClass = 'unknown';
+    let latencyText = '未测试';
+    if (testing) {
+      latencyClass = 'testing';
+      latencyText = '<span class="spinner"></span>测试中';
+    } else if (delay !== undefined) {
+      if (delay < 100) { latencyClass = 'good'; latencyText = delay + ' ms'; }
+      else if (delay < 500) { latencyClass = 'medium'; latencyText = delay + ' ms'; }
+      else { latencyClass = 'bad'; latencyText = delay >= 5000 ? 'Timeout' : delay + ' ms'; }
+    }
+
+    return `<div class="node-card${selected ? ' selected' : ''}${testing ? ' testing' : ''}" data-name="${name}">
+      <div class="node-name" title="${name}">${name}</div>
+      <div class="node-type">Masque</div>
+      <div class="node-latency ${latencyClass}">${latencyText}</div>
+    </div>`;
+  }).join('');
+
+  // Wire node clicks
+  el.querySelectorAll('.node-card').forEach(card => {
+    card.addEventListener('click', () => switchProxy(card.dataset.name));
+  });
+}
+
+async function switchProxy(name) {
+  if (!state.proxyRunning || !state.activeGroup) return;
+  try {
+    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(state.activeGroup)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    state.proxyGroups[state.activeGroup].now = name;
+    renderNodeGrid();
+    addLog(`切换节点: ${name}`);
+  } catch (e) {
+    addLog(`切换节点失败: ${e.message}`, true);
+  }
+}
+
+async function runDelayTest() {
+  if (state.testingDelay) return;
+  state.testingDelay = true;
+  state.proxyDelays = {};
+
+  const fab = $('#delayTestFab');
+  const fabIcon = $('#fabIcon');
+  const fabLabel = $('#fabLabel');
+  if (fab) fab.classList.add('loading');
+  if (fabIcon) fabIcon.textContent = '⏳';
+  if (fabLabel) fabLabel.textContent = '测试中…';
+  renderNodeGrid();
+
+  const group = state.proxyGroups[state.activeGroup];
+  if (!group) { resetFab(); return; }
+
+  const nodes = group.all;
+  let completed = 0;
+
+  // Test all nodes in parallel with concurrency limit
+  const CONCURRENCY = 6;
+  const queue = [...nodes];
+
+  async function testNext() {
+    while (queue.length) {
+      const name = queue.shift();
+      try {
+        const resp = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=http://www.gstatic.com/generate_204`);
+        if (resp.ok) {
+          const data = await resp.json();
+          state.proxyDelays[name] = data.delay || 5000;
+        } else {
+          state.proxyDelays[name] = 5000;
+        }
+      } catch (_) {
+        state.proxyDelays[name] = 5000;
+      }
+      completed++;
+      if (fabLabel) fabLabel.textContent = `测试中 ${completed}/${nodes.length}`;
+      renderNodeGrid();
+    }
+  }
+
+  const workers = [];
+  for (let i = 0; i < Math.min(CONCURRENCY, nodes.length); i++) {
+    workers.push(testNext());
+  }
+  await Promise.all(workers);
+
+  state.testingDelay = false;
+  resetFab();
+  addLog(`延迟测试完成: ${nodes.length} 个节点`);
+}
+
+function resetFab() {
+  const fab = $('#delayTestFab');
+  const fabIcon = $('#fabIcon');
+  const fabLabel = $('#fabLabel');
+  if (fab) fab.classList.remove('loading');
+  if (fabIcon) fabIcon.textContent = '⚡';
+  if (fabLabel) fabLabel.textContent = '测试延迟';
+}
+
+function wireProxyEvents() {
+  $('#delayTestFab')?.addEventListener('click', runDelayTest);
+
+  $('#proxySearch')?.addEventListener('input', (e) => {
+    state.searchQuery = e.target.value.trim();
+    renderNodeGrid();
+  });
+
+  $('#proxySortBtn')?.addEventListener('click', () => {
+    state.sortByDelay = !state.sortByDelay;
+    const btn = $('#proxySortBtn');
+    if (btn) btn.classList.toggle('sorted', state.sortByDelay);
+    renderNodeGrid();
+  });
+}
+
+/* ── Settings Page ────────────────────────────────────────────── */
+
+function renderCidrs() {
+  const desc = $('#cidrDesc');
+  if (desc) desc.textContent = state.cidrs.length
+    ? `${state.cidrs.length} 个自定义网段`
+    : '管理绕过 WARP 的 CIDR 网段';
+
+  const list = $('#cidrList');
+  if (!list) return;
+  if (!state.cidrs.length) {
+    list.innerHTML = '<div class="empty-state" style="padding:16px"><span>还没有自定义网段</span></div>';
+    return;
+  }
+  list.innerHTML = state.cidrs.map((cidr, i) =>
+    `<div class="cidr-item"><span>${cidr}</span><button class="cidr-remove" data-idx="${i}" aria-label="删除">×</button></div>`
+  ).join('');
+
+  list.querySelectorAll('.cidr-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.idx);
+      const removed = state.cidrs.splice(idx, 1)[0];
+      renderCidrs();
+      persistSettings();
+      addLog(`移除网段: ${removed}`);
+    });
+  });
+}
+
+function updateSettingsUI() {
+  // Mode segmented
+  $$('#settingsModeGroup .setting-seg').forEach(seg => {
+    seg.classList.toggle('active', seg.dataset.mode === state.mode);
+  });
+
+  // CIDR desc
+  renderCidrs();
+
+  // Runtime pill
+  const pill = $('#runtimePill');
+  if (pill) {
+    if (state.runtimePresent) {
+      pill.textContent = '已安装';
+      pill.className = 'setting-pill ready';
+    } else {
+      pill.textContent = '未安装';
+      pill.className = 'setting-pill warn';
+    }
+  }
+  const ver = $('#runtimeVersion');
+  if (ver) ver.textContent = state.runtimePresent ? 'mihomo Alpha 已就绪' : '未发现核心';
+
+  // WARP status
+  const warp = $('#warpStatus');
+  if (warp) warp.textContent = state.warpRegistered ? '设备已注册' : '首次使用前请注册';
+}
+
+function wireSettingsEvents() {
+  // Theme select
+  $('#themeSelect')?.addEventListener('change', (e) => {
+    const theme = e.target.value;
+    applyTheme(theme);
+    addLog(`切换主题: ${theme}`);
+  });
+
+  // Mode segmented in settings
+  $$('#settingsModeGroup .setting-seg').forEach(seg => {
+    seg.addEventListener('click', () => {
+      if (seg.dataset.mode && seg.dataset.mode !== state.mode) {
+        setMode(seg.dataset.mode);
+        updateSettingsUI();
+      }
+    });
+  });
+
+  // CIDR sub-page
+  $('#cidrSettingItem')?.addEventListener('click', () => {
+    const page = $('#cidrPage');
+    const groups = $('.settings-groups');
+    if (page && groups) {
+      groups.style.display = 'none';
+      page.style.display = 'block';
+    }
+  });
+  $('#cidrBack')?.addEventListener('click', () => {
+    const page = $('#cidrPage');
+    const groups = $('.settings-groups');
+    if (page && groups) {
+      page.style.display = 'none';
+      groups.style.display = '';
+    }
+  });
+
+  // Add CIDR
+  $('#addCidr')?.addEventListener('click', addCidr);
+  $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
+
+  // Download core
+  $('#downloadCore')?.addEventListener('click', async () => {
+    if (!state.helperOnline) { addLog('helper 未连接', true); return; }
+    const btn = $('#downloadCore');
+    if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+    try {
+      const result = await api('/runtime/download', { method: 'POST' });
+      state.runtimePresent = true;
+      updateSettingsUI();
+      addLog(`mihomo 下载完成: ${result.version}`);
+    } catch (e) {
+      addLog(`下载失败: ${e.message}`, true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '下载'; }
+    }
+  });
+
+  // Register WARP
+  $('#registerWarp')?.addEventListener('click', async () => {
+    if (!state.helperOnline) { addLog('helper 未连接', true); return; }
+    try {
+      await api('/warp/register', { method: 'POST', body: JSON.stringify({ name: 'freev6-windows' }) });
+      state.warpRegistered = true;
+      updateSettingsUI();
+      addLog('WARP 注册成功');
+    } catch (e) {
+      addLog(`WARP 注册失败: ${e.message}`, true);
+    }
+  });
+}
+
+function addCidr() {
+  const input = $('#cidrInput');
+  if (!input) return;
+  const value = input.value.trim();
+  if (!value) return;
+  if (!value.includes('/')) {
+    addLog(`无效 CIDR: ${value}`, true);
+    return;
+  }
+  if (!state.cidrs.includes(value)) {
+    state.cidrs.push(value);
+    renderCidrs();
+    persistSettings();
+    addLog(`添加网段: ${value}`);
+  }
+  input.value = '';
+}
+
+function applyTheme(theme) {
+  // For now, dark is the only implemented theme
+  // Future: toggle CSS variables for light mode
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
 /* ── Init ─────────────────────────────────────────────────────── */
 
 function init() {
   wireEvents();
+  wireProxyEvents();
+  wireSettingsEvents();
   renderLogs();
   initChart();
   refreshBackendState();
@@ -479,6 +854,7 @@ function init() {
   // Polling intervals
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
+  setInterval(fetchProxies, 5000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
