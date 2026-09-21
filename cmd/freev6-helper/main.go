@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -96,14 +97,46 @@ func (h *helper) runtime(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	path, err := mihomo.DiscoverBinary(h.root)
+	version := ""
+	if err == nil && path != "" {
+		ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+		defer cancel()
+		out, runErr := execCommand(ctx, path, "-v")
+		if runErr == nil {
+			// Parse "Mihomo Meta alpha-5019cc0 windows amd64 ..."
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "Mihomo ") || strings.HasPrefix(line, "mihomo ") {
+					// Extract tag: "Mihomo Meta alpha-5019cc0 ..." → "alpha-5019cc0"
+					parts := strings.Fields(line)
+					if len(parts) >= 3 {
+						version = parts[2] // e.g. "alpha-5019cc0"
+					} else {
+						version = line
+					}
+					break
+				}
+			}
+			if version == "" {
+				version = strings.TrimSpace(out)
+			}
+		}
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok":           true,
 		"present":      err == nil,
 		"path":         path,
+		"version":      version,
 		"error":        errorText(err),
 		"platform":     runtime.GOOS,
 		"architecture": runtime.GOARCH,
 	})
+}
+
+func execCommand(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Request) {

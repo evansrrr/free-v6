@@ -22,6 +22,7 @@ const state = {
 
   // Runtime
   runtimePresent: false,
+  runtimeVersion: '',
   warpRegistered: false,
 
   // Logs
@@ -305,19 +306,22 @@ function drawChart() {
 
 function updateStatsRing() {
   const total = state.totalUpload + state.totalDownload;
-  const uploadPct = total > 0 ? state.totalUpload / total : 0;
-  const downloadPct = total > 0 ? state.totalDownload / total : 0;
+  const circumference = 2 * Math.PI * 13.5; // ≈ 84.8
+  const uploadLen = total > 0 ? (state.totalUpload / total) * circumference : 0;
+  const downloadLen = total > 0 ? (state.totalDownload / total) * circumference : 0;
 
   const uploadRing = $('#ringUpload');
   const downloadRing = $('#ringDownload');
 
-  // outer circle circumference = 2 * PI * 15.5 ≈ 97.4
-  // inner circle circumference = 2 * PI * 11.5 ≈ 72.3
   if (uploadRing) {
-    uploadRing.setAttribute('stroke-dashoffset', String(97.4 * (1 - uploadPct)));
+    uploadRing.setAttribute('stroke-dasharray', `${uploadLen} ${circumference - uploadLen}`);
+    uploadRing.setAttribute('transform', `rotate(-90 18 18)`);
   }
   if (downloadRing) {
-    downloadRing.setAttribute('stroke-dashoffset', String(72.3 * (1 - downloadPct)));
+    // Download starts where upload ends
+    const offset = -uploadLen;
+    downloadRing.setAttribute('stroke-dasharray', `${downloadLen} ${circumference - downloadLen}`);
+    downloadRing.setAttribute('transform', `rotate(${-90 + (uploadLen / circumference) * 360} 18 18)`);
   }
 
   $('#totalUp').textContent = formatBytes(state.totalUpload);
@@ -340,6 +344,7 @@ async function refreshBackendState() {
     try {
       const runtime = await api('/runtime');
       state.runtimePresent = runtime.present;
+      state.runtimeVersion = runtime.version || '';
     } catch (_) { /* ignore */ }
 
     updateConnectionChip(true);
@@ -420,6 +425,7 @@ async function pollStatus() {
       try {
         const runtime = await api('/runtime');
         state.runtimePresent = runtime.present;
+        state.runtimeVersion = runtime.version || '';
       } catch (_) {}
       updateConnectionChip(true);
       addLog('已连接 freev6 helper');
@@ -555,7 +561,6 @@ function renderNodeGrid() {
 
     return `<div class="node-card${selected ? ' selected' : ''}${testing ? ' testing' : ''}" data-name="${name}">
       <div class="node-name" title="${name}">${name}</div>
-      <div class="node-type">Masque</div>
       <div class="node-latency ${latencyClass}">${latencyText}</div>
     </div>`;
   }).join('');
@@ -699,7 +704,19 @@ function updateSettingsUI() {
     }
   }
   const ver = $('#runtimeVersion');
-  if (ver) ver.textContent = state.runtimePresent ? 'mihomo Alpha 已就绪' : '未发现核心';
+  if (ver) ver.textContent = state.runtimePresent && state.runtimeVersion ? state.runtimeVersion : (state.runtimePresent ? 'mihomo Alpha 已就绪' : '未发现核心');
+
+  // Download button
+  const dlBtn = $('#downloadCore');
+  if (dlBtn) {
+    if (state.runtimePresent) {
+      dlBtn.textContent = '已安装';
+      dlBtn.disabled = true;
+    } else {
+      dlBtn.textContent = '下载';
+      dlBtn.disabled = false;
+    }
+  }
 
   // WARP status
   const warp = $('#warpStatus');
@@ -754,12 +771,14 @@ function wireSettingsEvents() {
     try {
       const result = await api('/runtime/download', { method: 'POST' });
       state.runtimePresent = true;
+      state.runtimeVersion = result.version || '';
       updateSettingsUI();
+      updateConnectionChip(true);
       addLog(`mihomo 下载完成: ${result.version}`);
     } catch (e) {
       addLog(`下载失败: ${e.message}`, true);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '下载'; }
+      if (btn && !state.runtimePresent) { btn.disabled = false; btn.textContent = '下载'; }
     }
   });
 
