@@ -114,31 +114,38 @@ function showView(view) {
 
 function setRunning(running) {
   state.proxyRunning = running;
-  const card = $('#proxyToggle');
+  const fab = $('#proxyToggle');
   const icon = $('#toggleIcon');
   const label = $('#toggleLabel');
-  const status = $('#toggleStatus');
+
+  icon.textContent = running ? '■' : '▶';
+  label.textContent = running ? '停止免流' : '启动免流';
+  fab?.classList.toggle('running', running);
+}
+
+function updateConnectionChip(online) {
   const chip = $('#connectionChip');
   const dot = $('#headerDot');
   const headerStatus = $('#headerStatus');
-
-  card.classList.toggle('running', running);
-  icon.textContent = running ? '■' : '▶';
-  label.textContent = running ? '停止免流' : '启动免流';
-  status.textContent = running ? 'mihomo 运行中' : '点击启动 mihomo';
-  chip.classList.toggle('connected', running);
-  dot.classList.toggle('live', running);
-  headerStatus.textContent = running ? '已连接' : '未连接';
+  if (!chip) return;
+  chip.classList.toggle('connected', online);
+  dot.classList.toggle('live', online);
+  headerStatus.textContent = online ? '核心已连接' : '核心未连接';
 }
 
 /* ── Mode Selector ────────────────────────────────────────────── */
 
-function setMode(mode, persist = true) {
+function setMode(mode, persist = true, silent = false) {
+  if (mode === state.mode && silent) return;
   state.mode = mode;
   $$('.mode-option').forEach(el => {
     el.classList.toggle('selected', el.dataset.mode === mode);
   });
-  addLog(`切换为${mode === 'rule' ? '规则' : '全局'}模式`);
+  // Sync settings page segmented
+  $$('#settingsModeGroup .setting-seg').forEach(seg => {
+    seg.classList.toggle('active', seg.dataset.mode === mode);
+  });
+  if (!silent) addLog(`切换为${mode === 'rule' ? '规则' : '全局'}模式`);
   if (persist) persistSettings();
 }
 
@@ -317,8 +324,9 @@ async function refreshBackendState() {
     state.mode = status.settings?.mode || state.mode;
     state.cidrs = status.settings?.campusCidrs || state.cidrs;
 
-    setMode(state.mode, false);
+    setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
+    updateConnectionChip(true);
 
     // Runtime info
     try {
@@ -389,6 +397,29 @@ async function pollTraffic() {
   }
 }
 
+/* ── Network Polling ───────────────────────────────────────────── */
+
+async function pollNetwork() {
+  // Fetch exit IP (through mihomo if running, direct if not)
+  try {
+    const controller = state.proxyRunning ? 'http://127.0.0.1:7890' : '';
+    const opts = controller
+      ? { headers: {} }
+      : {};
+    const resp = await fetch('https://api64.ipify.org?format=json', {
+      signal: AbortSignal.timeout(8000),
+      ...(controller ? {} : {}),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      state.egressIP = data.ip || '--';
+      $('#egressIP').textContent = state.egressIP;
+    }
+  } catch (_) {
+    // Can't reach, leave as --
+  }
+}
+
 /* ── Status Polling ───────────────────────────────────────────── */
 
 async function pollStatus() {
@@ -396,6 +427,7 @@ async function pollStatus() {
     const status = await api('/status');
     if (!state.helperOnline) {
       state.helperOnline = true;
+      updateConnectionChip(true);
       addLog('已连接 freev6 helper');
     }
     const wasRunning = state.proxyRunning;
@@ -405,10 +437,11 @@ async function pollStatus() {
       addLog(isRunning ? '免流模式已启动' : '免流模式已停止');
     }
     state.mode = status.settings?.mode || state.mode;
-    setMode(state.mode, false);
+    setMode(state.mode, false, true);
   } catch (_) {
     if (state.helperOnline) {
       state.helperOnline = false;
+      updateConnectionChip(false);
       setRunning(false);
       addLog('helper 连接断开', true);
     }
@@ -423,15 +456,15 @@ function wireEvents() {
     item.addEventListener('click', () => showView(item.dataset.view));
   });
 
-  // Proxy toggle
+  // Proxy toggle FAB
   $('#proxyToggle')?.addEventListener('click', async () => {
     if (!state.helperOnline) {
       addLog('helper 未连接，无法操作', true);
       return;
     }
-    const card = $('#proxyToggle');
-    card.style.pointerEvents = 'none';
-    card.style.opacity = '0.6';
+    const fab = $('#proxyToggle');
+    fab.style.pointerEvents = 'none';
+    fab.style.opacity = '0.6';
     try {
       if (state.proxyRunning) {
         await api('/proxy/stop', { method: 'POST' });
@@ -445,8 +478,8 @@ function wireEvents() {
     } catch (e) {
       addLog(`操作失败: ${e.message}`, true);
     } finally {
-      card.style.pointerEvents = '';
-      card.style.opacity = '';
+      fab.style.pointerEvents = '';
+      fab.style.opacity = '';
     }
   });
 
@@ -471,8 +504,13 @@ function wireEvents() {
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
 
-  // Refresh
-  $('#refreshButton')?.addEventListener('click', refreshBackendState);
+  // Refresh - refresh all data
+  $('#refreshButton')?.addEventListener('click', () => {
+    addLog('手动刷新');
+    refreshBackendState();
+    fetchProxies();
+    pollNetwork();
+  });
 }
 
 /* ── Proxy Page ───────────────────────────────────────────────── */
@@ -850,11 +888,13 @@ function init() {
   renderLogs();
   initChart();
   refreshBackendState();
+  pollNetwork();
 
   // Polling intervals
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
+  setInterval(pollNetwork, 30000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

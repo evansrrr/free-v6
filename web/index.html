@@ -75,15 +75,6 @@
             </div>
           </div>
 
-          <!-- Proxy Toggle -->
-          <div class="card card-toggle toggle-card" id="proxyToggle">
-            <div class="toggle-track">
-              <span class="toggle-icon" id="toggleIcon">▶</span>
-            </div>
-            <span class="toggle-label" id="toggleLabel">启动免流</span>
-            <span class="toggle-status" id="toggleStatus">点击启动 mihomo</span>
-          </div>
-
           <!-- Mode Selector -->
           <div class="card card-mode">
             <div class="card-header">
@@ -327,6 +318,12 @@
     </div>
     <div class="log-list" id="logList"></div>
   </aside>
+
+  <!-- ── Proxy Toggle FAB (global) ─────────────────────────────── -->
+  <button class="fab proxy-fab" id="proxyToggle" title="启动/停止免流">
+    <span class="fab-icon" id="toggleIcon">▶</span>
+    <span class="fab-label" id="toggleLabel">启动免流</span>
+  </button>
 
   <script src="app.js"></script>
 </body>

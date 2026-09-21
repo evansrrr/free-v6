@@ -301,16 +301,14 @@ a { color: var(--md-primary); text-decoration: none; }
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto auto;
   gap: 16px;
 }
 
 /* Traffic chart spans full width */
 .card-traffic     { grid-column: 1 / -1; }
-.card-toggle      { grid-column: 1; grid-row: 2; }
-.card-mode        { grid-column: 2; grid-row: 2; }
-.card-network     { grid-column: 1; grid-row: 3; }
-.card-stats       { grid-column: 2; grid-row: 3; }
+.card-mode        { grid-column: 1; }
+.card-network     { grid-column: 2; }
+.card-stats       { grid-column: 1 / -1; }
 
 /* ── Traffic Chart Card ───────────────────────────────────────────── */
 
@@ -353,60 +351,6 @@ a { color: var(--md-primary); text-decoration: none; }
   font-weight: 700;
   color: var(--md-on-surface);
   min-width: 60px;
-}
-
-/* ── Proxy Toggle Card ────────────────────────────────────────────── */
-
-.toggle-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  min-height: 220px;
-  gap: 16px;
-  cursor: pointer;
-  transition: background 300ms var(--ease-standard);
-}
-.toggle-card.running {
-  background: linear-gradient(135deg, var(--md-primary-container), var(--md-surface-container));
-}
-
-.toggle-track {
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--md-surface-container-highest);
-  border: 3px solid var(--md-outline-variant);
-  transition: all 400ms var(--ease-emphasized);
-  position: relative;
-}
-.toggle-card.running .toggle-track {
-  background: var(--md-primary-container);
-  border-color: var(--md-primary);
-  box-shadow: 0 0 0 8px rgba(160,196,255,.12);
-}
-
-.toggle-icon {
-  font-size: 24px;
-  transition: transform 300ms var(--ease-emphasized);
-}
-.toggle-card.running .toggle-icon { transform: scale(1.1); }
-
-.toggle-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--md-on-surface-variant);
-  transition: color 200ms var(--ease-standard);
-}
-.toggle-card.running .toggle-label { color: var(--md-primary); }
-
-.toggle-status {
-  font-size: 11px;
-  color: var(--md-on-surface-variant);
-  opacity: .7;
 }
 
 /* ── Mode Card ────────────────────────────────────────────────────── */
@@ -707,7 +651,7 @@ a { color: var(--md-primary); text-decoration: none; }
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
-  .card-traffic, .card-toggle, .card-mode, .card-network, .card-stats {
+  .card-traffic, .card-mode, .card-network, .card-stats {
     grid-column: auto;
     grid-row: auto;
   }
@@ -893,6 +837,23 @@ a { color: var(--md-primary); text-decoration: none; }
   pointer-events: none;
 }
 .fab-icon { font-size: 18px; }
+
+/* ── Proxy Toggle FAB ─────────────────────────────────────────── */
+
+.proxy-fab {
+  z-index: 60;
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  transition: all 350ms var(--ease-emphasized);
+}
+.proxy-fab:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+}
+.proxy-fab.running {
+  background: var(--green-container);
+  color: var(--green);
+}
 
 /* ── Settings Page ────────────────────────────────────────────── */
 
