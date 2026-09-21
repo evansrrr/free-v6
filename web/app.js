@@ -119,7 +119,9 @@ function setRunning(running) {
   const icon = $('#toggleIcon');
   const label = $('#toggleLabel');
 
-  icon.textContent = running ? '■' : '▶';
+  const playPath = 'M6 4l10 6-10 6V4z';
+  const stopPath = 'M5 5h4v10H5zm6 0h4v10h-4z';
+  icon.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${running ? stopPath : playPath}"/></svg>`;
   label.textContent = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
 }
@@ -195,7 +197,7 @@ function drawChart() {
     ctx.fillStyle = 'rgba(160,196,255,.08)';
     ctx.fillRect(0, 0, chartW, chartH);
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--md-outline').trim() || '#8e9099';
-    ctx.font = '13px DM Sans, sans-serif';
+    ctx.font = '12px "DM Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('等待流量数据', chartW / 2, chartH / 2 + 4);
     return;
@@ -504,7 +506,7 @@ function renderNodeGrid() {
 
   const group = state.proxyGroup;
   if (!group || !group.all.length) {
-    el.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🌐</span><span>请先启动免流模式以加载节点列表</span></div>';
+    el.innerHTML = '<div class="empty-state"><svg class="empty-state-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20h24"/><path d="M20 8v24"/><circle cx="20" cy="20" r="15"/></svg><span>请先启动免流模式以加载节点列表</span></div>';
     return;
   }
 
@@ -572,7 +574,7 @@ async function runDelayTest() {
   const fabIcon = $('#fabIcon');
   const fabLabel = $('#fabLabel');
   if (fab) fab.classList.add('loading');
-  if (fabIcon) fabIcon.textContent = '⏳';
+  if (fabIcon) { fabIcon.outerHTML = '<svg class="fab-icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7" stroke-dasharray="22" stroke-dashoffset="8"><animateTransform attributeName="transform" type="rotate" from="0 10 10" to="360 10 10" dur=".6s" repeatCount="indefinite"/></circle></svg>'; }
   if (fabLabel) fabLabel.textContent = '测试中…';
   renderNodeGrid();
 
@@ -622,7 +624,7 @@ function resetFab() {
   const fabIcon = $('#fabIcon');
   const fabLabel = $('#fabLabel');
   if (fab) fab.classList.remove('loading');
-  if (fabIcon) fabIcon.textContent = '⚡';
+  if (fabIcon) { fabIcon.outerHTML = '<svg class="fab-icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L5 11h5l-1 7 6-9h-5l1-7z"/></svg>'; }
   if (fabLabel) fabLabel.textContent = '测试延迟';
 }
 
