@@ -118,7 +118,7 @@ a { color: var(--md-primary); text-decoration: none; }
 .nav-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   width: 100%;
   padding: 0 8px;
   flex: 1;
