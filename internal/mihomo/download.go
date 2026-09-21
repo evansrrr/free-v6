@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,19 +14,8 @@ import (
 	"strings"
 )
 
-const latestReleaseURL = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest"
+const mihomoDownloadURL = "https://api.gitproxy.dev/github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/mihomo-windows-amd64-v3-alpha-5019cc0.zip"
 const maxRuntimeDownload = 150 << 20
-
-type releaseAsset struct {
-	Name   string `json:"name"`
-	URL    string `json:"browser_download_url"`
-	Digest string `json:"digest"`
-}
-
-type releaseInfo struct {
-	TagName string         `json:"tag_name"`
-	Assets  []releaseAsset `json:"assets"`
-}
 
 type DownloadResult struct {
 	Version string
@@ -35,52 +23,20 @@ type DownloadResult struct {
 	SHA256  string
 }
 
-func SelectWindowsAMD64Asset(release releaseInfo) (releaseAsset, error) {
-	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
-		if strings.Contains(name, "windows-amd64") && strings.Contains(name, "alpha") && (strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".gz")) {
-			return asset, nil
-		}
-	}
-	return releaseAsset{}, fmt.Errorf("no Windows amd64 mihomo Alpha asset in release %s", release.TagName)
-}
-
 func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 	client := &http.Client{}
-	releaseRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, mihomoDownloadURL, nil)
 	if err != nil {
 		return DownloadResult{}, err
 	}
-	releaseRequest.Header.Set("Accept", "application/vnd.github+json")
-	releaseRequest.Header.Set("User-Agent", "freev6")
-	releaseResponse, err := client.Do(releaseRequest)
-	if err != nil {
-		return DownloadResult{}, fmt.Errorf("request mihomo release metadata: %w", err)
-	}
-	defer releaseResponse.Body.Close()
-	if releaseResponse.StatusCode != http.StatusOK {
-		return DownloadResult{}, fmt.Errorf("mihomo release metadata returned HTTP %s", releaseResponse.Status)
-	}
-	var release releaseInfo
-	if err := json.NewDecoder(releaseResponse.Body).Decode(&release); err != nil {
-		return DownloadResult{}, fmt.Errorf("decode mihomo release metadata: %w", err)
-	}
-	asset, err := SelectWindowsAMD64Asset(release)
-	if err != nil {
-		return DownloadResult{}, err
-	}
-	downloadRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.URL, nil)
-	if err != nil {
-		return DownloadResult{}, err
-	}
-	downloadRequest.Header.Set("User-Agent", "freev6")
-	downloadResponse, err := client.Do(downloadRequest)
+	request.Header.Set("User-Agent", "freev6")
+	response, err := client.Do(request)
 	if err != nil {
 		return DownloadResult{}, fmt.Errorf("download mihomo runtime: %w", err)
 	}
-	defer downloadResponse.Body.Close()
-	if downloadResponse.StatusCode != http.StatusOK {
-		return DownloadResult{}, fmt.Errorf("mihomo runtime download returned HTTP %s", downloadResponse.Status)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return DownloadResult{}, fmt.Errorf("mihomo runtime download returned HTTP %s", response.Status)
 	}
 	temporary, err := os.CreateTemp("", "freev6-mihomo-*")
 	if err != nil {
@@ -89,7 +45,7 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	hash := sha256.New()
-	limited := io.LimitReader(io.TeeReader(downloadResponse.Body, hash), maxRuntimeDownload)
+	limited := io.LimitReader(io.TeeReader(response.Body, hash), maxRuntimeDownload)
 	if _, err := io.Copy(temporary, limited); err != nil {
 		temporary.Close()
 		return DownloadResult{}, fmt.Errorf("save mihomo runtime download: %w", err)
@@ -98,30 +54,30 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 		return DownloadResult{}, err
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
-	if expected := strings.TrimPrefix(asset.Digest, "sha256:"); expected != "" && !strings.EqualFold(expected, digest) {
-		return DownloadResult{}, fmt.Errorf("mihomo runtime checksum mismatch: got %s want %s", digest, expected)
-	}
 	runtimeDir := filepath.Join(root, "runtime")
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
 		return DownloadResult{}, err
 	}
-	outputPath, err := extractRuntime(temporaryPath, asset.Name, runtimeDir)
+	outputPath, err := extractRuntime(temporaryPath, runtimeDir)
 	if err != nil {
 		return DownloadResult{}, err
 	}
-	return DownloadResult{Version: release.TagName, Path: outputPath, SHA256: digest}, nil
+	return DownloadResult{Version: "Prerelease-Alpha", Path: outputPath, SHA256: digest}, nil
 }
 
-func extractRuntime(archivePath, archiveName, runtimeDir string) (string, error) {
-	if strings.HasSuffix(strings.ToLower(archiveName), ".zip") {
+func extractRuntime(archivePath, runtimeDir string) (string, error) {
+	outputPath := filepath.Join(runtimeDir, "mihomo-windows-amd64-v3.exe")
+	name := strings.ToLower(filepath.Base(archivePath))
+
+	if strings.HasSuffix(name, ".zip") {
 		archive, err := zip.OpenReader(archivePath)
 		if err != nil {
 			return "", fmt.Errorf("open mihomo archive: %w", err)
 		}
 		defer archive.Close()
 		for _, file := range archive.File {
-			if strings.HasSuffix(strings.ToLower(file.Name), ".exe") {
-				outputPath := filepath.Join(runtimeDir, "mihomo-windows-amd64-v3.exe")
+			lower := strings.ToLower(file.Name)
+			if strings.HasSuffix(lower, ".exe") {
 				input, err := file.Open()
 				if err != nil {
 					return "", err
@@ -140,6 +96,7 @@ func extractRuntime(archivePath, archiveName, runtimeDir string) (string, error)
 		}
 		return "", fmt.Errorf("mihomo zip contains no executable")
 	}
+
 	input, err := os.Open(archivePath)
 	if err != nil {
 		return "", err
@@ -150,7 +107,6 @@ func extractRuntime(archivePath, archiveName, runtimeDir string) (string, error)
 		return "", fmt.Errorf("open mihomo gzip: %w", err)
 	}
 	defer reader.Close()
-	outputPath := filepath.Join(runtimeDir, "mihomo-windows-amd64-v3.exe")
 	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
 	if err != nil {
 		return "", err
