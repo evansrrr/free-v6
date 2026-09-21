@@ -8,16 +8,17 @@ const state = {
   cidrs: [],
 
   // Traffic
-  trafficHistory: [],    // [{t, up, down}]  last 60 samples
+  trafficHistory: [],
   totalUpload: 0,
   totalDownload: 0,
   lastUpload: 0,
   lastDownload: 0,
 
-  // Network
-  egressIP: '--',
-  localIPv4: '--',
-  localIPv6: '--',
+  // Proxy
+  proxyGroup: null,       // { now, all: [] }
+  proxyDelays: {},
+  testingDelay: false,
+  delaysReady: false,
 
   // Runtime
   runtimePresent: false,
@@ -138,9 +139,6 @@ function updateConnectionChip(online) {
 function setMode(mode, persist = true, silent = false) {
   if (mode === state.mode && silent) return;
   state.mode = mode;
-  $$('.mode-option').forEach(el => {
-    el.classList.toggle('selected', el.dataset.mode === mode);
-  });
   // Sync settings page segmented
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.classList.toggle('active', seg.dataset.mode === mode);
@@ -397,29 +395,6 @@ async function pollTraffic() {
   }
 }
 
-/* ── Network Polling ───────────────────────────────────────────── */
-
-async function pollNetwork() {
-  // Fetch exit IP (through mihomo if running, direct if not)
-  try {
-    const controller = state.proxyRunning ? 'http://127.0.0.1:7890' : '';
-    const opts = controller
-      ? { headers: {} }
-      : {};
-    const resp = await fetch('https://api64.ipify.org?format=json', {
-      signal: AbortSignal.timeout(8000),
-      ...(controller ? {} : {}),
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      state.egressIP = data.ip || '--';
-      $('#egressIP').textContent = state.egressIP;
-    }
-  } catch (_) {
-    // Can't reach, leave as --
-  }
-}
-
 /* ── Status Polling ───────────────────────────────────────────── */
 
 async function pollStatus() {
@@ -483,15 +458,6 @@ function wireEvents() {
     }
   });
 
-  // Mode options
-  $$('.mode-option').forEach(el => {
-    el.addEventListener('click', () => {
-      if (el.dataset.mode && el.dataset.mode !== state.mode) {
-        setMode(el.dataset.mode);
-      }
-    });
-  });
-
   // Log drawer
   $('#logsButton')?.addEventListener('click', () => {
     $('#logDrawer')?.classList.add('open');
@@ -504,79 +470,39 @@ function wireEvents() {
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
 
-  // Refresh - refresh all data
+  // Refresh
   $('#refreshButton')?.addEventListener('click', () => {
     addLog('手动刷新');
     refreshBackendState();
     fetchProxies();
-    pollNetwork();
   });
 }
 
-/* ── Proxy Page ───────────────────────────────────────────────── */
+/* ── Proxy Page (simplified: auto-select group only) ──────────── */
 
-const PROXY_GROUP_ORDER = ['🚀 节点选择', '☑️ 手动切换', '♻️ 自动选择', '🔄 故障转移', '🛑 全球拦截', '🐟 漏网之鱼', 'GLOBAL'];
+const AUTO_SELECT_GROUP = '♻️ 自动选择';
 
 async function fetchProxies() {
   if (!state.helperOnline) return;
   try {
-    // Use mihomo controller directly
     const resp = await fetch('http://127.0.0.1:9090/proxies');
     if (!resp.ok) return;
     const data = await resp.json();
-    const groups = {};
-    for (const [name, info] of Object.entries(data.proxies || {})) {
-      if (info.type === 'Selector' || info.type === 'URLTest' || info.type === 'Fallback') {
-        groups[name] = {
-          type: info.type,
-          now: info.now || '',
-          all: info.all || [],
-        };
-      }
-    }
-    state.proxyGroups = groups;
-    if (!state.activeGroup || !groups[state.activeGroup]) {
-      state.activeGroup = Object.keys(groups)[0] || '';
-    }
-    renderProxyTabs();
+    const info = data.proxies?.[AUTO_SELECT_GROUP];
+    if (!info) return;
+    state.proxyGroup = {
+      now: info.now || '',
+      all: info.all || [],
+    };
     renderNodeGrid();
   } catch (_) { /* mihomo not reachable */ }
-}
-
-function renderProxyTabs() {
-  const el = $('#proxyTabs');
-  if (!el) return;
-  const groups = Object.keys(state.proxyGroups);
-  // Sort by preferred order
-  groups.sort((a, b) => {
-    const ai = PROXY_GROUP_ORDER.indexOf(a);
-    const bi = PROXY_GROUP_ORDER.indexOf(b);
-    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-  });
-  el.innerHTML = groups.map(g => {
-    const cls = g === state.activeGroup ? ' active' : '';
-    return `<button class="proxy-tab${cls}" data-group="${g}">${g}</button>`;
-  }).join('');
-
-  // Wire tab clicks
-  el.querySelectorAll('.proxy-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      state.activeGroup = tab.dataset.group;
-      state.searchQuery = '';
-      state.sortByDelay = false;
-      const search = $('#proxySearch');
-      if (search) search.value = '';
-      renderProxyTabs();
-      renderNodeGrid();
-    });
-  });
 }
 
 function renderNodeGrid() {
   const el = $('#nodeGrid');
   if (!el) return;
 
-  const group = state.proxyGroups[state.activeGroup];
+  const group = state.proxyGroup;
   if (!group || !group.all.length) {
     el.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🌐</span><span>请先启动免流模式以加载节点列表</span></div>';
     return;
@@ -584,24 +510,13 @@ function renderNodeGrid() {
 
   let nodes = [...group.all];
 
-  // Filter by search
-  if (state.searchQuery) {
-    const q = state.searchQuery.toLowerCase();
-    nodes = nodes.filter(n => n.toLowerCase().includes(q));
-  }
-
-  // Sort by delay
-  if (state.sortByDelay) {
+  // Auto-sort by delay after test
+  if (state.delaysReady) {
     nodes.sort((a, b) => {
       const da = state.proxyDelays[a] ?? Infinity;
       const db = state.proxyDelays[b] ?? Infinity;
       return da - db;
     });
-  }
-
-  if (!nodes.length) {
-    el.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🔍</span><span>没有匹配的节点</span></div>';
-    return;
   }
 
   el.innerHTML = nodes.map(name => {
@@ -626,21 +541,20 @@ function renderNodeGrid() {
     </div>`;
   }).join('');
 
-  // Wire node clicks
   el.querySelectorAll('.node-card').forEach(card => {
     card.addEventListener('click', () => switchProxy(card.dataset.name));
   });
 }
 
 async function switchProxy(name) {
-  if (!state.proxyRunning || !state.activeGroup) return;
+  if (!state.proxyRunning || !AUTO_SELECT_GROUP) return;
   try {
-    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(state.activeGroup)}`, {
+    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(AUTO_SELECT_GROUP)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    state.proxyGroups[state.activeGroup].now = name;
+    if (state.proxyGroup) state.proxyGroup.now = name;
     renderNodeGrid();
     addLog(`切换节点: ${name}`);
   } catch (e) {
@@ -652,6 +566,7 @@ async function runDelayTest() {
   if (state.testingDelay) return;
   state.testingDelay = true;
   state.proxyDelays = {};
+  state.delaysReady = false;
 
   const fab = $('#delayTestFab');
   const fabIcon = $('#fabIcon');
@@ -661,13 +576,11 @@ async function runDelayTest() {
   if (fabLabel) fabLabel.textContent = '测试中…';
   renderNodeGrid();
 
-  const group = state.proxyGroups[state.activeGroup];
+  const group = state.proxyGroup;
   if (!group) { resetFab(); return; }
 
   const nodes = group.all;
   let completed = 0;
-
-  // Test all nodes in parallel with concurrency limit
   const CONCURRENCY = 6;
   const queue = [...nodes];
 
@@ -698,7 +611,9 @@ async function runDelayTest() {
   await Promise.all(workers);
 
   state.testingDelay = false;
+  state.delaysReady = true;
   resetFab();
+  renderNodeGrid(); // re-render with auto-sort
   addLog(`延迟测试完成: ${nodes.length} 个节点`);
 }
 
@@ -713,18 +628,6 @@ function resetFab() {
 
 function wireProxyEvents() {
   $('#delayTestFab')?.addEventListener('click', runDelayTest);
-
-  $('#proxySearch')?.addEventListener('input', (e) => {
-    state.searchQuery = e.target.value.trim();
-    renderNodeGrid();
-  });
-
-  $('#proxySortBtn')?.addEventListener('click', () => {
-    state.sortByDelay = !state.sortByDelay;
-    const btn = $('#proxySortBtn');
-    if (btn) btn.classList.toggle('sorted', state.sortByDelay);
-    renderNodeGrid();
-  });
 }
 
 /* ── Settings Page ────────────────────────────────────────────── */
@@ -888,13 +791,10 @@ function init() {
   renderLogs();
   initChart();
   refreshBackendState();
-  pollNetwork();
 
-  // Polling intervals
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
-  setInterval(pollNetwork, 30000);
 }
 
 document.addEventListener('DOMContentLoaded', init);

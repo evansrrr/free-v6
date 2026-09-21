@@ -297,19 +297,9 @@ a { color: var(--md-primary); text-decoration: none; }
   margin: 0;
 }
 
-/* ── Dashboard Grid ───────────────────────────────────────────────── */
+/* ── Dashboard (simplified: chart + stats stacked) ────────────── */
 
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-/* Traffic chart spans full width */
-.card-traffic     { grid-column: 1 / -1; }
-.card-mode        { grid-column: 1; }
-.card-network     { grid-column: 2; }
-.card-stats       { grid-column: 1 / -1; }
+.card-traffic { margin-bottom: 10px; }
 
 /* ── Traffic Chart Card ───────────────────────────────────────────── */
 
@@ -352,100 +342,6 @@ a { color: var(--md-primary); text-decoration: none; }
   font-weight: 700;
   color: var(--md-on-surface);
   min-width: 56px;
-}
-
-/* ── Mode Card ────────────────────────────────────────────────────── */
-
-.mode-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 2px;
-}
-
-.mode-option {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--md-surface-container-low);
-  border: 2px solid transparent;
-  transition: all 200ms var(--ease-standard);
-  cursor: pointer;
-}
-.mode-option:hover { background: var(--md-surface-container-high); }
-.mode-option.selected {
-  border-color: var(--md-primary);
-  background: var(--md-primary-container);
-}
-.mode-radio {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--md-outline);
-  display: grid;
-  place-items: center;
-  transition: all 200ms var(--ease-standard);
-  flex-shrink: 0;
-}
-.mode-option.selected .mode-radio {
-  border-color: var(--md-primary);
-}
-.mode-radio::after {
-  content: '';
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: transparent;
-  transition: background 200ms var(--ease-standard);
-}
-.mode-option.selected .mode-radio::after {
-  background: var(--md-primary);
-}
-.mode-option-text h4 {
-  font-size: 13px;
-  font-weight: 600;
-}
-.mode-option-text p {
-  font-size: 10px;
-  color: var(--md-on-surface-variant);
-  margin: 1px 0 0;
-}
-
-/* ── Network Detection Card ───────────────────────────────────────── */
-
-.network-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.network-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-radius: var(--radius-xs);
-  background: var(--md-surface-container-low);
-}
-.network-row-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--md-on-surface-variant);
-}
-.network-row-value {
-  font-family: 'DM Sans', monospace;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--md-on-surface);
-}
-.network-sep {
-  height: 1px;
-  background: var(--md-outline-variant);
-  opacity: .5;
 }
 
 /* ── Traffic Stats Card (ring chart) ──────────────────────────────── */
@@ -652,7 +548,7 @@ a { color: var(--md-primary); text-decoration: none; }
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
-  .card-traffic, .card-mode, .card-network, .card-stats {
+  .card-traffic, .card-stats {
     grid-column: auto;
     grid-row: auto;
   }
@@ -661,79 +557,12 @@ a { color: var(--md-primary); text-decoration: none; }
 
   /* Proxy page responsive */
   .node-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-  .proxy-toolbar { flex-direction: column; }
   .fab { bottom: 68px; right: 12px; padding: 10px 16px; font-size: 12px; }
 
   /* Settings page responsive */
   .settings-groups { max-width: 100%; }
   .setting-item { padding: 10px 12px; }
 }
-
-/* ── Proxy Page ───────────────────────────────────────────────── */
-
-.proxy-tabs-wrap {
-  overflow-x: auto;
-  overflow-y: hidden;
-  margin-bottom: 10px;
-  scrollbar-width: none;
-}
-.proxy-tabs-wrap::-webkit-scrollbar { display: none; }
-
-.proxy-tabs {
-  display: flex;
-  gap: 8px;
-  min-width: max-content;
-}
-
-.proxy-tab {
-  padding: 8px 14px;
-  border-radius: var(--radius-full);
-  background: var(--md-surface-container);
-  color: var(--md-on-surface-variant);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition: all 200ms var(--ease-standard);
-  border: 1px solid transparent;
-}
-.proxy-tab:hover { background: var(--md-surface-container-high); }
-.proxy-tab.active {
-  background: var(--md-primary-container);
-  color: var(--md-on-primary-container);
-  border-color: var(--md-primary);
-}
-
-.proxy-toolbar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-  align-items: center;
-}
-
-.proxy-search {
-  flex: 1;
-  padding: 8px 12px;
-  border-radius: var(--radius-full);
-  background: var(--md-surface-container-high);
-  color: var(--md-on-surface);
-  font-size: 12px;
-  border: 1px solid var(--md-outline-variant);
-  transition: border-color 200ms var(--ease-standard);
-}
-.proxy-search:focus { border-color: var(--md-primary); outline: none; }
-.proxy-search::placeholder { color: var(--md-outline); }
-
-.proxy-sort-btn {
-  padding: 8px 12px;
-  border-radius: var(--radius-full);
-  background: var(--md-surface-container);
-  color: var(--md-on-surface-variant);
-  font-size: 11px;
-  font-weight: 600;
-  transition: background 150ms var(--ease-standard);
-}
-.proxy-sort-btn:hover { background: var(--md-surface-container-high); }
-.proxy-sort-btn.sorted { background: var(--md-primary-container); color: var(--md-on-primary-container); }
 
 /* ── Node Grid ────────────────────────────────────────────────── */
 

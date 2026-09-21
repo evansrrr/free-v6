@@ -47,139 +47,74 @@
       <!-- PAGE 1: Dashboard                                      -->
       <!-- ═══════════════════════════════════════════════════════ -->
       <section class="view active" id="dashboardView">
-        <div class="dashboard-grid">
 
-          <!-- Traffic Chart -->
-          <div class="card card-traffic">
-            <div class="card-header">
-              <div class="card-header-icon">📈</div>
-              <div class="card-header-text">
-                <h3>实时流量</h3>
-                <p>最近 60 秒</p>
-              </div>
-              <div class="traffic-speeds">
-                <div class="speed-item">
-                  <span class="speed-dot upload"></span>
-                  <span>↑</span>
-                  <span class="speed-value" id="speedUp">0 B/s</span>
-                </div>
-                <div class="speed-item">
-                  <span class="speed-dot download"></span>
-                  <span>↓</span>
-                  <span class="speed-value" id="speedDown">0 B/s</span>
-                </div>
-              </div>
+        <!-- Traffic Chart -->
+        <div class="card card-traffic">
+          <div class="card-header">
+            <div class="card-header-icon">📈</div>
+            <div class="card-header-text">
+              <h3>实时流量</h3>
+              <p>最近 60 秒</p>
             </div>
-            <div class="traffic-chart-wrap">
-              <canvas id="trafficCanvas"></canvas>
-            </div>
-          </div>
-
-          <!-- Mode Selector -->
-          <div class="card card-mode">
-            <div class="card-header">
-              <div class="card-header-icon">🏷</div>
-              <div class="card-header-text">
-                <h3>出站模式</h3>
-                <p>选择流量策略</p>
+            <div class="traffic-speeds">
+              <div class="speed-item">
+                <span class="speed-dot upload"></span>
+                <span>↑</span>
+                <span class="speed-value" id="speedUp">0 B/s</span>
               </div>
-            </div>
-            <div class="mode-options" id="modeOptions">
-              <div class="mode-option selected" data-mode="rule">
-                <div class="mode-radio"></div>
-                <div class="mode-option-text">
-                  <h4>规则模式</h4>
-                  <p>校园网直连，其余走 WARP</p>
-                </div>
-              </div>
-              <div class="mode-option" data-mode="global">
-                <div class="mode-radio"></div>
-                <div class="mode-option-text">
-                  <h4>全局模式</h4>
-                  <p>所有流量走 WARP 隧道</p>
-                </div>
+              <div class="speed-item">
+                <span class="speed-dot download"></span>
+                <span>↓</span>
+                <span class="speed-value" id="speedDown">0 B/s</span>
               </div>
             </div>
           </div>
+          <div class="traffic-chart-wrap">
+            <canvas id="trafficCanvas"></canvas>
+          </div>
+        </div>
 
-          <!-- Network Detection -->
-          <div class="card card-network">
-            <div class="card-header">
-              <div class="card-header-icon">🌐</div>
-              <div class="card-header-text">
-                <h3>网络检测</h3>
-                <p>出口与本机地址</p>
-              </div>
+        <!-- Traffic Stats -->
+        <div class="card card-stats">
+          <div class="card-header">
+            <div class="card-header-icon">📊</div>
+            <div class="card-header-text">
+              <h3>流量统计</h3>
+              <p>本次会话累计</p>
             </div>
-            <div class="network-section">
-              <div class="network-row">
-                <div class="network-row-label">🌍 出口 IP</div>
-                <div class="network-row-value" id="egressIP">--</div>
+          </div>
+          <div class="stats-ring-wrap">
+            <svg class="stats-ring" viewBox="0 0 36 36" aria-hidden="true">
+              <circle cx="18" cy="18" r="15.5" stroke="var(--md-surface-container-highest)" stroke-width="3.5" />
+              <circle cx="18" cy="18" r="15.5" stroke="var(--md-primary)" stroke-width="3.5"
+                      stroke-dasharray="97.4" stroke-dashoffset="97.4" transform="rotate(-90 18 18)"
+                      id="ringUpload" />
+              <circle cx="18" cy="18" r="11.5" stroke="var(--md-surface-container-highest)" stroke-width="3.5" />
+              <circle cx="18" cy="18" r="11.5" stroke="var(--md-tertiary)" stroke-width="3.5"
+                      stroke-dasharray="72.3" stroke-dashoffset="72.3" transform="rotate(-90 18 18)"
+                      id="ringDownload" />
+            </svg>
+            <div class="stats-legend">
+              <div class="stats-legend-item">
+                <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
+                <span class="stats-legend-text">上传</span>
+                <span class="stats-legend-value" id="totalUp">0 B</span>
               </div>
-              <div class="network-sep"></div>
-              <div class="network-row">
-                <div class="network-row-label">📡 内网 IPv4</div>
-                <div class="network-row-value" id="localIPv4">--</div>
-              </div>
-              <div class="network-row">
-                <div class="network-row-label">📡 内网 IPv6</div>
-                <div class="network-row-value" id="localIPv6">--</div>
+              <div class="stats-legend-item">
+                <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
+                <span class="stats-legend-text">下载</span>
+                <span class="stats-legend-value" id="totalDown">0 B</span>
               </div>
             </div>
           </div>
+        </div>
 
-          <!-- Traffic Stats -->
-          <div class="card card-stats">
-            <div class="card-header">
-              <div class="card-header-icon">📊</div>
-              <div class="card-header-text">
-                <h3>流量统计</h3>
-                <p>本次会话累计</p>
-              </div>
-            </div>
-            <div class="stats-ring-wrap">
-              <svg class="stats-ring" viewBox="0 0 36 36" aria-hidden="true">
-                <circle cx="18" cy="18" r="15.5" stroke="var(--md-surface-container-highest)" stroke-width="3.5" />
-                <circle cx="18" cy="18" r="15.5" stroke="var(--md-primary)" stroke-width="3.5"
-                        stroke-dasharray="97.4" stroke-dashoffset="97.4" transform="rotate(-90 18 18)"
-                        id="ringUpload" />
-                <circle cx="18" cy="18" r="11.5" stroke="var(--md-surface-container-highest)" stroke-width="3.5" />
-                <circle cx="18" cy="18" r="11.5" stroke="var(--md-tertiary)" stroke-width="3.5"
-                        stroke-dasharray="72.3" stroke-dashoffset="72.3" transform="rotate(-90 18 18)"
-                        id="ringDownload" />
-              </svg>
-              <div class="stats-legend">
-                <div class="stats-legend-item">
-                  <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
-                  <span class="stats-legend-text">上传</span>
-                  <span class="stats-legend-value" id="totalUp">0 B</span>
-                </div>
-                <div class="stats-legend-item">
-                  <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
-                  <span class="stats-legend-text">下载</span>
-                  <span class="stats-legend-value" id="totalDown">0 B</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div><!-- /dashboard-grid -->
       </section>
 
       <!-- ═══════════════════════════════════════════════════════ -->
-      <!-- PAGE 2: Proxies                                        -->
+      <!-- PAGE 2: Proxies (simplified: auto-select only)         -->
       <!-- ═══════════════════════════════════════════════════════ -->
       <section class="view" id="proxiesView">
-        <!-- Proxy Group Tabs -->
-        <div class="proxy-tabs-wrap">
-          <div class="proxy-tabs" id="proxyTabs"></div>
-        </div>
-
-        <!-- Node Grid -->
-        <div class="proxy-toolbar">
-          <input class="proxy-search" id="proxySearch" placeholder="搜索节点…" autocomplete="off" />
-          <button class="proxy-sort-btn" id="proxySortBtn" title="按延迟排序">按延迟排序</button>
-        </div>
         <div class="node-grid" id="nodeGrid">
           <div class="empty-state">
             <span class="empty-state-icon">🌐</span>
@@ -187,7 +122,6 @@
           </div>
         </div>
 
-        <!-- Delay Test FAB -->
         <button class="fab" id="delayTestFab" title="延迟测试">
           <span class="fab-icon" id="fabIcon">⚡</span>
           <span class="fab-label" id="fabLabel">测试延迟</span>
@@ -202,9 +136,8 @@
 
           <!-- 外观 -->
           <div class="settings-group">
-            <div class="settings-group-title">🎨 外观</div>
+            <div class="settings-group-title">外观</div>
             <div class="setting-item">
-              <div class="setting-icon">🌙</div>
               <div class="setting-text">
                 <div class="setting-label">主题</div>
                 <div class="setting-desc">深色 / 浅色 / 跟随系统</div>
@@ -219,9 +152,8 @@
 
           <!-- 代理 -->
           <div class="settings-group">
-            <div class="settings-group-title">🌐 代理</div>
+            <div class="settings-group-title">代理</div>
             <div class="setting-item">
-              <div class="setting-icon">🏷</div>
               <div class="setting-text">
                 <div class="setting-label">工作模式</div>
                 <div class="setting-desc">规则模式：校园网直连；全局模式：全部走 WARP</div>
@@ -232,7 +164,6 @@
               </div>
             </div>
             <div class="setting-item clickable" id="cidrSettingItem">
-              <div class="setting-icon">🏫</div>
               <div class="setting-text">
                 <div class="setting-label">校园网段</div>
                 <div class="setting-desc" id="cidrDesc">管理绕过 WARP 的 CIDR 网段</div>
@@ -243,9 +174,8 @@
 
           <!-- 核心 -->
           <div class="settings-group">
-            <div class="settings-group-title">🔧 核心</div>
+            <div class="settings-group-title">核心</div>
             <div class="setting-item">
-              <div class="setting-icon">◈</div>
               <div class="setting-text">
                 <div class="setting-label">mihomo 版本</div>
                 <div class="setting-desc" id="runtimeVersion">检查中…</div>
@@ -253,7 +183,6 @@
               <span class="setting-pill" id="runtimePill">--</span>
             </div>
             <div class="setting-item">
-              <div class="setting-icon">📥</div>
               <div class="setting-text">
                 <div class="setting-label">下载核心</div>
                 <div class="setting-desc">自动下载最新 mihomo Alpha</div>
@@ -261,7 +190,6 @@
               <button class="setting-btn" id="downloadCore">下载</button>
             </div>
             <div class="setting-item">
-              <div class="setting-icon">🔑</div>
               <div class="setting-text">
                 <div class="setting-label">注册 WARP</div>
                 <div class="setting-desc" id="warpStatus">检查中…</div>
@@ -272,16 +200,14 @@
 
           <!-- 关于 -->
           <div class="settings-group">
-            <div class="settings-group-title">ℹ️ 关于</div>
+            <div class="settings-group-title">ℹ关于</div>
             <div class="setting-item">
-              <div class="setting-icon">📦</div>
               <div class="setting-text">
                 <div class="setting-label">版本</div>
                 <div class="setting-desc">freev6 v0.1.0</div>
               </div>
             </div>
             <div class="setting-item">
-              <div class="setting-icon">📄</div>
               <div class="setting-text">
                 <div class="setting-label">许可证</div>
                 <div class="setting-desc">MIT License</div>

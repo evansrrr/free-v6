@@ -13,10 +13,10 @@
       {
         "label": "main",
         "title": "freev6",
-        "width": 1180,
-        "height": 820,
-        "minWidth": 900,
-        "minHeight": 650,
+        "width": 900,
+        "height": 600,
+        "minWidth": 720,
+        "minHeight": 480,
         "resizable": true,
         "visible": true
       }
