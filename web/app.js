@@ -133,9 +133,16 @@ function updateConnectionChip(online) {
   const dot = $('#headerDot');
   const headerStatus = $('#headerStatus');
   if (!chip) return;
-  chip.classList.toggle('connected', online);
-  dot.classList.toggle('live', online);
-  headerStatus.textContent = online ? '核心已连接' : '核心未连接';
+  const ready = online && state.runtimePresent;
+  chip.classList.toggle('connected', ready);
+  dot.classList.toggle('live', ready);
+  if (!online) {
+    headerStatus.textContent = '核心未连接';
+  } else if (!state.runtimePresent) {
+    headerStatus.textContent = '需要下载核心';
+  } else {
+    headerStatus.textContent = '核心已就绪';
+  }
 }
 
 /* ── Mode Selector ────────────────────────────────────────────── */
