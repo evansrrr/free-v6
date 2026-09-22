@@ -106,7 +106,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - **视图切换**：enter 250ms decelerate（translateY 8→0）/ exit 120ms
 - **仪表盘**：流量卡 + 统计卡纵向堆叠，gap 10，图表区 140px
 - **代理页**：`minmax(140px, 1fr)` 网格，gap 14；卡片 padding 10×12、min-height 58；FAB 距右下 24px（≤620px 移到 64/12）
-- **设置页**：分组 = surface-container 圆角 14；行 padding 12×16；行间 `md-divider`；分组间 gap 12
+- **设置页**：分组 = surface-container 圆角 14；行 padding 12×16；行间 `md-divider`；分组间 gap 12；单行结构（图标 + 标签 + 右侧控件/值，无描述行），关于页的版本/许可证值用 `.setting-value` 右置
 - **日志抽屉**：宽 320px，fixed 右侧，scrim `rgba(0,0,0,.4)`
 
 ## 图标系统（`md-icon` + Material Symbols）

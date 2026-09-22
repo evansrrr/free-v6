@@ -526,8 +526,8 @@ md-icon-button > md-icon {
 .setting-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-xs); background: var(--md-surface-container-high); flex-shrink: 0; }
 .setting-icon md-icon { --md-icon-size: 16px; color: var(--md-on-surface-variant); }
 .setting-text { flex: 1; min-width: 0; }
-.setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); margin-bottom: 1px; }
-.setting-desc { font-size: 11px; color: var(--md-on-surface-variant); line-height: 1.4; }
+.setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
+.setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
 /* 40px field: top 8 + text 24 + bottom 8 = 40, symmetric so the value centers */
 .setting-md-select {
   min-width: 118px;
