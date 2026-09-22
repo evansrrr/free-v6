@@ -187,3 +187,4 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - Go helper `127.0.0.1:13335`；mihomo external controller `127.0.0.1:9090`
 - 窗口默认 900×600，最小 720×480；Tauri CSP 为 null
 - Google Fonts CDN：DM Sans / Manrope / JetBrains Mono / **Material Symbols Outlined**（图标字体）
+- 应用 / 托盘图标：与 brand-mark 同源（Manrope 800 “F 6”、primary-container `#1a3a6b`、27.78% 圆角），1024px 母图生成到 `src-tauri/icons/`（`icon.png` + 多尺寸 `icon.ico`），经 `bundle.icon` 同时供窗口图标与托盘图标使用（tray 显式取 `default_window_icon`）

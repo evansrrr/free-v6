@@ -30,6 +30,11 @@ fn main() {
             let menu = Menu::with_items(app, &[&show, &quit])?;
             TrayIconBuilder::new()
                 .menu(&menu)
+                .icon(
+                    app.default_window_icon()
+                        .expect("default window icon")
+                        .clone(),
+                )
                 .tooltip("freev6")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {

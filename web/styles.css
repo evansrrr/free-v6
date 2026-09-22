@@ -269,7 +269,8 @@ a { color: var(--md-primary); text-decoration: none; }
 .nav-item .nav-icon { --md-icon-size: 20px; }
 .nav-item:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .nav-item.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
-.bottom-item { margin-top: auto; }
+/* stretch + 8px insets so the log pill matches .nav-list item width exactly */
+.bottom-item { margin: auto 8px 0; align-self: stretch; }
 
 /* ── Main Content ─────────────────────────────────────────────── */
 
@@ -585,7 +586,7 @@ md-icon-button > md-icon {
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
   .brand-mark, .bottom-item { display: none; }
-  .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; 3ustify-content: space-around; }
+  .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; justify-content: space-around; }
   .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
   .app-shell { flex-direction: column; }
   .main-content { flex: 1; padding: 12px 10px 64px; }
