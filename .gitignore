@@ -5,6 +5,7 @@
 src-tauri/target/
 src-tauri/gen/
 /config/
+/runtime/
 *.exe
 *.test
 
@@ -13,8 +14,14 @@ state/
 *.local.json
 mihomo.yaml
 
+# Agent tooling (local only, not part of the project)
+.agents/
+docs/
+skills-lock.json
+
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
