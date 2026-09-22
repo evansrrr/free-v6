@@ -528,11 +528,27 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); margin-bottom: 1px; }
 .setting-desc { font-size: 11px; color: var(--md-on-surface-variant); line-height: 1.4; }
-.setting-md-select { min-width: 118px; --md-outlined-field-bottom-space: 0px; }
+/* 40px field: top 8 + text 24 + bottom 8 = 40, symmetric so the value centers */
+.setting-md-select {
+  min-width: 118px;
+  --md-outlined-field-top-space: 8px;
+  --md-outlined-field-bottom-space: 8px;
+}
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
-.setting-pill { padding: 3px 10px; border-radius: var(--radius-full); font-size: 10px; font-weight: 700; background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
-.setting-pill.ready { background: var(--green-container); color: var(--green); }
-.setting-pill.warn { background: var(--orange-container); color: var(--orange); }
+/* Status pill mirrors md-filled-button metrics: 40px tall, radius-full,
+   0×24 padding, label-large (14/500); colors stay semantic. */
+.setting-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 40px;
+  min-width: 76px;
+  padding: 0 24px;
+  border-radius: var(--radius-full);
+  font-size: 14px; font-weight: 500; line-height: 20px;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+.setting-pill.ready { background: var(--green); color: var(--green-container); }
+.setting-pill.warn { background: var(--orange); color: var(--orange-container); }
 .setting-arrow { --md-icon-size: 18px; color: var(--md-on-surface-variant); }
 
 /* ── CIDR Sub-page ────────────────────────────────────────────── */

@@ -88,7 +88,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 |---|---|---|---|
 | 启停 / 延迟测试 FAB | `md-fab`（extended） | [fab.md](../../material-web-2.5.0/docs/components/fab.md) | `label` 属性改文案；`slot="icon"` 内为 `md-icon`（`play_arrow`/`stop`/`bolt`）；`.visible` 控显隐；`.running` / `.loading` 只覆写 token |
 | 刷新 / 关闭 / 返回 / 删除 | `md-icon-button` | [icon-button.md](../../material-web-2.5.0/docs/components/icon-button.md) | 默认槽位放 `md-icon` |
-| 下载 / 注册 / 添加 | `md-outlined-button` | [button.md](../../material-web-2.5.0/docs/components/button.md) | `disabled` 属性；文本为默认槽内容 |
+| 下载 / 注册 / 添加 | `md-filled-button` | [button.md](../../material-web-2.5.0/docs/components/button.md) | `disabled` 属性；文本为默认槽内容；设置页主操作用 Filled 变体 |
 | 主题选择 | `md-outlined-select` + `md-select-option` | [select.md](../../material-web-2.5.0/docs/components/select.md) | **选项文本写成元素内容**（非 label 属性）；监听 `change` 取 `e.target.value`；`.setting-md-select` 上 `--md-outlined-field-bottom-space:0` 压到 40px 行高 |
 | 工作模式（单选） | `md-filter-chip` ×2 | [chip.md](../../material-web-2.5.0/docs/components/chip.md) | 点击后由 state 重同步 `.selected`；不 `preventDefault` |
 | CIDR 输入 | `md-outlined-text-field` | [text-field.md](../../material-web-2.5.0/docs/components/text-field.md) | `value` 属性；Enter 触发添加 |
@@ -97,7 +97,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 | 加载指示 | `md-circular-progress` | [progress.md](../../material-web-2.5.0/docs/components/progress.md) | `indeterminate`；`--md-circular-progress-size` 定尺寸（FAB 24px / 节点 14px） |
 
 **自绘例外**（Material Web 无对应组件，按 M3 规范自绘）：
-导航 rail（M3 navigation rail，无组件）、连接状态 chip、流量卡 + canvas 图表、统计环 SVG、节点卡片网格、日志抽屉、空态。
+导航 rail（M3 navigation rail，无组件）、连接状态 chip、安装状态 pill（镜像 Filled button 的尺寸与排版：40px 高、radius-full、0×24 padding、label-large，颜色用 primary/绿/橙语义）、流量卡 + canvas 图表、统计环 SVG、节点卡片网格、日志抽屉、空态。
 
 ## 布局规范
 
