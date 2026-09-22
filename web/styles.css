@@ -531,8 +531,14 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
-/* compact in-row buttons (default M3 height 40px is too tall for 56px rows) */
-.setting-item md-filled-button { --md-filled-button-container-height: 36px; }
+/* 核心 group controls: compact 32px buttons, 12/500 labels, 16px side padding */
+.setting-item md-filled-button {
+  --md-filled-button-container-height: 32px;
+  --md-filled-button-label-text-size: 12px;
+  --md-filled-button-label-text-line-height: 16px;
+  --md-filled-button-leading-space: 16px;
+  --md-filled-button-trailing-space: 16px;
+}
 /* 36px field: top 6 + text 24 + bottom 6 = 36, symmetric so the value centers;
    value text matches .setting-label (13px), line-height untouched -> height stable */
 .setting-md-select {
@@ -542,15 +548,15 @@ md-icon-button > md-icon {
   --md-outlined-select-text-field-input-text-size: 13px;
 }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
-/* Status pill mirrors md-filled-button metrics: 36px tall, radius-full,
-   0×24 padding, label-large (14/500); colors stay semantic. */
+/* Status pill mirrors the 核心 buttons: 32px tall, radius-full,
+   0×16 padding, 12/500 labels; colors stay semantic. */
 .setting-pill {
   display: inline-flex; align-items: center; justify-content: center;
-  min-height: 36px;
-  min-width: 76px;
-  padding: 0 24px;
+  min-height: 32px;
+  min-width: 56px;
+  padding: 0 16px;
   border-radius: var(--radius-full);
-  font-size: 14px; font-weight: 500; line-height: 20px;
+  font-size: 12px; font-weight: 500; line-height: 16px;
   background: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);
 }
