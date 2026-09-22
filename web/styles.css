@@ -548,6 +548,10 @@ md-icon-button > md-icon {
   --md-outlined-select-text-field-input-text-size: 13px;
   /* Dropdown labels inherit custom props into the shadow menu — match the field */
   --md-menu-item-label-text-size: 13px;
+  /* Compact dropdown rows: 24px line box + 8px padding = 40px (M3 default 56px) */
+  --md-menu-item-one-line-container-height: 40px;
+  --md-menu-item-top-space: 8px;
+  --md-menu-item-bottom-space: 8px;
 }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
 /* Status pill mirrors the 核心 buttons: 32px tall, radius-full,
