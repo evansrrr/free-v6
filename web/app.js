@@ -121,12 +121,11 @@ function setRunning(running) {
   state.proxyRunning = running;
   const fab = $('#proxyToggle');
   const icon = $('#toggleIcon');
-  const label = $('#toggleLabel');
 
   const playPath = 'M6 4l10 6-10 6V4z';
   const stopPath = 'M5 5h4v10H5zm6 0h4v10h-4z';
-  icon.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${running ? stopPath : playPath}"/></svg>`;
-  label.textContent = running ? '停止免流' : '启动免流';
+  if (icon) icon.innerHTML = `<path d="${running ? stopPath : playPath}"/>`;
+  if (fab) fab.label = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
 }
 
@@ -152,9 +151,9 @@ function updateConnectionChip(online) {
 function setMode(mode, persist = true, silent = false) {
   if (mode === state.mode && silent) return;
   state.mode = mode;
-  // Sync settings page segmented
+  // Sync settings page segmented chips (md-filter-chip)
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
-    seg.classList.toggle('active', seg.dataset.mode === mode);
+    seg.selected = seg.dataset.mode === mode;
   });
   if (!silent) addLog(`切换为${mode === 'rule' ? '规则' : '全局'}模式`);
   if (persist) persistSettings();
@@ -555,7 +554,7 @@ function renderNodeGrid() {
     let latencyText = '未测试';
     if (testing) {
       latencyClass = 'testing';
-      latencyText = '<span class="spinner"></span>测试中';
+      latencyText = '<md-circular-progress class="node-spinner" indeterminate></md-circular-progress>测试中';
     } else if (delay !== undefined) {
       if (delay < 100) { latencyClass = 'good'; latencyText = delay + ' ms'; }
       else if (delay < 500) { latencyClass = 'medium'; latencyText = delay + ' ms'; }
@@ -597,10 +596,11 @@ async function runDelayTest() {
 
   const fab = $('#delayTestFab');
   const fabIcon = $('#fabIcon');
-  const fabLabel = $('#fabLabel');
+  const fabProgress = $('#fabProgress');
   if (fab) fab.classList.add('loading');
-  if (fabIcon) { fabIcon.outerHTML = '<svg class="fab-icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7" stroke-dasharray="22" stroke-dashoffset="8"><animateTransform attributeName="transform" type="rotate" from="0 10 10" to="360 10 10" dur=".6s" repeatCount="indefinite"/></circle></svg>'; }
-  if (fabLabel) fabLabel.textContent = '测试中…';
+  if (fabIcon) fabIcon.hidden = true;
+  if (fabProgress) fabProgress.hidden = false;
+  if (fab) fab.label = '测试中…';
   renderNodeGrid();
 
   const group = state.proxyGroup;
@@ -626,7 +626,7 @@ async function runDelayTest() {
         state.proxyDelays[name] = 5000;
       }
       completed++;
-      if (fabLabel) fabLabel.textContent = `测试中 ${completed}/${nodes.length}`;
+      if (fab) fab.label = `测试中 ${completed}/${nodes.length}`;
       renderNodeGrid();
     }
   }
@@ -647,10 +647,13 @@ async function runDelayTest() {
 function resetFab() {
   const fab = $('#delayTestFab');
   const fabIcon = $('#fabIcon');
-  const fabLabel = $('#fabLabel');
-  if (fab) fab.classList.remove('loading');
-  if (fabIcon) { fabIcon.outerHTML = '<svg class="fab-icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L5 11h5l-1 7 6-9h-5l1-7z"/></svg>'; }
-  if (fabLabel) fabLabel.textContent = '测试延迟';
+  const fabProgress = $('#fabProgress');
+  if (fab) {
+    fab.classList.remove('loading');
+    fab.label = '测试延迟';
+  }
+  if (fabIcon) fabIcon.hidden = false;
+  if (fabProgress) fabProgress.hidden = true;
 }
 
 function wireProxyEvents() {
@@ -689,7 +692,7 @@ function renderCidrs() {
     return;
   }
   list.innerHTML = state.cidrs.map((cidr, i) =>
-    `<div class="cidr-item"><span>${cidr}</span><button class="cidr-remove" data-idx="${i}" aria-label="删除">×</button></div>`
+    `<div class="cidr-item"><span>${cidr}</span><md-icon-button class="cidr-remove" data-idx="${i}" aria-label="删除">×</md-icon-button></div>`
   ).join('');
 
   list.querySelectorAll('.cidr-remove').forEach(btn => {
@@ -704,9 +707,9 @@ function renderCidrs() {
 }
 
 function updateSettingsUI() {
-  // Mode segmented
+  // Mode segmented chips (md-filter-chip)
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
-    seg.classList.toggle('active', seg.dataset.mode === state.mode);
+    seg.selected = seg.dataset.mode === state.mode;
   });
 
   // CIDR desc
@@ -751,13 +754,13 @@ function wireSettingsEvents() {
     addLog(`切换主题: ${theme}`);
   });
 
-  // Mode segmented in settings
+  // Mode segmented chips in settings
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.addEventListener('click', () => {
-      if (seg.dataset.mode && seg.dataset.mode !== state.mode) {
-        setMode(seg.dataset.mode);
-        updateSettingsUI();
-      }
+      if (!seg.dataset.mode) return;
+      if (seg.dataset.mode !== state.mode) setMode(seg.dataset.mode);
+      // Filter chips toggle themselves on click — re-sync selection from state
+      updateSettingsUI();
     });
   });
 

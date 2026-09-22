@@ -9,6 +9,23 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@600;700;800&display=swap" />
   <link rel="stylesheet" href="styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "@material/web/": "./vendor/material-web/",
+        "lit": "./vendor/lit/index.js",
+        "lit/": "./vendor/lit/",
+        "lit-html": "./vendor/lit-html/lit-html.js",
+        "lit-html/": "./vendor/lit-html/",
+        "lit-element": "./vendor/lit-element/index.js",
+        "lit-element/": "./vendor/lit-element/",
+        "@lit/reactive-element": "./vendor/@lit/reactive-element/reactive-element.js",
+        "@lit/reactive-element/": "./vendor/@lit/reactive-element/",
+        "tslib": "./vendor/tslib/tslib.es6.js"
+      }
+    }
+  </script>
+  <script type="module" src="material.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -46,9 +63,9 @@
             <span class="status-dot" id="headerDot"></span>
             <span id="headerStatus">未连接</span>
           </span>
-          <button class="icon-btn" id="refreshButton" title="刷新" aria-label="刷新">
+          <md-icon-button id="refreshButton" title="刷新" aria-label="刷新">
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a7 7 0 0 1 13.4-2.8"/><path d="M17 10a7 7 0 0 1-13.4 2.8"/><path d="M16 3v4h-4"/><path d="M4 17v-4h4"/></svg>
-          </button>
+          </md-icon-button>
         </div>
       </header>
 
@@ -143,11 +160,11 @@
                 <div class="setting-label">主题</div>
                 <div class="setting-desc">深色 / 浅色 / 跟随系统</div>
               </div>
-              <select class="setting-select" id="themeSelect">
-                <option value="dark" selected>深色</option>
-                <option value="light">浅色</option>
-                <option value="system">跟随系统</option>
-              </select>
+              <md-outlined-select id="themeSelect" class="setting-md-select" aria-label="主题">
+                <md-select-option value="dark" selected>深色</md-select-option>
+                <md-select-option value="light">浅色</md-select-option>
+                <md-select-option value="system">跟随系统</md-select-option>
+              </md-outlined-select>
             </div>
           </div>
 
@@ -162,8 +179,8 @@
                 <div class="setting-desc">规则模式：校园网直连；全局模式：全部走 WARP</div>
               </div>
               <div class="setting-segmented" id="settingsModeGroup">
-                <button class="setting-seg active" data-mode="rule">规则</button>
-                <button class="setting-seg" data-mode="global">全局</button>
+                <md-filter-chip class="setting-seg" data-mode="rule" label="规则" selected></md-filter-chip>
+                <md-filter-chip class="setting-seg" data-mode="global" label="全局"></md-filter-chip>
               </div>
             </div>
             <div class="setting-item clickable" id="cidrSettingItem">
@@ -200,7 +217,7 @@
                 <div class="setting-label">下载核心</div>
                 <div class="setting-desc">自动下载最新 mihomo Alpha</div>
               </div>
-              <button class="setting-btn" id="downloadCore">下载</button>
+              <md-outlined-button id="downloadCore">下载</md-outlined-button>
             </div>
             <div class="setting-item">
               <div class="setting-icon">
@@ -210,7 +227,7 @@
                 <div class="setting-label">注册 WARP</div>
                 <div class="setting-desc" id="warpStatus">检查中…</div>
               </div>
-              <button class="setting-btn" id="registerWarp">注册</button>
+              <md-outlined-button id="registerWarp">注册</md-outlined-button>
             </div>
           </div>
 
@@ -240,15 +257,15 @@
 
         <div class="cidr-page" id="cidrPage" style="display:none">
           <div class="cidr-page-header">
-            <button class="icon-btn" id="cidrBack" aria-label="返回">
+            <md-icon-button id="cidrBack" aria-label="返回">
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l-6 6 6 6"/></svg>
-            </button>
+            </md-icon-button>
             <h2>校园网段</h2>
           </div>
           <p class="cidr-hint">只填写校园网私有或认证网段，不要加入公网地址。</p>
           <div class="cidr-input-row">
-            <input class="cidr-input" id="cidrInput" placeholder="例如 10.0.0.0/8" autocomplete="off" />
-            <button class="setting-btn" id="addCidr">添加</button>
+            <md-outlined-text-field id="cidrInput" label="例如 10.0.0.0/8" autocomplete="off"></md-outlined-text-field>
+            <md-outlined-button id="addCidr">添加</md-outlined-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>
         </div>
@@ -261,22 +278,21 @@
   <aside class="log-drawer" id="logDrawer" aria-label="运行日志">
     <div class="drawer-header">
       <h2>运行日志</h2>
-      <button class="icon-btn" id="closeLogs" aria-label="关闭日志">
+      <md-icon-button id="closeLogs" aria-label="关闭日志">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
-      </button>
+      </md-icon-button>
     </div>
     <div class="log-list" id="logList"></div>
   </aside>
 
-  <button class="fab proxy-fab" id="proxyToggle" title="启动/停止免流">
-    <svg class="fab-icon" id="toggleIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l10 6-10 6V4z"/></svg>
-    <span class="fab-label" id="toggleLabel">启动免流</span>
-  </button>
+  <md-fab id="proxyToggle" class="fab-item proxy-fab" label="启动免流" aria-label="启动/停止免流">
+    <svg slot="icon" id="toggleIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l10 6-10 6V4z"/></svg>
+  </md-fab>
 
-  <button class="fab delay-fab" id="delayTestFab" title="延迟测试">
-    <svg class="fab-icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L5 11h5l-1 7 6-9h-5l1-7z"/></svg>
-    <span class="fab-label" id="fabLabel">测试延迟</span>
-  </button>
+  <md-fab id="delayTestFab" class="fab-item delay-fab" label="测试延迟" aria-label="延迟测试">
+    <svg slot="icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L5 11h5l-1 7 6-9h-5l1-7z"/></svg>
+    <md-circular-progress slot="icon" id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
+  </md-fab>
 
   <script src="app.js"></script>
 </body>
