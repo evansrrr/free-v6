@@ -24,7 +24,7 @@ mode: component-driven (md-* 优先，自绘仅限无组件场景)
 visual-variance: 3/10 (深/浅/跟随系统 三态，无花哨变体)
 motion-intensity: 2/10 (状态反馈为主)
 information-density: 6/10 (紧凑但不拥挤)
-asset-dependence: 1/10 (内联 stroke SVG + CSS，无图片、无图标字体)
+asset-dependence: 2/10 (Material Symbols Outlined 图标字体 + Google Fonts；无图片)
 ```
 
 ## 技术架构
@@ -86,13 +86,14 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 
 | 界面位置 | 组件 | 文档 | 关键约定 |
 |---|---|---|---|
-| 启停 / 延迟测试 FAB | `md-fab`（extended） | [fab.md](../../material-web-2.5.0/docs/components/fab.md) | `label` 属性改文案；`.visible` 控显隐；`.running` / `.loading` 只覆写 token |
-| 刷新 / 关闭 / 返回 / 删除 | `md-icon-button` | [icon-button.md](../../material-web-2.5.0/docs/components/icon-button.md) | 默认槽位放 1.5px stroke SVG |
+| 启停 / 延迟测试 FAB | `md-fab`（extended） | [fab.md](../../material-web-2.5.0/docs/components/fab.md) | `label` 属性改文案；`slot="icon"` 内为 `md-icon`（`play_arrow`/`stop`/`bolt`）；`.visible` 控显隐；`.running` / `.loading` 只覆写 token |
+| 刷新 / 关闭 / 返回 / 删除 | `md-icon-button` | [icon-button.md](../../material-web-2.5.0/docs/components/icon-button.md) | 默认槽位放 `md-icon` |
 | 下载 / 注册 / 添加 | `md-outlined-button` | [button.md](../../material-web-2.5.0/docs/components/button.md) | `disabled` 属性；文本为默认槽内容 |
 | 主题选择 | `md-outlined-select` + `md-select-option` | [select.md](../../material-web-2.5.0/docs/components/select.md) | **选项文本写成元素内容**（非 label 属性）；监听 `change` 取 `e.target.value` |
 | 工作模式（单选） | `md-filter-chip` ×2 | [chip.md](../../material-web-2.5.0/docs/components/chip.md) | 点击后由 state 重同步 `.selected`；不 `preventDefault` |
 | CIDR 输入 | `md-outlined-text-field` | [text-field.md](../../material-web-2.5.0/docs/components/text-field.md) | `value` 属性；Enter 触发添加 |
 | 分组分隔线 | `md-divider` | [divider.md](../../material-web-2.5.0/docs/components/divider.md) | 替代 `.setting-item` 的 border-top；装饰性默认无 ARIA |
+| 全部图标 | `md-icon` | [icon.md](../../material-web-2.5.0/docs/components/icon.md) | Material Symbols Outlined 连字文本；尺寸一律走 `--md-icon-size` token |
 | 加载指示 | `md-circular-progress` | [progress.md](../../material-web-2.5.0/docs/components/progress.md) | `indeterminate`；`--md-circular-progress-size` 定尺寸（FAB 24px / 节点 14px） |
 
 **自绘例外**（Material Web 无对应组件，按 M3 规范自绘）：
@@ -108,11 +109,31 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - **设置页**：分组 = surface-container 圆角 14；行 padding 12×16；行间 `md-divider`；分组间 gap 12
 - **日志抽屉**：宽 320px，fixed 右侧，scrim `rgba(0,0,0,.4)`
 
-## 图标系统
+## 图标系统（`md-icon` + Material Symbols）
 
-- 内联 SVG：`viewBox 0 0 20 20`（空态 40），stroke-width 1.5，round cap/join，fill none，颜色 `currentColor`
-- 放入 `md-icon-button` / `md-fab` 时走**默认槽 / `slot="icon"`**，不用 Material Symbols 字体（零字体依赖）
-- emoji 全面废弃，禁止回退
+- **唯一图标来源**：`md-icon` 组件 + Material Symbols **Outlined** 连字文本，
+  字体由 Google Fonts 加载（`family=Material+Symbols+Outlined`，与正文字体同一 CDN）
+- **禁止**回退到内联 stroke SVG / emoji / 其他图标库（统计环是数据图形，不是图标，保留 SVG）
+- **尺寸**：只用 `--md-icon-size`（同时决定字号与宽高）：nav 20 / 卡头与设置图标 16 / 箭头 14 / 空态 40 / FAB 24 / 图标按钮默认 24
+- **颜色**：`currentColor` 继承，不单独设 fill
+- **动态图标**：改连字文本即可（如启停 FAB 切换 `play_arrow` ↔ `stop`），不手绘 path
+- 图标清单（位置 → 连字）：
+
+  | 位置 | 连字 | 位置 | 连字 |
+  |---|---|---|---|
+  | 导航-仪表盘 | `monitoring` | 设置-外观 | `light_mode` |
+  | 导航-代理 | `public` | 设置-工作模式 | `swap_horiz` |
+  | 导航-设置 | `settings` | 设置-校园网段 | `lan` |
+  | 导航-日志 | `receipt_long` | 设置-核心 | `memory` |
+  | 顶栏-刷新 | `refresh` | 设置-下载 | `download` |
+  | 卡头-流量 | `trending_up` | 设置-注册 | `key` |
+  | 卡头-统计 | `donut_small` | 关于-版本 / 许可证 | `info` / `description` |
+  | 速率-↑ / ↓ | `arrow_upward` / `arrow_downward` | CIDR-返回 / 删除 | `arrow_back` / `close` |
+  | 空态 | `cloud_off` | 日志-关闭 | `close` |
+  | FAB-启停 | `play_arrow` / `stop` | FAB-延迟 | `bolt` |
+  | 列表-展开箭头 | `chevron_right` |  |  |
+
+- 降级：字体不可达时连字文本会被 `overflow:hidden` 裁切（图标位留空），文字标签与 aria-label 仍在，不影响操作
 
 ## 状态与交互
 
@@ -144,10 +165,10 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 2. **对 `md-*` 只允许三类覆写**：
    - token 级：`--md-sys-color-*`、`--md-fab-*`、`--md-circular-progress-*` 等（含 `.fab-item` 上的主题覆写）
    - 宿主定位类：`.fab-item` 的 fixed 定位与 `.visible` 显隐
-   - 槽位内容尺寸：如 `md-icon-button > svg`、`.fab-item svg`
+   - 槽位内容尺寸：如 `md-icon` 的 `--md-icon-size`、`md-fab` 图标位
 3. **禁止**：选择器穿透 shadow、覆盖组件内部 class、再写自制按钮 / 下拉 / spinner / 分隔线（已全部由 md-* 取代）
 4. 全局 reset 中 `button` 等规则只作用于 light-DOM 原生元素（组件内部在 shadow，天然隔离）；`[hidden]{display:none!important}` 用于组件槽位内 `hidden` 切换
-5. **已清理的重复 / 死代码**（本方案落地时移除）：`--md-tertiary-container` 重复行、`--shadow-fab`（×3，FAB 改由组件 elevation）、`--ease-standard` 未用、`.mono`、原生 `input` reset（已无 light-DOM input）、`.node-type`（不再渲染）、`.brand-mark span`、`.setting-item` border-top（→ `md-divider`）
+5. **已清理的重复 / 死代码**（本方案落地时移除）：`--md-tertiary-container` 重复行、`--shadow-fab`（×3，FAB 改由组件 elevation）、`--ease-standard` 未用、`.mono`、原生 `input` reset（已无 light-DOM input）、`.node-type`（不再渲染）、`.brand-mark span`、`.setting-item` border-top（→ `md-divider`）、各处内联 SVG 尺寸规则（→ `--md-icon-size`）
 
 ## 响应式
 
@@ -165,4 +186,4 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - 无框架、无打包、无编译步骤；改动即所见
 - Go helper `127.0.0.1:13335`；mihomo external controller `127.0.0.1:9090`
 - 窗口默认 900×600，最小 720×480；Tauri CSP 为 null
-- Google Fonts CDN：DM Sans / Manrope / JetBrains Mono
+- Google Fonts CDN：DM Sans / Manrope / JetBrains Mono / **Material Symbols Outlined**（图标字体）
