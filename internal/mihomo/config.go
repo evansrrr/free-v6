@@ -144,7 +144,7 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	if options.Mode != ModeRule && options.Mode != ModeGlobal {
 		return "", fmt.Errorf("unsupported mihomo mode %q", options.Mode)
 	}
-	campusCIDRs, err := normalizeCIDRs(options.CampusCIDRs)
+	campusTargets, err := normalizeCampusTargets(options.CampusCIDRs)
 	if err != nil {
 		return "", err
 	}
@@ -173,12 +173,17 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
 	}
 	b.WriteString("\nrules:\n")
-	for _, cidr := range campusCIDRs {
+	for _, target := range campusTargets {
+		if !strings.Contains(target, "/") {
+			// Domain entry: bypass WARP for the domain and all of its subdomains
+			fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,DIRECT\n", target)
+			continue
+		}
 		kind := "IP-CIDR"
-		if strings.Contains(cidr, ":") {
+		if strings.Contains(target, ":") {
 			kind = "IP-CIDR6"
 		}
-		fmt.Fprintf(&b, "  - %s,%s,DIRECT,no-resolve\n", kind, cidr)
+		fmt.Fprintf(&b, "  - %s,%s,DIRECT,no-resolve\n", kind, target)
 	}
 	for i, ruleSet := range ruleSets {
 		fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
@@ -187,17 +192,64 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	return b.String(), nil
 }
 
-func normalizeCIDRs(values []string) ([]string, error) {
+// ValidateCampusTarget accepts either an IP CIDR (10.0.0.0/8, 2001:db8::/48)
+// or a bare domain (pku.edu.cn) whose subdomains are handled together with it.
+func ValidateCampusTarget(value string) error {
+	target := strings.TrimSpace(strings.ToLower(value))
+	if target == "" {
+		return fmt.Errorf("empty campus entry")
+	}
+	if strings.Contains(target, "/") {
+		if _, _, err := net.ParseCIDR(target); err != nil {
+			return fmt.Errorf("invalid campus CIDR %q: %w", target, err)
+		}
+		return nil
+	}
+	if !validDomain(target) {
+		return fmt.Errorf("invalid campus domain %q", target)
+	}
+	return nil
+}
+
+func validDomain(domain string) bool {
+	if len(domain) > 253 || !strings.Contains(domain, ".") ||
+		strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			char := label[i]
+			if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
+				continue
+			}
+			if char == '-' && i > 0 && i < len(label)-1 {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeCampusTargets(values []string) ([]string, error) {
 	result := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
 	for _, value := range values {
-		cidr := strings.TrimSpace(value)
-		if cidr == "" {
+		target := strings.TrimSpace(strings.ToLower(value))
+		if target == "" {
 			continue
 		}
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return nil, fmt.Errorf("invalid campus CIDR %q: %w", cidr, err)
+		if err := ValidateCampusTarget(target); err != nil {
+			return nil, err
 		}
-		result = append(result, cidr)
+		if seen[target] {
+			continue
+		}
+		seen[target] = true
+		result = append(result, target)
 	}
 	return result, nil
 }

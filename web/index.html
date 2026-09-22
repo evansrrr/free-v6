@@ -248,9 +248,9 @@
             </md-icon-button>
             <h2>校园网段</h2>
           </div>
-          <p class="cidr-hint">只填写校园网私有或认证网段，不要加入公网地址。</p>
+          <p class="cidr-hint">支持 CIDR 网段或域名，如 10.0.0.0/8、pku.edu.cn（自动包含其所有子域名）；只填写校园网相关地址，不要加入公网地址。</p>
           <div class="cidr-input-row">
-            <md-outlined-text-field id="cidrInput" label="例如 10.0.0.0/8" autocomplete="off"></md-outlined-text-field>
+            <md-outlined-text-field id="cidrInput" label="10.0.0.0/8 或 pku.edu.cn" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="addCidr">添加</md-filled-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>

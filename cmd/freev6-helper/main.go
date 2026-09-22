@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +37,14 @@ type proxyRequest struct {
 
 type registerRequest struct {
 	Name string `json:"name"`
+}
+
+func defaultCampusCIDRs() []string {
+	return []string{"edu.cn"}
+}
+
+func defaultSettings() settings {
+	return settings{Mode: mihomo.ModeRule, CampusCIDRs: defaultCampusCIDRs()}
 }
 
 func main() {
@@ -76,7 +83,7 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 	}
 	currentSettings, settingsErr := h.loadSettings()
 	if settingsErr != nil {
-		currentSettings = settings{Mode: mihomo.ModeRule}
+		currentSettings = defaultSettings()
 	}
 	_, warpErr := os.Stat(filepath.Join(h.root, "state", "warp.json"))
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -138,6 +145,9 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if current.Mode == "" {
 			current.Mode = mihomo.ModeRule
 		}
+		if current.CampusCIDRs == nil {
+			current.CampusCIDRs = defaultCampusCIDRs()
+		}
 		writeJSON(writer, http.StatusOK, current)
 	case http.MethodPut:
 		var current settings
@@ -152,12 +162,18 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "mode must be rule or global"})
 			return
 		}
-		for _, cidr := range current.CampusCIDRs {
-			if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
-				writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid campus CIDR %q", cidr)})
+		if current.CampusCIDRs == nil {
+			current.CampusCIDRs = defaultCampusCIDRs()
+		}
+		entries := make([]string, 0, len(current.CampusCIDRs))
+		for _, entry := range current.CampusCIDRs {
+			if err := mihomo.ValidateCampusTarget(entry); err != nil {
+				writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
+			entries = append(entries, strings.ToLower(strings.TrimSpace(entry)))
 		}
+		current.CampusCIDRs = entries
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -187,6 +203,9 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	if input.Mode == "" {
 		input.Mode = mihomo.ModeRule
+	}
+	if input.CampusCIDRs == nil {
+		input.CampusCIDRs = defaultCampusCIDRs()
 	}
 	if err := mihomo.CheckListenPorts(); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first"})
@@ -336,6 +355,9 @@ func (h *helper) loadSettings() (settings, error) {
 	}
 	if err := json.Unmarshal(data, &current); err != nil {
 		return current, err
+	}
+	if current.CampusCIDRs == nil {
+		current.CampusCIDRs = defaultCampusCIDRs()
 	}
 	return current, nil
 }

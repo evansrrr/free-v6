@@ -45,13 +45,15 @@ func TestRenderMasqueConfig(t *testing.T) {
 
 func TestRenderWithOptions(t *testing.T) {
 	device := warp.Device{PrivateKey: "private", PeerPublicKey: "peer", IPv4: "172.16.0.2", IPv6: "2606:4700::2"}
-	config, err := RenderWithOptions(device, RenderOptions{Mode: ModeGlobal, CampusCIDRs: []string{"10.20.0.0/16", "2001:db8:1234::/48"}})
+	config, err := RenderWithOptions(device, RenderOptions{Mode: ModeGlobal, CampusCIDRs: []string{"10.20.0.0/16", "2001:db8:1234::/48", "PKU.EDU.CN"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
 		"mode: global", "name: GLOBAL", "IP-CIDR,10.20.0.0/16,DIRECT,no-resolve",
 		"IP-CIDR6,2001:db8:1234::/48,DIRECT,no-resolve",
+		// Domains are lowercased and rendered as suffix rules (covers subdomains)
+		"DOMAIN-SUFFIX,pku.edu.cn,DIRECT",
 	} {
 		if !strings.Contains(config, expected) {
 			t.Errorf("config missing %q", expected)
@@ -61,7 +63,7 @@ func TestRenderWithOptions(t *testing.T) {
 		t.Fatal("expected invalid mode error")
 	}
 	if _, err := RenderWithOptions(device, RenderOptions{CampusCIDRs: []string{"not-a-cidr"}}); err == nil {
-		t.Fatal("expected invalid campus CIDR error")
+		t.Fatal("expected invalid campus entry error")
 	}
 }
 

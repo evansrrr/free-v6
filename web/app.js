@@ -365,10 +365,8 @@ async function refreshBackendState() {
 
 async function pollTraffic() {
   if (!state.proxyRunning) {
-    // When not running, push zero samples
-    state.trafficHistory.push({ t: Date.now(), up: 0, down: 0 });
-    if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
-    drawChart();
+    // Stopped: zero the chart history, the totals baseline and the speed readout
+    resetTrafficDisplay(true);
     return;
   }
 
@@ -407,11 +405,21 @@ async function pollTraffic() {
     // Redraw chart
     drawChart();
   } catch (_) {
-    // mihomo not reachable, push zero
-    state.trafficHistory.push({ t: Date.now(), up: 0, down: 0 });
-    if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
-    drawChart();
+    // mihomo not reachable: show zeros but keep the totals baseline
+    resetTrafficDisplay(false);
   }
+}
+
+function resetTrafficDisplay(clearCounters) {
+  state.trafficHistory.push({ t: Date.now(), up: 0, down: 0 });
+  if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
+  if (clearCounters) {
+    state.lastUpload = 0;
+    state.lastDownload = 0;
+  }
+  $('#speedUp').textContent = formatSpeed(0);
+  $('#speedDown').textContent = formatSpeed(0);
+  drawChart();
 }
 
 /* ── Status Polling ───────────────────────────────────────────── */
@@ -691,13 +699,13 @@ async function autoDelayTestAfterStart() {
 function renderCidrs() {
   const desc = $('#cidrDesc');
   if (desc) desc.textContent = state.cidrs.length
-    ? `${state.cidrs.length} 个自定义网段`
-    : '管理绕过 WARP 的 CIDR 网段';
+    ? `${state.cidrs.length} 个网段/域名`
+    : '管理绕过 WARP 的网段与域名';
 
   const list = $('#cidrList');
   if (!list) return;
   if (!state.cidrs.length) {
-    list.innerHTML = '<div class="empty-state" style="padding:16px"><span>还没有自定义网段</span></div>';
+    list.innerHTML = '<div class="empty-state" style="padding:16px"><span>还没有网段或域名</span></div>';
     return;
   }
   list.innerHTML = state.cidrs.map((cidr, i) =>
@@ -710,7 +718,7 @@ function renderCidrs() {
       const removed = state.cidrs.splice(idx, 1)[0];
       renderCidrs();
       persistSettings();
-      addLog(`移除网段: ${removed}`);
+      addLog(`移除条目: ${removed}`);
     });
   });
 }
@@ -823,20 +831,27 @@ function wireSettingsEvents() {
   });
 }
 
+// CIDR (10.0.0.0/8) or bare domain (pku.edu.cn); the helper validates precisely
+const CIDR_ENTRY_RE = /^[0-9A-Fa-f:.]+\/\d{1,3}$/;
+const DOMAIN_ENTRY_RE = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+
 function addCidr() {
   const input = $('#cidrInput');
   if (!input) return;
-  const value = input.value.trim();
+  const value = input.value.trim().toLowerCase();
   if (!value) return;
-  if (!value.includes('/')) {
-    addLog(`无效 CIDR: ${value}`, true);
+  const valid = value.includes('/')
+    ? CIDR_ENTRY_RE.test(value)
+    : DOMAIN_ENTRY_RE.test(value);
+  if (!valid) {
+    addLog(`无效网段或域名: ${value}`, true);
     return;
   }
   if (!state.cidrs.includes(value)) {
     state.cidrs.push(value);
     renderCidrs();
     persistSettings();
-    addLog(`添加网段: ${value}`);
+    addLog(`添加条目: ${value}`);
   }
   input.value = '';
 }

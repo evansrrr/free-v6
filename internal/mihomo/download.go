@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-const mihomoDownloadURL = "https://api.gitproxy.dev/github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/mihomo-windows-amd64-v3-alpha-5019cc0.zip"
+const mihomoDownloadURL = "https://api.gitproxy.dev/github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v3-v1.19.31.zip"
 const maxRuntimeDownload = 150 << 20
 
 type DownloadResult struct {
@@ -62,7 +62,7 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 	if err != nil {
 		return DownloadResult{}, err
 	}
-	return DownloadResult{Version: "Prerelease-Alpha", Path: outputPath, SHA256: digest}, nil
+	return DownloadResult{Version: "v1.19.31", Path: outputPath, SHA256: digest}, nil
 }
 
 func extractRuntime(archivePath, runtimeDir string) (string, error) {
