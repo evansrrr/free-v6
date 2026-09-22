@@ -64,6 +64,18 @@ async function api(path, options = {}) {
   return payload;
 }
 
+/* Open a URL in the system browser (Tauri opener plugin), or a new tab when
+   the UI runs standalone in a normal browser (dev server). */
+async function openExternal(url) {
+  try {
+    if (window.__TAURI_INTERNALS__?.invoke) {
+      await window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url });
+      return;
+    }
+  } catch (_) { /* fall through to the browser fallback */ }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 /* ── Logging ──────────────────────────────────────────────────── */
 
 function addLog(message, isError = false) {
@@ -765,6 +777,11 @@ function wireSettingsEvents() {
     const theme = e.target.value;
     applyTheme(theme);
     addLog(`切换主题: ${theme}`);
+  });
+
+  // GitHub project — opens in the system browser
+  $('#githubItem')?.addEventListener('click', () => {
+    openExternal('https://github.com/evansrrr/free-v6');
   });
 
   // Mode segmented chips in settings

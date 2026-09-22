@@ -450,6 +450,9 @@ md-icon-button > md-icon {
   gap: 10px; padding: 40px; color: var(--md-outline); font-size: 13px; text-align: center;
 }
 .empty-state-icon { --md-icon-size: 40px; opacity: .4; }
+/* Inside the node grid the empty state would occupy a single 140px track and
+   wrap the message into many lines — span every column instead. */
+.node-grid > .empty-state { grid-column: 1 / -1; }
 
 /* ── Node Grid ────────────────────────────────────────────────── */
 
