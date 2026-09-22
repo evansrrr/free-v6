@@ -520,7 +520,7 @@ md-icon-button > md-icon {
 .settings-groups { display: flex; flex-direction: column; gap: 12px; }
 .settings-group { background: var(--md-surface-container); border-radius: var(--radius-md); overflow: hidden; }
 .settings-group-title { padding: 12px 16px 6px; font-size: 11px; font-weight: 700; color: var(--md-primary); letter-spacing: .06em; text-transform: uppercase; }
-.setting-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; transition: background 150ms; }
+.setting-item { display: flex; align-items: center; gap: 12px; padding: 10px 16px; min-height: 56px; transition: background 150ms; }
 .setting-item.clickable { cursor: pointer; }
 .setting-item.clickable:hover { background: var(--md-surface-container-high); }
 .setting-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-xs); background: var(--md-surface-container-high); flex-shrink: 0; }
@@ -528,18 +528,20 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
-/* 40px field: top 8 + text 24 + bottom 8 = 40, symmetric so the value centers */
+/* compact in-row buttons (default M3 height 40px is too tall for 56px rows) */
+.setting-item md-filled-button { --md-filled-button-container-height: 36px; }
+/* 36px field: top 6 + text 24 + bottom 6 = 36, symmetric so the value centers */
 .setting-md-select {
   min-width: 118px;
-  --md-outlined-field-top-space: 8px;
-  --md-outlined-field-bottom-space: 8px;
+  --md-outlined-field-top-space: 6px;
+  --md-outlined-field-bottom-space: 6px;
 }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
-/* Status pill mirrors md-filled-button metrics: 40px tall, radius-full,
+/* Status pill mirrors md-filled-button metrics: 36px tall, radius-full,
    0×24 padding, label-large (14/500); colors stay semantic. */
 .setting-pill {
   display: inline-flex; align-items: center; justify-content: center;
-  min-height: 40px;
+  min-height: 36px;
   min-width: 76px;
   padding: 0 24px;
   border-radius: var(--radius-full);
