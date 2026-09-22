@@ -372,6 +372,8 @@ md-icon-button > md-icon {
 .card-header-text p { font-size: 11px; color: var(--md-on-surface-variant); margin: 0; }
 
 .card-traffic { margin-bottom: 10px; }
+/* stats card hugs its content instead of spanning the full column */
+.card-stats { width: fit-content; max-width: 100%; }
 
 /* ── Traffic Chart ────────────────────────────────────────────── */
 
@@ -388,8 +390,8 @@ md-icon-button > md-icon {
 .traffic-speeds { display: flex; gap: 16px; margin-left: auto; }
 .speed-item { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--md-on-surface-variant); }
 .speed-dot { width: 6px; height: 6px; border-radius: 50%; }
-.speed-dot.upload { background: var(--md-primary); }
-.speed-dot.download { background: var(--md-secondary); }
+.speed-dot.upload { background: var(--md-secondary); }
+.speed-dot.download { background: var(--md-primary); }
 .speed-arrow { --md-icon-size: 14px; }
 .speed-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; color: var(--md-on-surface); min-width: 60px; }
 

@@ -43,7 +43,7 @@ M3 color scheme 全角色映射到 freev6 色板，**只在 `:root` 维护一套
 
 | M3 角色 | 深色值 | 用途 |
 |---|---|---|
-| primary | `#7eaaff` | 强调、上传曲线、聚焦环 |
+| primary | `#7eaaff` | 强调、下载曲线、聚焦环 |
 | primary-container | `#1a3a6b` | 选中态、FAB 常态 |
 | surface | `#121318` | 页面底色 |
 | surface-container | `#1c1d24` | 卡片、分组 |
@@ -104,7 +104,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - **导航 rail**：宽 80px（≤1024px 收 58px 隐藏文字），项间距 12，选中态 primary-container 药丸
 - **顶栏**：标题 + 状态 chip + `md-icon-button`
 - **视图切换**：enter 250ms decelerate（translateY 8→0）/ exit 120ms
-- **仪表盘**：流量卡 + 统计卡纵向堆叠，gap 10，图表区 140px
+- **仪表盘**：流量卡 + 统计卡纵向堆叠，gap 10，图表区 140px；统计卡 `width:fit-content` 贴合内容收窄；实时流量色带互换：上传 = secondary、下载 = primary（统计环保持 primary/tertiary 不变）
 - **代理页**：`minmax(140px, 1fr)` 网格，gap 14；卡片 padding 10×12、min-height 58；FAB 距右下 24px（≤620px 移到 64/12）
 - **设置页**：分组 = surface-container 圆角 14；**行高统一 56px**（`min-height:56` + padding 10×16，单行结构：图标 + 标签 + 右侧控件/值，无描述行）；行内控件 36px（select 用 `--md-outlined-field-top/bottom-space:6` + `--md-outlined-select-text-field-input-text-size:13` 对齐行标签字号，filled button 用 `--md-filled-button-container-height:36`，pill `min-height:36`）；行间 `md-divider`；分组间 gap 12；关于页的版本/许可证值用 `.setting-value` 右置
 - **日志抽屉**：宽 320px，fixed 右侧，scrim `rgba(0,0,0,.4)`

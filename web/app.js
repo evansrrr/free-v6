@@ -270,7 +270,7 @@ function drawChart() {
     const y = chartH - (upVals[i] / maxVal) * (chartH - 8) - 2;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = primary;
+  ctx.strokeStyle = secondary;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -278,7 +278,7 @@ function drawChart() {
   ctx.lineTo((TRAFFIC_POINTS - 1) * stepX, chartH);
   ctx.lineTo((TRAFFIC_POINTS - upVals.length) * stepX, chartH);
   ctx.closePath();
-  ctx.fillStyle = toRGBA(primary, 0.08);
+  ctx.fillStyle = toRGBA(secondary, 0.08);
   ctx.fill();
 
   // Draw download line
@@ -288,7 +288,7 @@ function drawChart() {
     const y = chartH - (downVals[i] / maxVal) * (chartH - 8) - 2;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = secondary;
+  ctx.strokeStyle = primary;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -296,7 +296,7 @@ function drawChart() {
   ctx.lineTo((TRAFFIC_POINTS - 1) * stepX, chartH);
   ctx.lineTo((TRAFFIC_POINTS - downVals.length) * stepX, chartH);
   ctx.closePath();
-  ctx.fillStyle = toRGBA(secondary, 0.06);
+  ctx.fillStyle = toRGBA(primary, 0.06);
   ctx.fill();
 }
 
