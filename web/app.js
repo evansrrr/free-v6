@@ -857,14 +857,13 @@ function applyTheme(theme) {
 }
 
 function loadSavedTheme() {
-  try {
-    const saved = localStorage.getItem('freev6-theme');
-    if (saved) {
-      applyTheme(saved);
-      const select = $('#themeSelect');
-      if (select) select.value = saved;
-    }
-  } catch (_) {}
+  let saved = null;
+  try { saved = localStorage.getItem('freev6-theme'); } catch (_) {}
+  // Default to following the system color scheme when the user never picked one
+  const theme = saved || 'system';
+  applyTheme(theme);
+  const select = $('#themeSelect');
+  if (select) select.value = theme;
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
