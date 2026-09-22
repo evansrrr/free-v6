@@ -530,11 +530,13 @@ md-icon-button > md-icon {
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
 /* compact in-row buttons (default M3 height 40px is too tall for 56px rows) */
 .setting-item md-filled-button { --md-filled-button-container-height: 36px; }
-/* 36px field: top 6 + text 24 + bottom 6 = 36, symmetric so the value centers */
+/* 36px field: top 6 + text 24 + bottom 6 = 36, symmetric so the value centers;
+   value text matches .setting-label (13px), line-height untouched -> height stable */
 .setting-md-select {
   min-width: 118px;
   --md-outlined-field-top-space: 6px;
   --md-outlined-field-bottom-space: 6px;
+  --md-outlined-select-text-field-input-text-size: 13px;
 }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
 /* Status pill mirrors md-filled-button metrics: 36px tall, radius-full,
@@ -570,6 +572,8 @@ md-icon-button > md-icon {
 @media (max-width: 1024px) {
   .rail { width: var(--nav-width-collapsed); min-width: var(--nav-width-collapsed); }
   .nav-item span:not(.nav-icon) { display: none; }
+  /* icon-only state: equal padding so the md-icon centers vertically */
+  .nav-item { padding: 8px 4px; }
   .main-content { padding: 16px 16px 40px; }
 }
 
@@ -582,7 +586,7 @@ md-icon-button > md-icon {
   }
   .brand-mark, .bottom-item { display: none; }
   .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; 3ustify-content: space-around; }
-  .nav-item { flex: 1; padding: 6px 0 4px; border-radius: 0; }
+  .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
   .app-shell { flex-direction: column; }
   .main-content { flex: 1; padding: 12px 10px 64px; }
   .card-traffic, .card-stats { grid-column: auto; }
