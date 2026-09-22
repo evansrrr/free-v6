@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" />
   <link rel="stylesheet" href="styles.css" />
   <script type="importmap">
     {
@@ -35,20 +36,20 @@
       <div class="brand-mark" aria-label="freev6">F 6</div>
       <nav class="nav-list">
         <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
-          <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14l4-4 3 3 7-7"/><path d="M14 6h3v3"/></svg>
+          <md-icon class="nav-icon">monitoring</md-icon>
           <span>仪表盘</span>
         </button>
         <button class="nav-item" data-view="proxies" aria-label="代理">
-          <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M3 10h14"/><path d="M10 3c2 2.5 2 11.5 0 14"/><path d="M10 3c-2 2.5-2 11.5 0 14"/></svg>
+          <md-icon class="nav-icon">public</md-icon>
           <span>代理</span>
         </button>
         <button class="nav-item" data-view="settings" aria-label="设置">
-          <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 1.5h-2.4l-.4 2.5a6 6 0 0 0-1.7 1l-2.4-.8-1.2 2.1 1.9 1.5a6 6 0 0 0 0 2.4l-1.9 1.5 1.2 2.1 2.4-.8a6 6 0 0 0 1.7 1l.4 2.5h2.4l.4-2.5a6 6 0 0 0 1.7-1l2.4.8 1.2-2.1-1.9-1.5a6 6 0 0 0 0-2.4l1.9-1.5-1.2-2.1-2.4.8a6 6 0 0 0-1.7-1z"/><circle cx="10" cy="10" r="2.5"/></svg>
+          <md-icon class="nav-icon">settings</md-icon>
           <span>设置</span>
         </button>
       </nav>
       <button class="nav-item bottom-item" id="logsButton" aria-label="日志">
-        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="2" width="14" height="16" rx="2"/><path d="M6 6h8M6 9h8M6 12h5"/></svg>
+        <md-icon class="nav-icon">receipt_long</md-icon>
         <span>日志</span>
       </button>
     </aside>
@@ -64,7 +65,7 @@
             <span id="headerStatus">未连接</span>
           </span>
           <md-icon-button id="refreshButton" title="刷新" aria-label="刷新">
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a7 7 0 0 1 13.4-2.8"/><path d="M17 10a7 7 0 0 1-13.4 2.8"/><path d="M16 3v4h-4"/><path d="M4 17v-4h4"/></svg>
+            <md-icon>refresh</md-icon>
           </md-icon-button>
         </div>
       </header>
@@ -75,7 +76,7 @@
         <div class="card card-traffic">
           <div class="card-header">
             <div class="card-header-icon">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14l4-4 3 3 7-7"/><path d="M14 6h3v3"/></svg>
+              <md-icon>trending_up</md-icon>
             </div>
             <div class="card-header-text">
               <h3>实时流量</h3>
@@ -84,12 +85,12 @@
             <div class="traffic-speeds">
               <div class="speed-item">
                 <span class="speed-dot upload"></span>
-                <span class="speed-arrow">&#8593;</span>
+                <md-icon class="speed-arrow">arrow_upward</md-icon>
                 <span class="speed-value" id="speedUp">0 B/s</span>
               </div>
               <div class="speed-item">
                 <span class="speed-dot download"></span>
-                <span class="speed-arrow">&#8595;</span>
+                <md-icon class="speed-arrow">arrow_downward</md-icon>
                 <span class="speed-value" id="speedDown">0 B/s</span>
               </div>
             </div>
@@ -102,7 +103,7 @@
         <div class="card card-stats">
           <div class="card-header">
             <div class="card-header-icon">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7"/><path d="M10 3v7h7" stroke-width="1.2"/><path d="M10 10l4.5 4.5" stroke-width="1.2"/></svg>
+              <md-icon>donut_small</md-icon>
             </div>
             <div class="card-header-text">
               <h3>流量统计</h3>
@@ -140,7 +141,7 @@
       <section class="view" id="proxiesView">
         <div class="node-grid" id="nodeGrid">
           <div class="empty-state">
-            <svg class="empty-state-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20h24"/><path d="M20 8v24"/><circle cx="20" cy="20" r="15"/></svg>
+            <md-icon class="empty-state-icon">cloud_off</md-icon>
             <span>请先启动免流模式以加载节点列表</span>
           </div>
         </div>
@@ -154,7 +155,7 @@
             <div class="settings-group-title">外观</div>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="4"/><path d="M10 2v2M10 16v2M18 10h-2M4 10H2M15.07 4.93l-1.41 1.41M6.34 13.66l-1.41 1.41M4.93 4.93l1.41 1.41M13.66 13.66l1.41 1.41"/></svg>
+                <md-icon>light_mode</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">主题</div>
@@ -172,7 +173,7 @@
             <div class="settings-group-title">代理</div>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12"/><path d="M8 6l-4 4 4 4"/><path d="M12 6l4 4-4 4"/></svg>
+                <md-icon>swap_horiz</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">工作模式</div>
@@ -186,15 +187,13 @@
             <md-divider></md-divider>
             <div class="setting-item clickable" id="cidrSettingItem">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="8" rx="2"/><path d="M7 10h6"/><circle cx="5" cy="10" r="0.5" fill="currentColor"/></svg>
+                <md-icon>lan</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">校园网段</div>
                 <div class="setting-desc" id="cidrDesc">管理绕过 WARP 的 CIDR 网段</div>
               </div>
-              <span class="setting-arrow">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l6 6-6 6"/></svg>
-              </span>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
           </div>
 
@@ -202,7 +201,7 @@
             <div class="settings-group-title">核心</div>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="10" height="10" rx="1"/><path d="M8 2v3M12 2v3M8 15v3M12 15v3M2 8h3M2 12h3M15 8h3M15 12h3"/></svg>
+                <md-icon>memory</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">mihomo 版本</div>
@@ -213,7 +212,7 @@
             <md-divider></md-divider>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v10"/><path d="M6 9l4 4 4-4"/><path d="M3 15v2h14v-2"/></svg>
+                <md-icon>download</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">下载核心</div>
@@ -224,7 +223,7 @@
             <md-divider></md-divider>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="10" r="3"/><path d="M11 10h6"/><path d="M15 7v6"/></svg>
+                <md-icon>key</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">注册 WARP</div>
@@ -238,7 +237,7 @@
             <div class="settings-group-title">关于</div>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="8"/><circle cx="10" cy="7" r="0.5" fill="currentColor" stroke="none"/><path d="M10 9v5"/></svg>
+                <md-icon>info</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">版本</div>
@@ -248,7 +247,7 @@
             <md-divider></md-divider>
             <div class="setting-item">
               <div class="setting-icon">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12v12H4z"/><path d="M8 8h4v4H8z"/></svg>
+                <md-icon>description</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">许可证</div>
@@ -262,7 +261,7 @@
         <div class="cidr-page" id="cidrPage" style="display:none">
           <div class="cidr-page-header">
             <md-icon-button id="cidrBack" aria-label="返回">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l-6 6 6 6"/></svg>
+              <md-icon>arrow_back</md-icon>
             </md-icon-button>
             <h2>校园网段</h2>
           </div>
@@ -283,18 +282,18 @@
     <div class="drawer-header">
       <h2>运行日志</h2>
       <md-icon-button id="closeLogs" aria-label="关闭日志">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l10 10M15 5L5 15"/></svg>
+        <md-icon>close</md-icon>
       </md-icon-button>
     </div>
     <div class="log-list" id="logList"></div>
   </aside>
 
   <md-fab id="proxyToggle" class="fab-item proxy-fab" label="启动免流" aria-label="启动/停止免流">
-    <svg slot="icon" id="toggleIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l10 6-10 6V4z"/></svg>
+    <md-icon slot="icon" id="toggleIcon">play_arrow</md-icon>
   </md-fab>
 
   <md-fab id="delayTestFab" class="fab-item delay-fab" label="测试延迟" aria-label="延迟测试">
-    <svg slot="icon" id="fabIcon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2L5 11h5l-1 7 6-9h-5l1-7z"/></svg>
+    <md-icon slot="icon" id="fabIcon">bolt</md-icon>
     <md-circular-progress slot="icon" id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
   </md-fab>
 

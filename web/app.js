@@ -122,9 +122,7 @@ function setRunning(running) {
   const fab = $('#proxyToggle');
   const icon = $('#toggleIcon');
 
-  const playPath = 'M6 4l10 6-10 6V4z';
-  const stopPath = 'M5 5h4v10H5zm6 0h4v10h-4z';
-  if (icon) icon.innerHTML = `<path d="${running ? stopPath : playPath}"/>`;
+  if (icon) icon.textContent = running ? 'stop' : 'play_arrow';
   if (fab) fab.label = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
 }
@@ -531,7 +529,7 @@ function renderNodeGrid() {
 
   const group = state.proxyGroup;
   if (!group || !group.all.length) {
-    el.innerHTML = '<div class="empty-state"><svg class="empty-state-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20h24"/><path d="M20 8v24"/><circle cx="20" cy="20" r="15"/></svg><span>请先启动免流模式以加载节点列表</span></div>';
+    el.innerHTML = '<div class="empty-state"><md-icon class="empty-state-icon">cloud_off</md-icon><span>请先启动免流模式以加载节点列表</span></div>';
     return;
   }
 
@@ -692,7 +690,7 @@ function renderCidrs() {
     return;
   }
   list.innerHTML = state.cidrs.map((cidr, i) =>
-    `<div class="cidr-item"><span>${cidr}</span><md-icon-button class="cidr-remove" data-idx="${i}" aria-label="删除">×</md-icon-button></div>`
+    `<div class="cidr-item"><span>${cidr}</span><md-icon-button class="cidr-remove" data-idx="${i}" aria-label="删除"><md-icon>close</md-icon></md-icon-button></div>`
   ).join('');
 
   list.querySelectorAll('.cidr-remove').forEach(btn => {

@@ -255,7 +255,7 @@ a { color: var(--md-primary); text-decoration: none; }
   transition: color 150ms, background 150ms;
   position: relative;
 }
-.nav-item .nav-icon { width: 20px; height: 20px; }
+.nav-item .nav-icon { --md-icon-size: 20px; }
 .nav-item:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .nav-item.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
 .bottom-item { margin-top: auto; }
@@ -315,7 +315,7 @@ a { color: var(--md-primary); text-decoration: none; }
 md-icon-button {
   color: var(--md-on-surface-variant);
 }
-md-icon-button > svg {
+md-icon-button > md-icon {
   color: inherit;
 }
 
@@ -355,7 +355,7 @@ md-icon-button > svg {
   color: var(--md-on-primary-container);
   flex-shrink: 0;
 }
-.card-header-icon svg { width: 14px; height: 14px; }
+.card-header-icon md-icon { --md-icon-size: 16px; }
 .card-header-text h3 { font-size: 13px; font-weight: 700; margin-bottom: 1px; }
 .card-header-text p { font-size: 11px; color: var(--md-on-surface-variant); margin: 0; }
 
@@ -378,7 +378,7 @@ md-icon-button > svg {
 .speed-dot { width: 6px; height: 6px; border-radius: 50%; }
 .speed-dot.upload { background: var(--md-primary); }
 .speed-dot.download { background: var(--md-secondary); }
-.speed-arrow { font-size: 11px; }
+.speed-arrow { --md-icon-size: 14px; }
 .speed-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; color: var(--md-on-surface); min-width: 60px; }
 
 /* ── Stats Ring ───────────────────────────────────────────────── */
@@ -435,7 +435,7 @@ md-icon-button > svg {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 40px; color: var(--md-outline); font-size: 13px; text-align: center;
 }
-.empty-state-icon { width: 40px; height: 40px; opacity: .4; }
+.empty-state-icon { --md-icon-size: 40px; opacity: .4; }
 
 /* ── Node Grid ────────────────────────────────────────────────── */
 
@@ -492,7 +492,7 @@ md-icon-button > svg {
 .fab-item.visible { display: inline-flex; }
 .fab-item:hover { transform: translateY(-3px); }
 .fab-item:active { transform: translateY(0); }
-.fab-item svg { display: block; }
+.fab-item md-icon { --md-icon-size: 24px; }
 .proxy-fab.running {
   --md-fab-container-color: var(--green-container);
   --md-fab-label-text-color: var(--green);
@@ -513,7 +513,7 @@ md-icon-button > svg {
 .setting-item.clickable { cursor: pointer; }
 .setting-item.clickable:hover { background: var(--md-surface-container-high); }
 .setting-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-xs); background: var(--md-surface-container-high); flex-shrink: 0; }
-.setting-icon svg { width: 15px; height: 15px; color: var(--md-on-surface-variant); }
+.setting-icon md-icon { --md-icon-size: 16px; color: var(--md-on-surface-variant); }
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); margin-bottom: 1px; }
 .setting-desc { font-size: 11px; color: var(--md-on-surface-variant); line-height: 1.4; }
@@ -522,8 +522,7 @@ md-icon-button > svg {
 .setting-pill { padding: 3px 10px; border-radius: var(--radius-full); font-size: 10px; font-weight: 700; background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
 .setting-pill.ready { background: var(--green-container); color: var(--green); }
 .setting-pill.warn { background: var(--orange-container); color: var(--orange); }
-.setting-arrow { width: 18px; height: 18px; color: var(--md-on-surface-variant); }
-.setting-arrow svg { width: 18px; height: 18px; }
+.setting-arrow { --md-icon-size: 18px; color: var(--md-on-surface-variant); }
 
 /* ── CIDR Sub-page ────────────────────────────────────────────── */
 
