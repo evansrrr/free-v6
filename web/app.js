@@ -655,7 +655,8 @@ function resetFab() {
 }
 
 function wireProxyEvents() {
- 
+  $('#delayTestFab')?.addEventListener('click', runDelayTest);
+}
 
 /* Auto-run one delay test after 免流模式 starts */
 async function autoDelayTestAfterStart() {
@@ -672,7 +673,6 @@ async function autoDelayTestAfterStart() {
   } else {
     addLog('自动延迟测试跳过: 节点列表未就绪', true);
   }
-} $('#delayTestFab')?.addEventListener('click', runDelayTest);
 }
 
 /* ── Settings Page ────────────────────────────────────────────── */

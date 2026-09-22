@@ -187,4 +187,4 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 - Go helper `127.0.0.1:13335`；mihomo external controller `127.0.0.1:9090`
 - 窗口默认 900×600，最小 720×480；Tauri CSP 为 null
 - Google Fonts CDN：DM Sans / Manrope / JetBrains Mono / **Material Symbols Outlined**（图标字体）
-- 应用 / 托盘图标：与 brand-mark 同源（Manrope 800 “F 6”、primary-container `#1a3a6b`、27.78% 圆角），产物 `src-tauri/icons/`（`icon.png` + 多尺寸 `icon.ico`，像素级断言验证），经 `bundle.icon` 同时供窗口与托盘（tray 显式取 `default_window_icon`）。**母图由 GDI+ 直接绘制**（`gen-icons.ps1` + `fix-font.ps1`：Manrope 可变字体实例化 wght=800）；勿用浏览器截图——小数 DPR（如 1.5）会把画布垫大、内容截断，产生“只显示左上角四分之一 + 白底”的废图标
+- 应用 / 托盘图标：与 brand-mark 同源（Manrope 800 “F 6”、primary-container `#1a3a6b`、27.78% 圆角），产物 `src-tauri/icons/`（`icon.png` + 多尺寸 `icon.ico`，像素级断言验证；**ICO 帧必须按 256→16 降序**——Tauri codegen 取 `entries()[0]` 作为窗口/任务栏/托盘图，升序会嵌入 16px 导致全局模糊），经 `bundle.icon` 同时供窗口与托盘（tray 显式取 `default_window_icon`）。**母图由 GDI+ 直接绘制**（`gen-icons.ps1` + `fix-font.ps1`：Manrope 可变字体实例化 wght=800）；勿用浏览器截图——小数 DPR（如 1.5）会把画布垫大、内容截断，产生“只显示左上角四分之一 + 白底”的废图标
