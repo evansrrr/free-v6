@@ -11,10 +11,10 @@ import map in `index.html`).
 | `lit/`, `lit-html/`, `lit-element/`, `@lit/` | [lit](https://github.com/lit/lit) (version pinned by `@material/web` 2.5.0) – runtime required by the components | BSD-3-Clause |
 | `tslib/`        | [tslib](https://github.com/tslibio/tslib) – TS helper runtime imported by the compiled components | 0BSD |
 
-Components copied for freev6: `button`, `fab`, `iconbutton`, `progress`
-(circular), `chips` (filter), `select`, `textfield`, plus their transitive
-internal dependencies (`internal/`, `field/`, `menu/`, `list/`, `ripple/`,
-`focus/`, `elevation/`, `labs/behaviors`, `typography/`).
+Components copied for freev6: `button`, `divider`, `fab`, `iconbutton`,
+`progress` (circular), `chips` (filter), `select`, `textfield`, plus their
+transitive internal dependencies (`internal/`, `field/`, `menu/`, `list/`,
+`ripple/`, `focus/`, `elevation/`, `labs/behaviors`, `typography/`).
 
 Entry module: `../material.js` registers all `md-*` elements used by the UI.
 
