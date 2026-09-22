@@ -83,7 +83,7 @@ function renderLogs() {
 
 /* ── Navigation ───────────────────────────────────────────────── */
 
-const VIEW_TITLES = { dashboard: '仪表盘', proxies: '代理', settings: '设置' };
+const VIEW_TITLES = { dashboard: '仪表盘', proxies: '接入点', settings: '设置' };
 
 function showView(view) {
   if (view === state.activeView) return;
