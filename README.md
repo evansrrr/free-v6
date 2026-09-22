@@ -2,23 +2,6 @@
 
 Windows 10/11 上的 IPv6-only WARP/MASQUE 实验客户端。项目包含 Go 核心、Material You Tauri GUI 和 mihomo helper sidecar；特权网络动作仍通过后端 API 收口。
 
-## 当前阶段
-
-已建立第一阶段核心骨架：
-
-- Go CLI 作为稳定的核心入口
-- Cloudflare WARP 注册和 MASQUE enroll 客户端
-- P-256 私钥转换为 mihomo 所需的 SEC1 Base64
-- mihomo MASQUE 节点 YAML 生成器
-- mihomo 进程的启动、停止和状态查询
-- 可注入 HTTP 客户端的 API 测试边界
-
-尚未实现：GUI 触发 WARP 注册与代理启停的完整 API、Windows TUN/路由恢复闭环、运行时完整性校验和 DPAPI 凭据保护。
-
-Windows GUI 版本启动时会请求管理员权限。请在 UAC 提示中选择“是”，否则无法创建 TUN 虚拟网卡或修改 DNS/路由。GUI 会自动启动 Go helper，并从安装目录的 `runtime/` 中查找 mihomo Alpha 核心。
-
-启动免流前请先退出 FlClash、Clash、其他代理客户端以及占用本地 DNS 的软件。freev6 使用 `7890` 作为本地代理端口、`1053` 作为 DNS 端口、`9090` 作为控制端口；端口被占用时 GUI 会直接显示占用冲突。
-
 ## 开发
 
 需要 Go 1.25+ 和 Git。
