@@ -179,7 +179,18 @@
 
 /* ── Reset ────────────────────────────────────────────────────── */
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+/* Zero margin/padding everywhere EXCEPT md-* hosts: declarations from the
+   outer tree beat a component's :host rules (specificity and cascade layers
+   do not help), so the universal reset must never match custom elements —
+   they own their box model (e.g. md-outlined-button pads on the host).
+   Add newly used md-* tags to this list. */
+:where(*, *::before, *::after):not(:is(
+  md-fab, md-icon, md-icon-button, md-outlined-button, md-text-button,
+  md-filled-button, md-filled-tonal-button, md-elevated-button,
+  md-outlined-select, md-select-option, md-filter-chip,
+  md-outlined-text-field, md-circular-progress, md-divider
+)) { margin: 0; padding: 0; }
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 body {
   font-family: 'DM Sans', system-ui, sans-serif;
@@ -517,7 +528,7 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); margin-bottom: 1px; }
 .setting-desc { font-size: 11px; color: var(--md-on-surface-variant); line-height: 1.4; }
-.setting-md-select { min-width: 118px; }
+.setting-md-select { min-width: 118px; --md-outlined-field-bottom-space: 0px; }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
 .setting-pill { padding: 3px 10px; border-radius: var(--radius-full); font-size: 10px; font-weight: 700; background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
 .setting-pill.ready { background: var(--green-container); color: var(--green); }

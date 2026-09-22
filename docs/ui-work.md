@@ -89,7 +89,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
 | 启停 / 延迟测试 FAB | `md-fab`（extended） | [fab.md](../../material-web-2.5.0/docs/components/fab.md) | `label` 属性改文案；`slot="icon"` 内为 `md-icon`（`play_arrow`/`stop`/`bolt`）；`.visible` 控显隐；`.running` / `.loading` 只覆写 token |
 | 刷新 / 关闭 / 返回 / 删除 | `md-icon-button` | [icon-button.md](../../material-web-2.5.0/docs/components/icon-button.md) | 默认槽位放 `md-icon` |
 | 下载 / 注册 / 添加 | `md-outlined-button` | [button.md](../../material-web-2.5.0/docs/components/button.md) | `disabled` 属性；文本为默认槽内容 |
-| 主题选择 | `md-outlined-select` + `md-select-option` | [select.md](../../material-web-2.5.0/docs/components/select.md) | **选项文本写成元素内容**（非 label 属性）；监听 `change` 取 `e.target.value` |
+| 主题选择 | `md-outlined-select` + `md-select-option` | [select.md](../../material-web-2.5.0/docs/components/select.md) | **选项文本写成元素内容**（非 label 属性）；监听 `change` 取 `e.target.value`；`.setting-md-select` 上 `--md-outlined-field-bottom-space:0` 压到 40px 行高 |
 | 工作模式（单选） | `md-filter-chip` ×2 | [chip.md](../../material-web-2.5.0/docs/components/chip.md) | 点击后由 state 重同步 `.selected`；不 `preventDefault` |
 | CIDR 输入 | `md-outlined-text-field` | [text-field.md](../../material-web-2.5.0/docs/components/text-field.md) | `value` 属性；Enter 触发添加 |
 | 分组分隔线 | `md-divider` | [divider.md](../../material-web-2.5.0/docs/components/divider.md) | 替代 `.setting-item` 的 border-top；装饰性默认无 ARIA |
@@ -167,7 +167,7 @@ CSS 无法跨选择器复用声明，**修改浅色值必须同步两处**（已
    - 宿主定位类：`.fab-item` 的 fixed 定位与 `.visible` 显隐
    - 槽位内容尺寸：如 `md-icon` 的 `--md-icon-size`、`md-fab` 图标位
 3. **禁止**：选择器穿透 shadow、覆盖组件内部 class、再写自制按钮 / 下拉 / spinner / 分隔线（已全部由 md-* 取代）
-4. 全局 reset 中 `button` 等规则只作用于 light-DOM 原生元素（组件内部在 shadow，天然隔离）；`[hidden]{display:none!important}` 用于组件槽位内 `hidden` 切换
+4. 全局 reset 的 margin/padding 清零必须用 `:where(*):not(:is(md-* 列表))` **排除所有 md-* 宿主**——外层文档声明会压过组件的 `:host` 规则（与特异度无关，cascade layer 也无效），否则组件宿主内边距被清零（md-outlined-button 曾因此塌成裸文字）；新增 md-* 组件时必须同步加入该列表。原生 `button` 等规则只作用于 light-DOM 原生元素（组件内部在 shadow，天然隔离）；`[hidden]{display:none!important}` 用于组件槽位内 `hidden` 切换
 5. **已清理的重复 / 死代码**（本方案落地时移除）：`--md-tertiary-container` 重复行、`--shadow-fab`（×3，FAB 改由组件 elevation）、`--ease-standard` 未用、`.mono`、原生 `input` reset（已无 light-DOM input）、`.node-type`（不再渲染）、`.brand-mark span`、`.setting-item` border-top（→ `md-divider`）、各处内联 SVG 尺寸规则（→ `--md-icon-size`）
 
 ## 响应式
