@@ -22,7 +22,7 @@ const state = {
 
   // Runtime
   runtimePresent: false,
-  runtimeVersion: '',
+  runtimeChecked: false,
   warpRegistered: false,
 
   // Logs
@@ -338,11 +338,11 @@ async function refreshBackendState() {
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
 
-    // Runtime info — must complete before updating chip
+    // Runtime info — must complete before updating chip/settings UI
     try {
       const runtime = await api('/runtime');
-      state.runtimePresent = runtime.present;
-      state.runtimeVersion = runtime.version || '';
+      state.runtimePresent = Boolean(runtime.present);
+      state.runtimeChecked = true;
     } catch (_) { /* ignore */ }
 
     updateConnectionChip(true);
@@ -354,7 +354,9 @@ async function refreshBackendState() {
   } catch (error) {
     state.helperOnline = false;
     state.runtimePresent = false;
+    state.runtimeChecked = false;
     updateConnectionChip(false);
+    updateSettingsUI();
     addLog(`helper 不可用: ${error.message}`, true);
   }
 }
@@ -417,17 +419,23 @@ async function pollTraffic() {
 async function pollStatus() {
   try {
     const status = await api('/status');
-    if (!state.helperOnline) {
-      state.helperOnline = true;
-      // Check runtime presence on first reconnect
-      try {
-        const runtime = await api('/runtime');
-        state.runtimePresent = runtime.present;
-        state.runtimeVersion = runtime.version || '';
-      } catch (_) {}
-      updateConnectionChip(true);
-      addLog('已连接 freev6 helper');
+    const firstConnect = !state.helperOnline;
+    state.helperOnline = true;
+    // Core detection is a cheap local stat — keep polling it so the settings
+    // row flips between “已安装” and the download button with no manual refresh
+    try {
+      const runtime = await api('/runtime');
+      const present = Boolean(runtime.present);
+      if (firstConnect || !state.runtimeChecked || state.runtimePresent !== present) {
+        state.runtimePresent = present;
+        state.runtimeChecked = true;
+        updateConnectionChip(true);
+        updateSettingsUI();
+      }
+    } catch (_) {
+      if (firstConnect) updateConnectionChip(true);
     }
+    if (firstConnect) addLog('已连接 freev6 helper');
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
     if (wasRunning !== isRunning) {
@@ -440,7 +448,10 @@ async function pollStatus() {
   } catch (_) {
     if (state.helperOnline) {
       state.helperOnline = false;
+      state.runtimePresent = false;
+      state.runtimeChecked = false;
       updateConnectionChip(false);
+      updateSettingsUI();
       setRunning(false);
       addLog('helper 连接断开', true);
     }
@@ -713,29 +724,25 @@ function updateSettingsUI() {
   // CIDR desc
   renderCidrs();
 
-  // Runtime pill
+  // mihomo core row (status + download merged): pill when installed,
+  // download button when the core was not detected, '--' while unknown
   const pill = $('#runtimePill');
+  const dlBtn = $('#downloadCore');
+  const checked = state.helperOnline && state.runtimeChecked;
   if (pill) {
-    if (state.runtimePresent) {
-      pill.textContent = '已安装';
-      pill.className = 'setting-pill ready';
+    if (checked && !state.runtimePresent) {
+      pill.hidden = true;
     } else {
-      pill.textContent = '未安装';
-      pill.className = 'setting-pill warn';
+      pill.hidden = false;
+      pill.textContent = checked ? '已安装' : '--';
+      pill.className = checked ? 'setting-pill ready' : 'setting-pill';
     }
   }
-  const ver = $('#runtimeVersion');
-  if (ver) ver.textContent = state.runtimePresent && state.runtimeVersion ? state.runtimeVersion : (state.runtimePresent ? 'mihomo Alpha 已就绪' : '未发现核心');
-
-  // Download button
-  const dlBtn = $('#downloadCore');
   if (dlBtn) {
-    if (state.runtimePresent) {
-      dlBtn.textContent = '已安装';
-      dlBtn.disabled = true;
-    } else {
-      dlBtn.textContent = '下载';
+    dlBtn.hidden = !(checked && !state.runtimePresent);
+    if (!dlBtn.hidden) {
       dlBtn.disabled = false;
+      dlBtn.textContent = '下载';
     }
   }
 
@@ -792,14 +799,13 @@ function wireSettingsEvents() {
     try {
       const result = await api('/runtime/download', { method: 'POST' });
       state.runtimePresent = true;
-      state.runtimeVersion = result.version || '';
-      updateSettingsUI();
-      updateConnectionChip(true);
-      addLog(`mihomo 下载完成: ${result.version}`);
+      state.runtimeChecked = true;
+      addLog(`mihomo 核心下载完成${result.version ? `: ${result.version}` : ''}`);
     } catch (e) {
       addLog(`下载失败: ${e.message}`, true);
     } finally {
-      if (btn && !state.runtimePresent) { btn.disabled = false; btn.textContent = '下载'; }
+      updateSettingsUI();
+      updateConnectionChip(state.helperOnline);
     }
   });
 

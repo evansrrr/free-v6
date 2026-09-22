@@ -561,7 +561,9 @@ md-icon-button > md-icon {
   color: var(--md-sys-color-on-primary);
 }
 .setting-pill.ready { background: var(--green); color: var(--green-container); }
-.setting-pill.warn { background: var(--orange); color: var(--orange-container); }
+/* Merged core row: status pill and download button are mutually exclusive.
+   Author display rules (and md-* :host) beat the UA [hidden] rule, so force it. */
+#runtimePill[hidden], #downloadCore[hidden] { display: none !important; }
 .setting-arrow { --md-icon-size: 18px; color: var(--md-on-surface-variant); }
 
 /* ── CIDR Sub-page ────────────────────────────────────────────── */
