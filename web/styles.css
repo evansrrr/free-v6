@@ -50,8 +50,8 @@
   --radius-md: 14px;
   --radius-lg: 20px;
   --radius-full: 9999px;
-  --nav-width: 64px;
-  --nav-width-collapsed: 52px;
+  --nav-width: 80px;
+  --nav-width-collapsed: 58px;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-decelerate: cubic-bezier(0, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
@@ -197,7 +197,7 @@ a { color: var(--md-primary); text-decoration: none; }
 .nav-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
   width: 100%;
   padding: 0 8px;
   flex: 1;
@@ -408,19 +408,19 @@ a { color: var(--md-primary); text-decoration: none; }
 
 .node-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px;
 }
 
 .node-card {
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--md-surface-container);
   border: 1.5px solid transparent;
   cursor: pointer;
   transition: background 150ms, border-color 150ms;
   display: flex; flex-direction: column; gap: 3px;
-  min-height: 68px;
+  min-height: 58px;
 }
 .node-card:hover { background: var(--md-surface-container-high); }
 .node-card.selected { border-color: var(--md-primary); background: var(--md-primary-container); }
@@ -477,6 +477,13 @@ a { color: var(--md-primary); text-decoration: none; }
 .proxy-fab.visible { display: flex; }
 .proxy-fab:hover { transform: translateY(-3px); }
 .proxy-fab.running { background: var(--green-container); color: var(--green); }
+
+.delay-fab {
+  z-index: 60;
+  display: none;
+}
+.delay-fab.visible { display: flex; }
+.delay-fab:hover { transform: translateY(-3px); }
 
 /* ── Settings ─────────────────────────────────────────────────── */
 
@@ -535,7 +542,7 @@ a { color: var(--md-primary); text-decoration: none; }
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
   .brand-mark, .bottom-item { display: none; }
-  .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; justify-content: space-around; }
+  .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; 3ustify-content: space-around; }
   .nav-item { flex: 1; padding: 6px 0 4px; border-radius: 0; }
   .app-shell { flex-direction: column; }
   .main-content { flex: 1; padding: 12px 10px 64px; }

@@ -104,8 +104,9 @@ function showView(view) {
     newView.classList.add('active');
     state.activeView = view;
     $('#pageTitle').textContent = VIEW_TITLES[view] || view;
-    // Proxy FAB only on dashboard
+    // FABs are window-anchored: proxy toggle on dashboard, delay test on proxies
     $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
+    $('#delayTestFab')?.classList.toggle('visible', view === 'proxies');
   }, oldView ? 80 : 0);
 
   // Update nav highlighting immediately
@@ -435,6 +436,7 @@ async function pollStatus() {
     if (wasRunning !== isRunning) {
       setRunning(isRunning);
       addLog(isRunning ? '免流模式已启动' : '免流模式已停止');
+      if (isRunning) autoDelayTestAfterStart();
     }
     state.mode = status.settings?.mode || state.mode;
     setMode(state.mode, false, true);
@@ -474,6 +476,7 @@ function wireEvents() {
         await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs }) });
         setRunning(true);
         addLog('免流模式已启动');
+        autoDelayTestAfterStart();
       }
     } catch (e) {
       addLog(`操作失败: ${e.message}`, true);
@@ -651,7 +654,24 @@ function resetFab() {
 }
 
 function wireProxyEvents() {
-  $('#delayTestFab')?.addEventListener('click', runDelayTest);
+ 
+
+/* Auto-run one delay test after 免流模式 starts */
+async function autoDelayTestAfterStart() {
+  addLog('启动完成，自动进行延迟测试');
+  // mihomo may need a moment before the proxy list is exposed
+  for (let i = 0; i < 10 && (!state.proxyGroup || !state.proxyGroup.all.length); i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (!state.proxyRunning) return;
+    await fetchProxies();
+  }
+  if (state.testingDelay) return;
+  if (state.proxyGroup && state.proxyGroup.all.length) {
+    runDelayTest();
+  } else {
+    addLog('自动延迟测试跳过: 节点列表未就绪', true);
+  }
+} $('#delayTestFab')?.addEventListener('click', runDelayTest);
 }
 
 /* ── Settings Page ────────────────────────────────────────────── */
