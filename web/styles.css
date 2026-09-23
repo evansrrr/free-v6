@@ -286,14 +286,29 @@ a { color: var(--md-primary); text-decoration: none; }
 
 .titlebar {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
   height: 48px;
   min-height: 48px;
-  padding-left: 24px;
   background: var(--md-surface);
   border-bottom: 1px solid var(--md-outline-variant);
   user-select: none;
+}
+/* Two zones mirroring the layout below: the brand is centered over the rail
+   column (--nav-width), and title/actions start at .main-content's left
+   padding — sidebar, titlebar and content all share one alignment grid. */
+.titlebar-rail {
+  width: var(--nav-width);
+  min-width: var(--nav-width);
+  display: grid;
+  place-items: center;
+}
+.titlebar-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 24px; /* must match .main-content left padding */
 }
 .titlebar .page-title { margin-right: auto; }
 
@@ -628,7 +643,9 @@ md-icon-button > md-icon {
   .app-shell { flex-direction: column; }
   .main-content { flex: 1; padding: 12px 10px 64px; }
   .card-traffic, .card-stats { grid-column: auto; }
-  .titlebar { height: 44px; min-height: 44px; padding-left: 16px; }
+  .titlebar { height: 44px; min-height: 44px; }
+  .titlebar-rail { width: auto; min-width: 0; padding-left: 16px; }
+  .titlebar-main { padding-left: 12px; gap: 8px; }
   .win-btn { width: 40px; }
   .log-drawer { top: 44px; }
   .scrim { inset: 44px 0 0; }
