@@ -35,7 +35,6 @@ type settings struct {
 type proxyRequest struct {
 	Mode        string   `json:"mode"`
 	CampusCIDRs []string `json:"campusCidrs"`
-	Blacklist   []string `json:"blacklist"`
 	DevMode     bool     `json:"devMode"`
 }
 
@@ -178,6 +177,13 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			entries = append(entries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.CampusCIDRs = entries
+		// The GUI no longer sends the blacklist — when the client omits the
+		// field, keep the value from settings.json (edit it there manually).
+		if current.Blacklist == nil {
+			if persisted, loadErr := h.loadSettings(); loadErr == nil {
+				current.Blacklist = persisted.Blacklist
+			}
+		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
 			if err := mihomo.ValidateDomain(entry); err != nil {
@@ -242,7 +248,13 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err)})
 		return
 	}
-	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs, Blacklist: input.Blacklist, DevMode: input.DevMode})
+	// The blacklist lives only in settings.json (no GUI editor) — load it
+	// fresh so manual file edits apply the next time the proxy starts.
+	blacklist := []string{}
+	if stored, storeErr := h.loadSettings(); storeErr == nil {
+		blacklist = stored.Blacklist
+	}
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs, Blacklist: blacklist, DevMode: input.DevMode})
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

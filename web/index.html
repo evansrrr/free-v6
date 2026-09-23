@@ -190,16 +190,6 @@
               </div>
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
-            <md-divider></md-divider>
-            <div class="setting-item clickable" id="blacklistSettingItem">
-              <div class="setting-icon">
-                <md-icon>block</md-icon>
-              </div>
-              <div class="setting-text">
-                <div class="setting-label">域名黑名单</div>
-              </div>
-              <md-icon class="setting-arrow">chevron_right</md-icon>
-            </div>
           </div>
 
           <div class="settings-group">
@@ -289,21 +279,6 @@
             <md-filled-button id="addCidr">添加</md-filled-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>
-        </div>
-
-        <div class="cidr-page" id="blacklistPage" style="display:none">
-          <div class="cidr-page-header">
-            <md-icon-button id="blacklistBack" aria-label="返回">
-              <md-icon>arrow_back</md-icon>
-            </md-icon-button>
-            <h2>域名黑名单</h2>
-          </div>
-          <p class="cidr-hint">填写要阻断的外网域名，如 ads.example.com（自动包含其所有子域名）。开发者模式开启时不生效。</p>
-          <div class="cidr-input-row">
-            <md-outlined-text-field id="blacklistInput" label="例如 ads.example.com" autocomplete="off"></md-outlined-text-field>
-            <md-filled-button id="addBlacklist">添加</md-filled-button>
-          </div>
-          <div class="cidr-list" id="blacklistList"></div>
         </div>
       </section>
 

@@ -6,7 +6,6 @@ const state = {
   proxyRunning: false,
   mode: 'rule',
   cidrs: [],
-  blacklist: [],
   devMode: false,
 
   // Traffic
@@ -173,7 +172,7 @@ function setMode(mode, persist = true, silent = false) {
 
 function persistSettings() {
   if (!state.helperOnline) return;
-  api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, blacklist: state.blacklist, devMode: state.devMode }) })
+  api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) })
     .then(() => addLog('设置已保存'))
     .catch(e => addLog(`保存设置失败: ${e.message}`, true));
 }
@@ -348,7 +347,6 @@ async function refreshBackendState() {
     state.helperOnline = true;
     state.mode = status.settings?.mode || state.mode;
     state.cidrs = status.settings?.campusCidrs || state.cidrs;
-    if (Array.isArray(status.settings?.blacklist)) state.blacklist = status.settings.blacklist;
     if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
 
     setMode(state.mode, false, true);
@@ -469,11 +467,9 @@ async function pollStatus() {
     }
     state.mode = status.settings?.mode || state.mode;
     setMode(state.mode, false, true);
-    // Sync blacklist / developer mode when they changed on the backend
-    const nextBlacklist = Array.isArray(status.settings?.blacklist) ? status.settings.blacklist : state.blacklist;
+    // Sync developer mode when it changed on the backend
     const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
-    if (nextDevMode !== state.devMode || nextBlacklist.join('\n') !== state.blacklist.join('\n')) {
-      state.blacklist = nextBlacklist;
+    if (nextDevMode !== state.devMode) {
       state.devMode = nextDevMode;
       updateSettingsUI();
     }
@@ -513,7 +509,7 @@ function wireEvents() {
         setRunning(false);
         addLog('免流模式已停止');
       } else {
-        await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, blacklist: state.blacklist, devMode: state.devMode }) });
+        await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
         setRunning(true);
         addLog('免流模式已启动');
         autoDelayTestAfterStart();
@@ -747,37 +743,14 @@ function renderCidrs() {
   });
 }
 
-function renderBlacklist() {
-  const list = $('#blacklistList');
-  if (!list) return;
-  if (!state.blacklist.length) {
-    list.innerHTML = '<div class="empty-state" style="padding:16px"><span>还没有要阻断的域名</span></div>';
-    return;
-  }
-  list.innerHTML = state.blacklist.map((domain, i) =>
-    `<div class="cidr-item"><span>${domain}</span><md-icon-button class="blacklist-remove" data-idx="${i}" aria-label="删除"><md-icon>close</md-icon></md-icon-button></div>`
-  ).join('');
-
-  list.querySelectorAll('.blacklist-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.idx);
-      const removed = state.blacklist.splice(idx, 1)[0];
-      renderBlacklist();
-      persistSettings();
-      addLog(`移除黑名单: ${removed}`);
-    });
-  });
-}
-
 function updateSettingsUI() {
   // Mode segmented chips (md-filter-chip)
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.selected = seg.dataset.mode === state.mode;
   });
 
-  // CIDR + blacklist lists, developer-mode switch
+  // CIDR list, developer-mode switch
   renderCidrs();
-  renderBlacklist();
   const devSwitch = $('#devModeSwitch');
   if (devSwitch) devSwitch.selected = state.devMode;
 
@@ -831,7 +804,7 @@ function wireSettingsEvents() {
     });
   });
 
-  // Settings sub-pages: whitelist + blacklist
+  // Settings sub-page: whitelist (the blacklist lives in settings.json only)
   const wireSubPage = (itemSelector, pageSelector, backSelector) => {
     $(itemSelector)?.addEventListener('click', () => {
       const page = $(pageSelector);
@@ -851,13 +824,10 @@ function wireSettingsEvents() {
     });
   };
   wireSubPage('#cidrSettingItem', '#cidrPage', '#cidrBack');
-  wireSubPage('#blacklistSettingItem', '#blacklistPage', '#blacklistBack');
 
-  // Add whitelist / blacklist entries
+  // Add whitelist entries
   $('#addCidr')?.addEventListener('click', addCidr);
   $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
-  $('#addBlacklist')?.addEventListener('click', addBlacklistEntry);
-  $('#blacklistInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBlacklistEntry(); });
 
   // Developer mode — when on, the blacklist is not applied
   $('#devModeSwitch')?.addEventListener('change', (e) => {
@@ -919,24 +889,6 @@ function addCidr() {
     renderCidrs();
     persistSettings();
     addLog(`添加条目: ${value}`);
-  }
-  input.value = '';
-}
-
-function addBlacklistEntry() {
-  const input = $('#blacklistInput');
-  if (!input) return;
-  const value = input.value.trim().toLowerCase();
-  if (!value) return;
-  if (value.includes('/') || !DOMAIN_ENTRY_RE.test(value)) {
-    addLog(`无效域名: ${value}`, true);
-    return;
-  }
-  if (!state.blacklist.includes(value)) {
-    state.blacklist.push(value);
-    renderBlacklist();
-    persistSettings();
-    addLog(`添加黑名单: ${value}`);
   }
   input.value = '';
 }
