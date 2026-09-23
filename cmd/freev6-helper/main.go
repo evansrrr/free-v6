@@ -248,10 +248,14 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err)})
 		return
 	}
-	// The blacklist lives only in settings.json (no GUI editor) — load it
-	// fresh so manual file edits apply the next time the proxy starts.
-	blacklist := []string{}
-	if stored, storeErr := h.loadSettings(); storeErr == nil {
+	// Default blacklist is compiled into the binary (blacklist.txt embedded
+	// at build time); a non-empty settings.json blacklist overrides it.
+	blacklist, blErr := mihomo.DefaultBlacklist()
+	if blErr != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": blErr.Error()})
+		return
+	}
+	if stored, storeErr := h.loadSettings(); storeErr == nil && len(stored.Blacklist) > 0 {
 		blacklist = stored.Blacklist
 	}
 	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs, Blacklist: blacklist, DevMode: input.DevMode})

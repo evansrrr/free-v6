@@ -14,6 +14,9 @@ state/
 *.local.json
 mihomo.yaml
 
+# Private default blacklist (embedded into the helper at build time)
+internal/mihomo/blacklist/blacklist.txt
+
 # Agent tooling (local only, not part of the project)
 .agents/
 docs/
