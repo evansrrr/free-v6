@@ -268,5 +268,5 @@ func endpointName(server string, port int) string {
 	parts := strings.Split(server, ":")
 	segment := parts[2]
 	tail := parts[len(parts)-1]
-	return fmt.Sprintf("WARP6-%s-%s-%d", segment, tail, port)
+	return fmt.Sprintf("%s-%s-%d", segment, tail, port)
 }
