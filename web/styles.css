@@ -235,7 +235,7 @@ a { color: var(--md-primary); text-decoration: none; }
   height: 36px;
   display: grid;
   place-items: center;
-  margin: 0;
+  margin: 0 0 20px;
   border-radius: var(--radius-sm);
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
@@ -282,35 +282,24 @@ a { color: var(--md-primary); text-decoration: none; }
   padding: 20px 24px 48px;
 }
 
-/* ── Immersive Title Bar ─────────────────────────────────────── */
+/* ── Custom Title Bar ─────────────────────────────────────── */
 
 .titlebar {
   display: flex;
   align-items: stretch;
-  height: 48px;
-  min-height: 48px;
+  height: 32px; /* same footprint as the native Windows caption it replaces */
+  min-height: 32px;
   background: var(--md-surface);
   border-bottom: 1px solid var(--md-outline-variant);
   user-select: none;
 }
-/* Two zones mirroring the layout below: the brand is centered over the rail
-   column (--nav-width), and title/actions start at .main-content's left
-   padding — sidebar, titlebar and content all share one alignment grid. */
-.titlebar-rail {
-  width: var(--nav-width);
-  min-width: var(--nav-width);
-  display: grid;
-  place-items: center;
-}
-.titlebar-main {
-  flex: 1;
-  min-width: 0;
+/* Page header lives inside .main-content, as before the custom bar */
+.topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 24px; /* must match .main-content left padding */
+  justify-content: space-between;
+  margin-bottom: 16px;
 }
-.titlebar .page-title { margin-right: auto; }
 
 .page-title {
   font-size: 20px;
@@ -318,7 +307,7 @@ a { color: var(--md-primary); text-decoration: none; }
 }
 
 /* Windows-style caption buttons (frameless window) */
-.window-controls { display: flex; height: 100%; flex-shrink: 0; }
+.window-controls { display: flex; height:100%; flex-shrink:0; margin-left:auto; }
 .win-btn {
   width: 46px; height: 100%;
   display: grid; place-items: center;
@@ -445,7 +434,7 @@ md-icon-button > md-icon {
 /* ── Log Drawer ───────────────────────────────────────────────── */
 
 .scrim {
-  position: fixed; inset: 48px 0 0; z-index: 90;
+  position: fixed; inset: 32px 0 0; z-index: 90;
   background: rgba(0,0,0,.4);
   opacity: 0; pointer-events: none;
   transition: opacity 250ms;
@@ -453,7 +442,7 @@ md-icon-button > md-icon {
 .scrim.open { opacity: 1; pointer-events: auto; }
 
 .log-drawer {
-  position: fixed; top: 48px; right: 0; bottom: 0;
+  position: fixed; top:32px; right:0; bottom:0;
   width: min(320px, 85vw);
   z-index: 100;
   background: var(--md-surface-container-low);
@@ -636,19 +625,14 @@ md-icon-button > md-icon {
     flex-direction: row; justify-content: space-around; padding: 0;
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
-  .bottom-item { display: none; }
+  .brand-mark, .bottom-item { display: none; }
   .nav-item span:not(.nav-icon) { display: none; }
   .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; justify-content: space-around; }
   .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
   .app-shell { flex-direction: column; }
   .main-content { flex: 1; padding: 12px 10px 64px; }
   .card-traffic, .card-stats { grid-column: auto; }
-  .titlebar { height: 44px; min-height: 44px; }
-  .titlebar-rail { width: auto; min-width: 0; padding-left: 16px; }
-  .titlebar-main { padding-left: 12px; gap: 8px; }
   .win-btn { width: 40px; }
-  .log-drawer { top: 44px; }
-  .scrim { inset: 44px 0 0; }
   .page-title { font-size: 17px; }
   .node-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .fab-item { bottom: 64px; right: 12px; }

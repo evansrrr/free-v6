@@ -945,11 +945,11 @@ function wireTitlebar() {
   // Drag anywhere on the bar (except buttons) to move; double-click toggles maximize
   bar.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('.window-controls, .topbar-actions')) return;
+    if (e.target.closest('.window-controls')) return;
     tauriInvoke('window_start_dragging');
   });
   bar.addEventListener('dblclick', (e) => {
-    if (e.target.closest('.window-controls, .topbar-actions')) return;
+    if (e.target.closest('.window-controls')) return;
     tauriInvoke('window_toggle_maximize').then(setMaxIcon);
   });
 }
