@@ -12,13 +12,12 @@
     "windows": [
       {
         "label": "main",
-        "title": "freev6",
+        "title": "",
         "width": 900,
         "height": 600,
         "minWidth": 720,
         "minHeight": 480,
         "resizable": true,
-        "decorations": false,
         "visible": true
       }
     ],
