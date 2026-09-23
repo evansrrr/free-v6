@@ -317,7 +317,14 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
 		return
 	}
-	_ = h.saveSettings(settings{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
+	// Persist onto the FULL stored settings — saving a partial struct here
+	// used to wipe blacklist/devMode on every proxy start, so the developer
+	// switch reverted after a page refresh.
+	stored, storeErr := h.loadSettings()
+	if storeErr != nil {
+		stored = defaultSettings()
+	}
+	_ = h.saveSettings(mergeStartSettings(stored, input))
 	writeJSON(writer, http.StatusOK, map[string]any{"running": true})
 }
 
@@ -392,6 +399,16 @@ func (h *helper) loadSettings() (settings, error) {
 		current.Blacklist = []string{}
 	}
 	return current, nil
+}
+
+// mergeStartSettings overlays a proxy-start request onto the stored settings:
+// mode/campus CIDRs/devMode reflect what actually started, while fields the
+// request never carries (the manually edited blacklist) are preserved.
+func mergeStartSettings(stored settings, input proxyRequest) settings {
+	stored.Mode = input.Mode
+	stored.CampusCIDRs = input.CampusCIDRs
+	stored.DevMode = input.DevMode
+	return stored
 }
 
 func (h *helper) saveSettings(current settings) error {

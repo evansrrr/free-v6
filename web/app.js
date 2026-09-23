@@ -171,10 +171,13 @@ function setMode(mode, persist = true, silent = false) {
 }
 
 function persistSettings() {
-  if (!state.helperOnline) return;
-  api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) })
-    .then(() => addLog('设置已保存'))
-    .catch(e => addLog(`保存设置失败: ${e.message}`, true));
+  if (!state.helperOnline) {
+    addLog('helper 未连接，设置未保存', true);
+    return Promise.resolve(false);
+  }
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) })
+    .then(() => { addLog('设置已保存'); return true; })
+    .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
 
 /* ── Traffic Chart (Canvas) ───────────────────────────────────── */
@@ -829,11 +832,20 @@ function wireSettingsEvents() {
   $('#addCidr')?.addEventListener('click', addCidr);
   $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
 
-  // Developer mode — when on, the blacklist is not applied
-  $('#devModeSwitch')?.addEventListener('change', (e) => {
-    state.devMode = e.target.selected;
-    persistSettings();
-    addLog(state.devMode ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
+  // Developer mode — when on, the blacklist is not applied. Only announce it
+  // after the helper confirmed the save; otherwise revert the switch so the
+  // UI never claims a state that did not persist (e.g. helper offline).
+  $('#devModeSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.devMode;
+    state.devMode = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.devMode = previous;
+      e.target.selected = previous;
+      return;
+    }
+    addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
   });
 
   // Download core
