@@ -28,11 +28,15 @@ type helper struct {
 type settings struct {
 	Mode        string   `json:"mode"`
 	CampusCIDRs []string `json:"campusCidrs"`
+	Blacklist   []string `json:"blacklist"`
+	DevMode     bool     `json:"devMode"`
 }
 
 type proxyRequest struct {
 	Mode        string   `json:"mode"`
 	CampusCIDRs []string `json:"campusCidrs"`
+	Blacklist   []string `json:"blacklist"`
+	DevMode     bool     `json:"devMode"`
 }
 
 type registerRequest struct {
@@ -44,7 +48,7 @@ func defaultCampusCIDRs() []string {
 }
 
 func defaultSettings() settings {
-	return settings{Mode: mihomo.ModeRule, CampusCIDRs: defaultCampusCIDRs()}
+	return settings{Mode: mihomo.ModeRule, CampusCIDRs: defaultCampusCIDRs(), Blacklist: []string{}}
 }
 
 func main() {
@@ -174,6 +178,15 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			entries = append(entries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.CampusCIDRs = entries
+		blacklistEntries := make([]string, 0, len(current.Blacklist))
+		for _, entry := range current.Blacklist {
+			if err := mihomo.ValidateDomain(entry); err != nil {
+				writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			blacklistEntries = append(blacklistEntries, strings.ToLower(strings.TrimSpace(entry)))
+		}
+		current.Blacklist = blacklistEntries
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -229,7 +242,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err)})
 		return
 	}
-	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs})
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs, Blacklist: input.Blacklist, DevMode: input.DevMode})
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -358,6 +371,9 @@ func (h *helper) loadSettings() (settings, error) {
 	}
 	if current.CampusCIDRs == nil {
 		current.CampusCIDRs = defaultCampusCIDRs()
+	}
+	if current.Blacklist == nil {
+		current.Blacklist = []string{}
 	}
 	return current, nil
 }

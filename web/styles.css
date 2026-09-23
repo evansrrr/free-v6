@@ -189,7 +189,7 @@
   md-fab, md-icon, md-icon-button, md-outlined-button, md-text-button,
   md-filled-button, md-filled-tonal-button, md-elevated-button,
   md-outlined-select, md-select-option, md-filter-chip,
-  md-outlined-text-field, md-circular-progress, md-divider
+  md-outlined-text-field, md-circular-progress, md-divider, md-switch
 )) { margin: 0; padding: 0; }
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 body {
@@ -534,6 +534,7 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
+.setting-desc { font-size: 11px; font-weight: 400; line-height: 1.4; color: var(--md-on-surface-variant); margin-top: 2px; }
 /* 核心 group controls: compact 32px buttons, 12/500 labels, 16px side padding */
 .setting-item md-filled-button {
   --md-filled-button-container-height: 32px;

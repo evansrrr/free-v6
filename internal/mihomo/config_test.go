@@ -72,3 +72,39 @@ func TestRenderRejectsIncompleteDevice(t *testing.T) {
 		t.Fatal("expected missing device data error")
 	}
 }
+
+func TestRenderBlacklist(t *testing.T) {
+	device := warp.Device{PrivateKey: "private", PeerPublicKey: "peer", IPv4: "172.16.0.2", IPv6: "2606:4700::2"}
+	blocked := "DOMAIN-SUFFIX,ads.example.com,REJECT"
+
+	config, err := RenderWithOptions(device, RenderOptions{
+		CampusCIDRs: []string{"edu.cn"},
+		Blacklist:   []string{"ADS.Example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(config, blocked) {
+		t.Fatalf("expected blacklist rule %q in config", blocked)
+	}
+	// The block must come before any campus bypass rule
+	if strings.Index(config, blocked) > strings.Index(config, "DOMAIN-SUFFIX,edu.cn,DIRECT") {
+		t.Fatal("blacklist REJECT must precede campus DIRECT rules")
+	}
+
+	devConfig, err := RenderWithOptions(device, RenderOptions{
+		CampusCIDRs: []string{"edu.cn"},
+		Blacklist:   []string{"ads.example.com"},
+		DevMode:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(devConfig, blocked) {
+		t.Fatal("developer mode must not emit blacklist REJECT rules")
+	}
+
+	if _, err := RenderWithOptions(device, RenderOptions{Blacklist: []string{"10.0.0.0/8"}}); err == nil {
+		t.Fatal("expected CIDR blacklist entry to be rejected (domains only)")
+	}
+}

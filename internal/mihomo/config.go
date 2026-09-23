@@ -50,6 +50,8 @@ const (
 type RenderOptions struct {
 	Mode        string
 	CampusCIDRs []string
+	Blacklist   []string
+	DevMode     bool
 }
 
 const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
@@ -148,6 +150,10 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	blacklist, err := normalizeBlacklist(options.Blacklist)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	b.WriteString(configHeader)
@@ -173,6 +179,12 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
 	}
 	b.WriteString("\nrules:\n")
+	if !options.DevMode {
+		// Blacklist wins: block external domains before any bypass/proxy rules
+		for _, domain := range blacklist {
+			fmt.Fprintf(&b, "  - DOMAIN-SUFFIX,%s,REJECT\n", domain)
+		}
+	}
 	for _, target := range campusTargets {
 		if !strings.Contains(target, "/") {
 			// Domain entry: bypass WARP for the domain and all of its subdomains
@@ -243,6 +255,39 @@ func normalizeCampusTargets(values []string) ([]string, error) {
 			continue
 		}
 		if err := ValidateCampusTarget(target); err != nil {
+			return nil, err
+		}
+		if seen[target] {
+			continue
+		}
+		seen[target] = true
+		result = append(result, target)
+	}
+	return result, nil
+}
+
+// ValidateDomain reports whether value is a bare domain such as pku.edu.cn.
+// Blacklist entries are domain-only: each blocks the domain and its subdomains.
+func ValidateDomain(value string) error {
+	target := strings.TrimSpace(strings.ToLower(value))
+	if target == "" {
+		return fmt.Errorf("empty domain")
+	}
+	if !validDomain(target) {
+		return fmt.Errorf("invalid domain %q", target)
+	}
+	return nil
+}
+
+func normalizeBlacklist(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		target := strings.TrimSpace(strings.ToLower(value))
+		if target == "" {
+			continue
+		}
+		if err := ValidateDomain(target); err != nil {
 			return nil, err
 		}
 		if seen[target] {
