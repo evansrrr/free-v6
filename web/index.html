@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#121318" />
-  <title></title>
+  <title>freev6</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@600;700;800&display=swap" />
@@ -29,11 +29,40 @@
   <script type="module" src="material.js"></script>
 </head>
 <body>
+  <!-- Immersive title bar — replaces the native Windows title bar -->
+  <header class="titlebar" id="titlebar">
+    <div class="titlebar-rail">
+      <div class="brand-mark" aria-label="freev6">F 6</div>
+    </div>
+    <div class="titlebar-main">
+      <h1 class="page-title" id="pageTitle">仪表盘</h1>
+      <div class="topbar-actions">
+        <span class="connection-chip" id="connectionChip">
+          <span class="status-dot" id="headerDot"></span>
+          <span id="headerStatus">未连接</span>
+        </span>
+        <md-icon-button id="refreshButton" title="刷新" aria-label="刷新">
+          <md-icon>refresh</md-icon>
+        </md-icon-button>
+      </div>
+    </div>
+    <div class="window-controls">
+      <button class="win-btn" id="winMinimize" aria-label="最小化">
+        <md-icon>remove</md-icon>
+      </button>
+      <button class="win-btn" id="winMaximize" aria-label="最大化">
+        <md-icon id="winMaximizeIcon">crop_square</md-icon>
+      </button>
+      <button class="win-btn win-close" id="winClose" aria-label="关闭">
+        <md-icon>close</md-icon>
+      </button>
+    </div>
+  </header>
+
   <div class="app-shell">
 
     <!-- Navigation Rail -->
     <aside class="rail" aria-label="主导航">
-      <div class="brand-mark" aria-label="freev6">F 6</div>
       <nav class="nav-list">
         <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
           <md-icon class="nav-icon">monitoring</md-icon>
@@ -55,20 +84,6 @@
     </aside>
 
     <main class="main-content" id="mainContent">
-
-      <!-- Top Bar -->
-      <header class="topbar">
-        <h1 class="page-title" id="pageTitle">仪表盘</h1>
-        <div class="topbar-actions">
-          <span class="connection-chip" id="connectionChip">
-            <span class="status-dot" id="headerDot"></span>
-            <span id="headerStatus">未连接</span>
-          </span>
-          <md-icon-button id="refreshButton" title="刷新" aria-label="刷新">
-            <md-icon>refresh</md-icon>
-          </md-icon-button>
-        </div>
-      </header>
 
       <!-- Dashboard -->
       <section class="view active" id="dashboardView">

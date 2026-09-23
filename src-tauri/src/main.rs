@@ -19,32 +19,49 @@ struct HelperState {
     stopping: Arc<AtomicBool>,
 }
 
-// Native titlebar has no way (config/API) to drop its icon on Windows, so
-// clear the window + class icons directly: the caption then draws with just
-// min/max/close. Taskbar/Alt+Tab fall back to the executable's icon.
-#[cfg(target_os = "windows")]
-mod titlebar {
-    #[link(name = "user32")]
-    extern "system" {
-        fn SendMessageW(hwnd: isize, msg: u32, wparam: isize, lparam: isize) -> isize;
-        fn SetClassLongPtrW(hwnd: isize, index: i32, new_val: isize) -> isize;
+// Custom window controls for the frameless (decorations: false) window.
+// Invoked from the web UI through __TAURI_INTERNALS__.invoke.
+
+#[tauri::command]
+fn window_minimize(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.minimize();
     }
+}
 
-    const WM_SETICON: u32 = 0x0080;
-    const ICON_SMALL: isize = 0;
-    const ICON_BIG: isize = 1;
-    const GCLP_HICON: i32 = -14;
-    const GCLP_HICONSM: i32 = -34;
-
-    pub fn hide(window: &tauri::WebviewWindow) {
-        let Ok(raw) = window.hwnd() else { return };
-        let hwnd = raw.0 as isize;
-        unsafe {
-            SendMessageW(hwnd, WM_SETICON, ICON_BIG, 0);
-            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, 0);
-            SetClassLongPtrW(hwnd, GCLP_HICON, 0);
-            SetClassLongPtrW(hwnd, GCLP_HICONSM, 0);
+#[tauri::command]
+fn window_toggle_maximize(app: tauri::AppHandle) -> bool {
+    if let Some(window) = app.get_webview_window("main") {
+        // WebviewWindow has no toggle_maximize in this version — flip manually
+        let maximized = window.is_maximized().unwrap_or(false);
+        if maximized {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
         }
+        return !maximized;
+    }
+    false
+}
+
+#[tauri::command]
+fn window_maximized(app: tauri::AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|window| window.is_maximized().ok())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn window_close(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
+fn window_start_dragging(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.start_dragging();
     }
 }
 
@@ -76,12 +93,15 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            #[cfg(target_os = "windows")]
-            if let Some(window) = app.get_webview_window("main") {
-                titlebar::hide(&window);
-            }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            window_minimize,
+            window_toggle_maximize,
+            window_maximized,
+            window_close,
+            window_start_dragging
+        ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")
         .run(|app, event| {

@@ -918,10 +918,47 @@ function loadSavedTheme() {
   if (select) select.value = theme;
 }
 
+/* ── Window Controls (immersive titlebar) ─────────────────────── */
+
+const tauriInvoke = (cmd, args) => {
+  const bridge = window.__TAURI__?.core || window.__TAURI_INTERNALS__;
+  return bridge ? bridge.invoke(cmd, args) : Promise.resolve(undefined);
+};
+
+function wireTitlebar() {
+  const bar = $('#titlebar');
+  if (!bar) return;
+  const maxIcon = $('#winMaximizeIcon');
+  const setMaxIcon = (maximized) => {
+    if (maxIcon) maxIcon.textContent = maximized ? 'filter_none' : 'crop_square';
+  };
+  const refreshMax = () => tauriInvoke('window_maximized').then(setMaxIcon);
+  refreshMax();
+
+  $('#winMinimize')?.addEventListener('click', () => tauriInvoke('window_minimize'));
+  $('#winMaximize')?.addEventListener('click', () =>
+    tauriInvoke('window_toggle_maximize').then(setMaxIcon));
+  $('#winClose')?.addEventListener('click', () => tauriInvoke('window_close'));
+  // Re-sync when the state may have changed elsewhere (e.g. Win+Arrow snap)
+  $('#winMaximize')?.addEventListener('mouseenter', refreshMax);
+
+  // Drag anywhere on the bar (except buttons) to move; double-click toggles maximize
+  bar.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.window-controls, .topbar-actions')) return;
+    tauriInvoke('window_start_dragging');
+  });
+  bar.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.window-controls, .topbar-actions')) return;
+    tauriInvoke('window_toggle_maximize').then(setMaxIcon);
+  });
+}
+
 /* ── Init ─────────────────────────────────────────────────────── */
 
 function init() {
   loadSavedTheme();
+  wireTitlebar();
   wireEvents();
   wireProxyEvents();
   wireSettingsEvents();
