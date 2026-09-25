@@ -19,6 +19,10 @@ struct HelperState {
     stopping: Arc<AtomicBool>,
 }
 
+// Set when the app is exiting for real (tray 退出 → app.exit). Close requests
+// arriving during teardown must not be swallowed by the close-to-tray handler.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
 // Custom window controls for the frameless (decorations: false) window.
 // Invoked from the web UI through __TAURI_INTERNALS__.invoke.
 
@@ -85,6 +89,7 @@ fn main() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -93,6 +98,14 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            // Tray-only launch (autostart Run entry passes --minimized): show
+            // nothing but the tray icon; normal launches show the window.
+            if !std::env::args_os().any(|arg| arg == "--minimized") {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -104,10 +117,27 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                stop_helper(app);
+        .run(|app, event| match event {
+            // Closing the window hides it to the tray; quitting lives in the
+            // tray menu (退出). Verified against tauri 2.11: CloseRequested
+            // carries CloseRequestApi with prevent_close().
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                if !QUITTING.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
             }
+            // Programmatic exit (tray 退出) — let any late close through.
+            tauri::RunEvent::ExitRequested { code: Some(_), .. } => {
+                QUITTING.store(true, Ordering::Release);
+            }
+            tauri::RunEvent::Exit => stop_helper(app),
+            _ => {}
         });
 }
 

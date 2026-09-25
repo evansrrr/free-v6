@@ -7,6 +7,7 @@ const state = {
   mode: 'rule',
   cidrs: [],
   devMode: false,
+  autoStart: false,
 
   // Traffic
   trafficHistory: [],
@@ -175,7 +176,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -351,6 +352,7 @@ async function refreshBackendState() {
     state.mode = status.settings?.mode || state.mode;
     state.cidrs = status.settings?.campusCidrs || state.cidrs;
     if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
+    if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
@@ -470,10 +472,12 @@ async function pollStatus() {
     }
     state.mode = status.settings?.mode || state.mode;
     setMode(state.mode, false, true);
-    // Sync developer mode when it changed on the backend
+    // Sync developer mode / auto-start when they changed on the backend
     const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
-    if (nextDevMode !== state.devMode) {
+    const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
+    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart) {
       state.devMode = nextDevMode;
+      state.autoStart = nextAutoStart;
       updateSettingsUI();
     }
   } catch (_) {
@@ -752,10 +756,12 @@ function updateSettingsUI() {
     seg.selected = seg.dataset.mode === state.mode;
   });
 
-  // CIDR list, developer-mode switch
+  // CIDR list, developer-mode + auto-start switches
   renderCidrs();
   const devSwitch = $('#devModeSwitch');
   if (devSwitch) devSwitch.selected = state.devMode;
+  const autoSwitch = $('#autoStartSwitch');
+  if (autoSwitch) autoSwitch.selected = state.autoStart;
 
   // mihomo core row (status + download merged): pill when installed,
   // download button when the core was not detected, '--' while unknown
@@ -846,6 +852,22 @@ function wireSettingsEvents() {
       return;
     }
     addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
+  });
+
+  // Auto-start with Windows — helper writes the HKCU Run entry (launches the
+  // exe with --minimized → tray only). Same contract as developer mode:
+  // announce only after the helper confirmed, revert the switch on failure.
+  $('#autoStartSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.autoStart;
+    state.autoStart = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.autoStart = previous;
+      e.target.selected = previous;
+      return;
+    }
+    addLog(next ? '已开启开机自启动（启动后仅驻留托盘）' : '已关闭开机自启动');
   });
 
   // Download core

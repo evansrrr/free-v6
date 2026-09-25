@@ -30,6 +30,7 @@ type settings struct {
 	CampusCIDRs []string `json:"campusCidrs"`
 	Blacklist   []string `json:"blacklist"`
 	DevMode     bool     `json:"devMode"`
+	AutoStart   bool     `json:"autoStart"`
 }
 
 type proxyRequest struct {
@@ -53,6 +54,13 @@ func defaultSettings() settings {
 func main() {
 	root := executableRoot()
 	h := &helper{root: root}
+	// Keep the HKCU Run entry pointed at the current exe while autostart is on
+	// (covers app updates that move the install directory).
+	if current, err := h.loadSettings(); err == nil && current.AutoStart {
+		if syncErr := applyAutoStart(root); syncErr != nil {
+			fmt.Fprintf(os.Stderr, "autostart re-apply failed: %v\n", syncErr)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/status", h.status)
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
@@ -177,12 +185,14 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			entries = append(entries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.CampusCIDRs = entries
-		// The GUI no longer sends the blacklist — when the client omits the
-		// field, keep the value from settings.json (edit it there manually).
+		persisted, loadErr := h.loadSettings()
+		if loadErr != nil {
+			persisted = defaultSettings()
+		}
+		// The GUI never sends the blacklist — when the client omits the field,
+		// keep the value from settings.json (edit it there manually).
 		if current.Blacklist == nil {
-			if persisted, loadErr := h.loadSettings(); loadErr == nil {
-				current.Blacklist = persisted.Blacklist
-			}
+			current.Blacklist = persisted.Blacklist
 		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
@@ -193,6 +203,21 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			blacklistEntries = append(blacklistEntries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.Blacklist = blacklistEntries
+		// Autostart toggles the HKCU Run entry as a side effect, BEFORE the file
+		// is written: a registry failure returns 500 so the GUI reverts the
+		// switch instead of claiming a state that never took effect.
+		if persisted.AutoStart != current.AutoStart {
+			var syncErr error
+			if current.AutoStart {
+				syncErr = applyAutoStart(h.root)
+			} else {
+				syncErr = removeAutoStart()
+			}
+			if syncErr != nil {
+				writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": syncErr.Error()})
+				return
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
