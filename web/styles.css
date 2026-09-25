@@ -638,3 +638,43 @@ md-icon-button > md-icon {
   .fab-item { bottom: 64px; right: 12px; }
   .setting-item { padding: 10px 12px; }
 }
+
+/* ── OLED 纯黑背景（纯黑背景开关，仅深色主题生效）──────────── */
+
+[data-theme="dark"][data-oled="1"] {
+  --md-surface: #000000;
+  --md-surface-dim: #000000;
+  --md-surface-container-lowest: #000000;
+  --md-surface-container-low: #000000;
+  --md-surface-container: #000000;
+  /* dropdown menus keep a lifted surface so their bounds stay visible */
+  --md-menu-container-color: #1c1d24;
+}
+/* black-on-black structure: give cards/groups an edge without layout shift */
+[data-theme="dark"][data-oled="1"] .card,
+[data-theme="dark"][data-oled="1"] .settings-group {
+  outline: 1px solid var(--md-outline-variant);
+  outline-offset: -1px;
+}
+[data-theme="dark"][data-oled="1"] .node-card {
+  border-color: var(--md-outline-variant);
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"][data-oled="1"] {
+    --md-surface: #000000;
+    --md-surface-dim: #000000;
+    --md-surface-container-lowest: #000000;
+    --md-surface-container-low: #000000;
+    --md-surface-container: #000000;
+    --md-menu-container-color: #1c1d24;
+  }
+  [data-theme="system"][data-oled="1"] .card,
+  [data-theme="system"][data-oled="1"] .settings-group {
+    outline: 1px solid var(--md-outline-variant);
+    outline-offset: -1px;
+  }
+  [data-theme="system"][data-oled="1"] .node-card {
+    border-color: var(--md-outline-variant);
+  }
+}

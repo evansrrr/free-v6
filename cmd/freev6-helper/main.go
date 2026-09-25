@@ -64,6 +64,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/status", h.status)
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
+	mux.HandleFunc("/api/v1/appearance", h.appearance)
 	mux.HandleFunc("/api/v1/runtime/download", h.downloadRuntime)
 	mux.HandleFunc("/api/v1/settings", h.settings)
 	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)

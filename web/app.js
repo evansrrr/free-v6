@@ -8,6 +8,10 @@ const state = {
   cidrs: [],
   devMode: false,
   autoStart: false,
+  // Appearance (persisted in localStorage, like the theme)
+  dynamicColor: false,
+  pureBlack: false,
+  dynamicSeed: null,
 
   // Traffic
   trafficHistory: [],
@@ -363,6 +367,7 @@ async function refreshBackendState() {
       state.runtimePresent = Boolean(runtime.present);
       state.runtimeChecked = true;
     } catch (_) { /* ignore */ }
+    if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
 
     updateConnectionChip(true);
 
@@ -462,7 +467,11 @@ async function pollStatus() {
     } catch (_) {
       if (firstConnect) updateConnectionChip(true);
     }
-    if (firstConnect) addLog('已连接 freev6 helper');
+    if (firstConnect) {
+      addLog('已连接 freev6 helper');
+      // Helper is up: retry a dynamic-color seed fetch that failed at load
+      if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
+    }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
     if (wasRunning !== isRunning) {
@@ -762,6 +771,10 @@ function updateSettingsUI() {
   if (devSwitch) devSwitch.selected = state.devMode;
   const autoSwitch = $('#autoStartSwitch');
   if (autoSwitch) autoSwitch.selected = state.autoStart;
+  const dynSwitch = $('#dynamicColorSwitch');
+  if (dynSwitch) dynSwitch.selected = state.dynamicColor;
+  const oledSwitch = $('#pureBlackSwitch');
+  if (oledSwitch) oledSwitch.selected = state.pureBlack;
 
   // mihomo core row (status + download merged): pill when installed,
   // download button when the core was not detected, '--' while unknown
@@ -870,6 +883,28 @@ function wireSettingsEvents() {
     addLog(next ? '已开启开机自启动（启动后仅驻留托盘）' : '已关闭开机自启动');
   });
 
+  // Dynamic color — seed from the wallpaper (system accent as fallback) via
+  // the helper; persists in localStorage and applies immediately.
+  $('#dynamicColorSwitch')?.addEventListener('change', async (e) => {
+    state.dynamicColor = e.target.selected;
+    try { localStorage.setItem('freev6-dynamic-color', state.dynamicColor ? '1' : '0'); } catch (_) {}
+    if (state.dynamicColor) {
+      await refreshDynamicColor(false);
+    } else {
+      state.dynamicSeed = null;
+      applyDynamicPalette();
+      addLog('动态取色已关闭');
+    }
+  });
+
+  // Pure black background (OLED) — surfaces go #000, dark themes only
+  $('#pureBlackSwitch')?.addEventListener('change', (e) => {
+    state.pureBlack = e.target.selected;
+    try { localStorage.setItem('freev6-pure-black', state.pureBlack ? '1' : '0'); } catch (_) {}
+    applyPureBlack(state.pureBlack);
+    addLog(state.pureBlack ? '纯黑背景已开启（深色主题下生效）' : '纯黑背景已关闭');
+  });
+
   // Download core
   $('#downloadCore')?.addEventListener('click', async () => {
     if (!state.helperOnline) { addLog('helper 未连接', true); return; }
@@ -930,13 +965,16 @@ function addCidr() {
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   try { localStorage.setItem('freev6-theme', theme); } catch (_) {}
+  // The derived palette's lightness depends on dark vs light — re-derive
+  if (state.dynamicColor && state.dynamicSeed) applyDynamicPalette();
   // Listen for system changes when in system mode
   if (theme === 'system') {
     if (!state._systemThemeListener) {
       state._systemThemeListener = window.matchMedia('(prefers-color-scheme: light)');
       state._systemThemeListener.addEventListener('change', () => {
-        // CSS variables auto-switch via [data-theme="system"] + media query
-        // No JS action needed, but we can log
+        // CSS variables auto-switch via [data-theme="system"] + media query;
+        // the derived palette needs a manual re-derive for the new scheme
+        applyDynamicPalette();
       });
     }
   }
@@ -950,6 +988,136 @@ function loadSavedTheme() {
   applyTheme(theme);
   const select = $('#themeSelect');
   if (select) select.value = theme;
+}
+
+/* ── Appearance: dynamic color + OLED black ────────────────────── */
+
+const DYNAMIC_PALETTE_VARS = [
+  '--md-primary', '--md-on-primary', '--md-primary-container', '--md-on-primary-container',
+  '--md-secondary', '--md-on-secondary', '--md-secondary-container', '--md-on-secondary-container',
+  '--md-tertiary', '--md-on-tertiary', '--md-tertiary-container', '--md-on-tertiary-container',
+];
+
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+function hexToHsl(hex) {
+  const value = parseInt(hex.replace('#', ''), 16);
+  const r = (value >> 16 & 255) / 255;
+  const g = (value >> 8 & 255) / 255;
+  const b = (value & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return { h: h * 60, s, l };
+}
+
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  const to = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+function isDarkTheme() {
+  const theme = document.documentElement.getAttribute('data-theme');
+  if (theme === 'light') return false;
+  if (theme === 'dark') return true;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+// Material-You-ish three-family palette derived from one seed color.
+// Returns hex values (canvas/utils parse hex only).
+function derivePalette(seedHex, dark) {
+  const { h, s } = hexToHsl(seedHex);
+  // Gray seeds (wallpaper without a dominant hue) get a sensible chroma
+  const S = clamp(s < 0.12 ? 0.45 : s, 0.30, 0.90);
+  const hex = (hh, ss, ll) => hslToHex(hh, clamp(ss, 0, 1), clamp(ll, 0, 1));
+  const T = h + 60; // tertiary hue rotation (M3-ish)
+  if (dark) {
+    return {
+      '--md-primary': hex(h, S, 0.68),
+      '--md-on-primary': hex(h, Math.min(S, 0.45), 0.12),
+      '--md-primary-container': hex(h, S * 0.45, 0.30),
+      '--md-on-primary-container': hex(h, S, 0.86),
+      '--md-secondary': hex(h, S * 0.35, 0.74),
+      '--md-on-secondary': hex(h, 0.20, 0.12),
+      '--md-secondary-container': hex(h, S * 0.25, 0.30),
+      '--md-on-secondary-container': hex(h, S * 0.50, 0.86),
+      '--md-tertiary': hex(T, S * 0.50, 0.72),
+      '--md-on-tertiary': hex(T, 0.30, 0.12),
+      '--md-tertiary-container': hex(T, S * 0.35, 0.30),
+      '--md-on-tertiary-container': hex(T, S * 0.60, 0.86),
+    };
+  }
+  return {
+    '--md-primary': hex(h, S, 0.42),
+    '--md-on-primary': hex(h, Math.min(S, 0.6), 0.99),
+    '--md-primary-container': hex(h, S * 0.40, 0.90),
+    '--md-on-primary-container': hex(h, S, 0.18),
+    '--md-secondary': hex(h, S * 0.30, 0.45),
+    '--md-on-secondary': hex(h, 0.30, 0.99),
+    '--md-secondary-container': hex(h, S * 0.25, 0.90),
+    '--md-on-secondary-container': hex(h, S * 0.50, 0.18),
+    '--md-tertiary': hex(T, S * 0.45, 0.45),
+    '--md-on-tertiary': hex(T, 0.35, 0.99),
+    '--md-tertiary-container': hex(T, S * 0.30, 0.90),
+    '--md-on-tertiary-container': hex(T, S * 0.50, 0.18),
+  };
+}
+
+function applyDynamicPalette() {
+  const root = document.documentElement;
+  DYNAMIC_PALETTE_VARS.forEach(name => root.style.removeProperty(name));
+  if (!state.dynamicColor || !state.dynamicSeed) return;
+  const palette = derivePalette(state.dynamicSeed, isDarkTheme());
+  Object.keys(palette).forEach(name => root.style.setProperty(name, palette[name]));
+}
+
+async function refreshDynamicColor(silent = false) {
+  if (!state.dynamicColor) return;
+  try {
+    const res = await api('/appearance');
+    if (!res.color) {
+      if (!silent) addLog('动态取色：壁纸与系统强调色均不可用', true);
+      return;
+    }
+    state.dynamicSeed = res.color;
+    applyDynamicPalette();
+    if (!silent) {
+      addLog(res.source === 'wallpaper'
+        ? `动态取色已应用（壁纸主色 ${res.color}）`
+        : `动态取色已应用（系统强调色 ${res.color}）`);
+    }
+  } catch (e) {
+    if (!silent) addLog(`动态取色失败: ${e.message}`, true);
+    // silent = background retry; the seed is fetched again on helper (re)connect
+  }
+}
+
+function applyPureBlack(on) {
+  if (on) document.documentElement.setAttribute('data-oled', '1');
+  else document.documentElement.removeAttribute('data-oled');
+}
+
+function loadAppearancePrefs() {
+  try {
+    state.dynamicColor = localStorage.getItem('freev6-dynamic-color') === '1';
+    state.pureBlack = localStorage.getItem('freev6-pure-black') === '1';
+  } catch (_) {}
+  applyPureBlack(state.pureBlack);
+  if (state.dynamicColor) refreshDynamicColor(true); // helper may still be connecting
 }
 
 /* ── Window Controls (immersive titlebar) ─────────────────────── */
@@ -992,6 +1160,7 @@ function wireTitlebar() {
 
 function init() {
   loadSavedTheme();
+  loadAppearancePrefs();
   wireTitlebar();
   wireEvents();
   wireProxyEvents();
