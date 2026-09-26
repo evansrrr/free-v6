@@ -1,6 +1,6 @@
 [package]
 name = "freev6-desktop"
-version = "0.2.3"
+version = "0.2.8"
 description = "Free V6 for CERNET2"
 authors = ["freev6 contributors"]
 edition = "2021"
