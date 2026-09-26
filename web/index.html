@@ -373,10 +373,9 @@
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="quitDialogTitle">
       <md-icon class="net-dialog-icon">power_settings_new</md-icon>
       <h3 id="quitDialogTitle">退出 freev6？</h3>
-      <p>免流模式仍在运行。直接退出后，mihomo 会继续在后台接管流量（TUN），只能在任务管理器中结束它，或重新打开软件再停止免流。</p>
+      <p>免流模式仍在运行，退出前会先停止免流（mihomo），避免它继续在后台接管流量。</p>
       <div class="net-dialog-actions">
         <md-text-button id="quitDialogCancel">取消</md-text-button>
-        <md-text-button id="quitDialogQuit">直接退出</md-text-button>
         <md-filled-button id="quitDialogStopQuit">停止并退出</md-filled-button>
       </div>
     </div>

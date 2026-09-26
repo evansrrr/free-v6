@@ -81,7 +81,15 @@ func main() {
 	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
 	mux.HandleFunc("/api/v1/warp/register", h.registerWarp)
 	server := &http.Server{Addr: listenAddress, Handler: withCORS(mux), ReadHeaderTimeout: 5 * time.Second}
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	// Bind with orphan takeover: killing the desktop via Task Manager leaves
+	// its helper child alive (Windows doesn't cascade-kill), and that orphan
+	// otherwise holds :13335 forever — every relaunch died on the bind error.
+	listener, err := listenOrTakeOver(listenAddress)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "helper: %v\n", err)
+		os.Exit(1)
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic(err)
 	}
 }

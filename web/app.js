@@ -692,7 +692,6 @@ function wireEvents() {
 
   // Quit confirm dialog: act via buttons, dismiss via backdrop or Escape
   $('#quitDialogCancel')?.addEventListener('click', closeQuitDialog);
-  $('#quitDialogQuit')?.addEventListener('click', quitDirectly);
   $('#quitDialogStopQuit')?.addEventListener('click', stopAndQuit);
   $('#quitDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'quitDialogScrim') closeQuitDialog();
