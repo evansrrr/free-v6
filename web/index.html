@@ -155,7 +155,7 @@
         <div class="node-grid" id="nodeGrid">
           <div class="empty-state">
             <md-icon class="empty-state-icon">cloud_off</md-icon>
-            <span>请先启动免流模式以加载节点列表</span>
+            <span>启动免流模式以加载接入点列表</span>
           </div>
         </div>
       </section>
@@ -171,7 +171,7 @@
                 <md-icon>light_mode</md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">外观主题</div>
+                <div class="setting-label">主题</div>
               </div>
               <md-outlined-select id="themeSelect" class="setting-md-select" aria-label="主题">
                 <md-select-option value="dark">深色</md-select-option>
@@ -245,7 +245,7 @@
                 <md-icon>memory</md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">运行核心</div>
+                <div class="setting-label">核心状态</div>
               </div>
               <span class="setting-pill" id="runtimePill">--</span>
               <md-filled-button id="downloadCore" hidden>下载</md-filled-button>
@@ -346,6 +346,16 @@
     <md-icon slot="icon" id="fabIcon">bolt</md-icon>
     <md-circular-progress slot="icon" id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
   </md-fab>
+
+  <!-- IPv6 gate: shown when the current network can't run 免流 -->
+  <div class="net-dialog-scrim" id="netDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
+      <md-icon class="net-dialog-icon">language</md-icon>
+      <h3 id="netDialogTitle">当前网络不支持免流</h3>
+      <p>未检测到 IPv6 地址，或 IPv6 不属于校园网段 <code>2001:DA8::/32</code>、<code>2001:250::/32</code>。请连接校园网后再启动免流模式。</p>
+      <md-filled-button id="netDialogOk">知道了</md-filled-button>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

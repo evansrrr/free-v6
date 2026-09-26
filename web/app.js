@@ -162,6 +162,61 @@ function updateConnectionChip(online) {
   }
 }
 
+/* ── IPv6 gate (启动免流前检测) ─────────────────────────────── */
+
+// Campus prefixes allowed to run 免流, as /32 first-two-hextet fingerprints:
+// 2001:da8::/32 (CERNET2) and 2001:250::/32.
+const MIULIU_IPV6_PREFIX32 = [[0x2001, 0x0da8], [0x2001, 0x0250]];
+
+// Expand an IPv6 literal to its 8 hextets, or null when unparsable.
+function expandIPv6(ip) {
+  const cleaned = String(ip).trim().split('%')[0].toLowerCase();
+  if (!/^[0-9a-f:]+$/.test(cleaned) || !cleaned.includes(':')) return null;
+  const halves = cleaned.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  let groups;
+  if (halves.length === 2) {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 1) return null; // '::' must stand for at least one group
+    groups = [...head, ...Array(fill).fill('0'), ...tail];
+  } else {
+    groups = head;
+    if (groups.length !== 8) return null;
+  }
+  if (groups.length !== 8) return null;
+  const nums = groups.map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
+  return nums.some(Number.isNaN) ? null : nums;
+}
+
+function isInCampusIPv6(ip) {
+  const groups = expandIPv6(ip);
+  if (!groups) return false;
+  return MIULIU_IPV6_PREFIX32.some(([a, b]) => groups[0] === a && groups[1] === b);
+}
+
+// Ask a public echo service for this machine's IPv6 (CORS: * verified).
+async function detectPublicIPv6(timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch('https://api-ipv6.ip.sb/ip', { signal: controller.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return (await resp.text()).trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function showNetGateDialog() {
+  $('#netDialogScrim')?.classList.add('open');
+}
+
+function closeNetGateDialog() {
+  $('#netDialogScrim')?.classList.remove('open');
+}
+
 /* ── Mode Selector ────────────────────────────────────────────── */
 
 function setMode(mode, persist = true, silent = false) {
@@ -525,6 +580,26 @@ function wireEvents() {
         setRunning(false);
         addLog('免流模式已停止');
       } else {
+        // IPv6 gate: 免流 only works on campus IPv6. Developer mode skips it.
+        if (!state.devMode) {
+          fab.label = '检测中…';
+          addLog('启动前检测本机 IPv6…');
+          let ip = '';
+          let reason = '';
+          try {
+            ip = await detectPublicIPv6();
+          } catch (e) {
+            reason = `（检测失败: ${e.message}）`;
+          }
+          if (!isInCampusIPv6(ip)) {
+            showNetGateDialog();
+            addLog(`启动已取消：当前网络不支持免流${reason}`, true);
+            return;
+          }
+          addLog(`IPv6 检测通过: ${ip}`);
+        } else {
+          addLog('开发者模式：跳过 IPv6 检测');
+        }
         await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
         setRunning(true);
         addLog('免流模式已启动');
@@ -535,6 +610,7 @@ function wireEvents() {
     } finally {
       fab.style.pointerEvents = '';
       fab.style.opacity = '';
+      if (!state.proxyRunning) fab.label = '启动免流';
     }
   });
 
@@ -547,6 +623,15 @@ function wireEvents() {
     $('#logDrawer')?.classList.remove('open');
     $('#scrim')?.classList.remove('open');
   };
+
+  // Unsupported-network dialog: dismiss via button, backdrop or Escape
+  $('#netDialogOk')?.addEventListener('click', closeNetGateDialog);
+  $('#netDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'netDialogScrim') closeNetGateDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeNetGateDialog();
+  });
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
 
