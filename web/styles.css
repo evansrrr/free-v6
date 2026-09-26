@@ -500,6 +500,16 @@ md-icon-button > md-icon {
   --md-filled-button-label-text-line-height: 16px;
   margin-top: 4px;
 }
+.net-dialog-actions {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px;
+  margin-top: 4px;
+}
+.net-dialog-actions md-filled-button { margin-top: 0; }
+.net-dialog-actions md-text-button {
+  --md-text-button-container-height: 32px;
+  --md-text-button-label-text-size: 12px;
+  --md-text-button-label-text-line-height: 16px;
+}
 
 .drawer-header {
   display: flex; align-items: center; justify-content: space-between;

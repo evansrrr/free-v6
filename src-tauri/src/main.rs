@@ -69,6 +69,18 @@ fn window_start_dragging(app: tauri::AppHandle) {
     }
 }
 
+// Un-hide the window so the quit confirmation is visible even when the app
+// runs tray-only (close-to-tray, --minimized, 静默启动).
+#[tauri::command]
+fn window_show(app: tauri::AppHandle) {
+    show_main_window(&app);
+}
+
+#[tauri::command]
+fn app_quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 // Show (or restore) the main GUI window — shared by the tray menu item and
 // the tray left-click handler.
 fn show_main_window(app: &tauri::AppHandle) {
@@ -172,7 +184,18 @@ fn main() {
                 })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
-                    "quit" => app.exit(0),
+                    // Hand off to the web UI: it confirms with the user when
+                    // 免流 is still running — mihomo is an independent TUN
+                    // process that would outlive the app — then invokes
+                    // app_quit. If the webview isn't ready yet the eval is a
+                    // no-op (quitting within ms of launch is a non-issue).
+                    "quit" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.eval("window.handleTrayQuit && window.handleTrayQuit()");
+                        } else {
+                            app.exit(0);
+                        }
+                    }
                     _ => {}
                 })
                 .build(app)?;
@@ -192,7 +215,9 @@ fn main() {
             window_toggle_maximize,
             window_maximized,
             window_close,
-            window_start_dragging
+            window_start_dragging,
+            window_show,
+            app_quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")

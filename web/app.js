@@ -224,6 +224,53 @@ function closeNetGateDialog() {
   $('#netDialogScrim')?.classList.remove('open');
 }
 
+/* ── Quit confirm (tray 退出) ──────────────────────────────── */
+
+function openQuitDialog() {
+  $('#quitDialogScrim')?.classList.add('open');
+}
+
+function closeQuitDialog() {
+  $('#quitDialogScrim')?.classList.remove('open');
+}
+
+// Stop 免流 first, then quit — a failed stop keeps the app open so the
+// error stays visible instead of quitting over a broken state.
+async function stopAndQuit() {
+  closeQuitDialog();
+  try {
+    await api('/proxy/stop', { method: 'POST' });
+    setRunning(false);
+    addLog('免流模式已停止');
+  } catch (e) {
+    addLog(`停止免流失败: ${e.message}`, true);
+    return;
+  }
+  await tauriInvoke('app_quit');
+}
+
+function quitDirectly() {
+  closeQuitDialog();
+  tauriInvoke('app_quit').then(() => {
+    if (!(window.__TAURI__?.core || window.__TAURI_INTERNALS__)) {
+      addLog('浏览器预览环境无法退出应用', true);
+    }
+  });
+}
+
+// Called by main.rs (webview.eval) when tray 退出 is clicked — works with
+// the window hidden. 免流 running → un-hide and ask: mihomo is an
+// independent TUN process that keeps接管流量 after the app exits.
+async function handleTrayQuit() {
+  if (state.proxyRunning) {
+    await tauriInvoke('window_show');
+    openQuitDialog();
+    return;
+  }
+  quitDirectly();
+}
+window.handleTrayQuit = handleTrayQuit;
+
 /* ── Mode Selector ────────────────────────────────────────────── */
 
 function setMode(mode, persist = true, silent = false) {
@@ -641,6 +688,17 @@ function wireEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeNetGateDialog();
+  });
+
+  // Quit confirm dialog: act via buttons, dismiss via backdrop or Escape
+  $('#quitDialogCancel')?.addEventListener('click', closeQuitDialog);
+  $('#quitDialogQuit')?.addEventListener('click', quitDirectly);
+  $('#quitDialogStopQuit')?.addEventListener('click', stopAndQuit);
+  $('#quitDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'quitDialogScrim') closeQuitDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeQuitDialog();
   });
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
