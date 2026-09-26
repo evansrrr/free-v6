@@ -105,6 +105,34 @@ fn task_manager_allows_autostart() -> bool {
     }
 }
 
+// Tray-only launch decision: the autostart task passes --minimized/--autostart,
+// and 静默启动 (设置 → 通用) makes EVERY launch skip the window. The setting is
+// read from config/settings.json next to the exe (the helper persists the
+// silentStart field there); whitespace is stripped first so hand-edited
+// spacing still matches. Manual launches without it show the window.
+fn should_show_window() -> bool {
+    let flagged = std::env::args().any(|arg| {
+        let arg = arg.as_str();
+        arg == "--minimized" || arg == "--autostart"
+    });
+    if flagged {
+        return false;
+    }
+    let silent = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()
+                .map(|dir| dir.join("config").join("settings.json"))
+        })
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|raw| {
+            let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+            compact.contains("\"silentStart\":true")
+        })
+        .unwrap_or(false);
+    !silent
+}
+
 fn main() {
     // Launched by the autostart logon task: honor Task Manager's Startup tab
     // toggle before any window or tray icon exists. Manual launches have no
@@ -148,9 +176,10 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            // Tray-only launch (autostart Run entry passes --minimized): show
-            // nothing but the tray icon; normal launches show the window.
-            if !std::env::args_os().any(|arg| arg == "--minimized") {
+            // Tray-only launch: autostart flags (--minimized/--autostart) or
+            // 静默启动 on → show nothing but the tray icon; otherwise the
+            // window starts hidden (tauri.conf visible:false) and appears here.
+            if should_show_window() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();

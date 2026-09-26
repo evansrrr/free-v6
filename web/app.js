@@ -8,6 +8,7 @@ const state = {
   cidrs: [],
   devMode: false,
   autoStart: false,
+  silentStart: false,
   // Appearance (persisted in localStorage, like the theme)
   dynamicColor: false,
   pureBlack: false,
@@ -241,7 +242,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -418,6 +419,7 @@ async function refreshBackendState() {
     state.cidrs = status.settings?.campusCidrs || state.cidrs;
     if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
     if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
+    if (typeof status.settings?.silentStart === 'boolean') state.silentStart = status.settings.silentStart;
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
@@ -545,9 +547,11 @@ async function pollStatus() {
     // Sync developer mode / auto-start when they changed on the backend
     const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
     const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
-    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart) {
+    const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
+    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart) {
       state.devMode = nextDevMode;
       state.autoStart = nextAutoStart;
+      state.silentStart = nextSilentStart;
       updateSettingsUI();
     }
   } catch (_) {
@@ -864,6 +868,8 @@ function updateSettingsUI() {
   if (devSwitch) devSwitch.selected = state.devMode;
   const autoSwitch = $('#autoStartSwitch');
   if (autoSwitch) autoSwitch.selected = state.autoStart;
+  const silentSwitch = $('#silentStartSwitch');
+  if (silentSwitch) silentSwitch.selected = state.silentStart;
   const dynSwitch = $('#dynamicColorSwitch');
   if (dynSwitch) dynSwitch.selected = state.dynamicColor;
   const oledSwitch = $('#pureBlackSwitch');
@@ -961,9 +967,9 @@ function wireSettingsEvents() {
     addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
   });
 
-  // Auto-start with Windows — helper writes the HKCU Run entry (launches the
-  // exe with --minimized → tray only). Same contract as developer mode:
-  // announce only after the helper confirmed, revert the switch on failure.
+  // Auto-start with Windows — helper registers the ONLOGON task plus the
+  // Task Manager marker entry (tray-only launch). Same contract as developer
+  // mode: announce only after the helper confirmed, revert on failure.
   $('#autoStartSwitch')?.addEventListener('change', async (e) => {
     const next = e.target.selected;
     const previous = state.autoStart;
@@ -975,6 +981,21 @@ function wireSettingsEvents() {
       return;
     }
     addLog(next ? '已开启开机自启动（启动后仅驻留托盘）' : '已关闭开机自启动');
+  });
+
+  // Silent start — with it on, every launch (autostart or manual) skips the
+  // window and only shows the tray icon. Same revert-on-failure contract.
+  $('#silentStartSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.silentStart;
+    state.silentStart = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.silentStart = previous;
+      e.target.selected = previous;
+      return;
+    }
+    addLog(next ? '已开启静默启动（开机自启与手动打开均仅驻留托盘）' : '已关闭静默启动');
   });
 
   // Dynamic color — seed from the wallpaper (system accent as fallback) via

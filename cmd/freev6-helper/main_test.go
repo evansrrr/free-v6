@@ -28,3 +28,13 @@ func TestMergeStartSettingsPreservesUnsentFields(t *testing.T) {
 		t.Fatalf("start request fields must be applied, got %+v", got)
 	}
 }
+
+// 静默启动 defaults off: normal manual launches must show the window.
+func TestSettingsDefaultSilentStartOff(t *testing.T) {
+	if (settings{}).SilentStart {
+		t.Fatal("silentStart must default to false")
+	}
+	if defaultSettings().SilentStart {
+		t.Fatal("defaultSettings must keep silentStart false")
+	}
+}

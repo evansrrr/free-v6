@@ -31,6 +31,7 @@ type settings struct {
 	Blacklist   []string `json:"blacklist"`
 	DevMode     bool     `json:"devMode"`
 	AutoStart   bool     `json:"autoStart"`
+	SilentStart bool     `json:"silentStart"`
 }
 
 type proxyRequest struct {
