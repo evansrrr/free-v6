@@ -9,6 +9,10 @@ const state = {
   devMode: false,
   autoStart: false,
   silentStart: false,
+  // Update (GitHub release check + in-app install)
+  updateInfo: null,
+  updatePhase: null,
+  updateError: '',
   // Appearance (persisted in localStorage, like the theme)
   dynamicColor: false,
   pureBlack: false,
@@ -270,6 +274,211 @@ async function handleTrayQuit() {
   quitDirectly();
 }
 window.handleTrayQuit = handleTrayQuit;
+
+/* ── Update (GitHub release check + in-app install) ──────────── */
+
+const UPDATE_OWNER_REPO = 'evansrrr/free-v6';
+const SKIP_VERSION_KEY = 'freev6-skip-version';
+
+// Version source: the 关于 row (kept in sync with tauri.conf.json / Cargo.toml
+// by the release workflow's tag-version guard).
+function currentAppVersion() {
+  const m = /v(\d+\.\d+\.\d+)/.exec($('#versionValue')?.textContent || '');
+  return m ? m[1] : '';
+}
+
+function cmpVersion(a, b) {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
+function renderUpdateBadge() {
+  const badge = $('#updateBadge');
+  if (!badge) return;
+  if (state.updateInfo) {
+    badge.textContent = `有新版本 v${state.updateInfo.version}`;
+    badge.hidden = false;
+    $('#versionItem')?.classList.add('clickable');
+  } else {
+    badge.hidden = true;
+    $('#versionItem')?.classList.remove('clickable');
+  }
+}
+
+// releases/latest excludes drafts & pre-releases → 正式版 only. Every
+// failure is silent: offline, private repo (404) or rate limits must never
+// block startup.
+async function checkForUpdate(autoOpen = true) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    let resp;
+    try {
+      resp = await fetch(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`, {
+        signal: controller.signal,
+        headers: { Accept: 'application/vnd.github+json' },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!resp.ok) return null; // 404: no release yet or repo private
+    const rel = await resp.json();
+    const remote = (rel.tag_name || '').replace(/^v/, '');
+    const current = currentAppVersion();
+    if (!remote || !current || cmpVersion(remote, current) <= 0) {
+      state.updateInfo = null;
+      renderUpdateBadge();
+      return null;
+    }
+    const asset = (rel.assets || []).find((a) => /-setup\.exe$/i.test(a.name || ''));
+    if (!asset) return null;
+    // The release workflow injects **SHA256**: <hex> into the release body.
+    const sha = /\*\*SHA256\*\*:\s*([0-9a-f]{64})/i.exec(rel.body || '')?.[1] || '';
+    state.updateInfo = {
+      version: remote,
+      url: asset.browser_download_url,
+      sha,
+      notes: rel.body || '',
+      htmlUrl: rel.html_url || `https://github.com/${UPDATE_OWNER_REPO}/releases/tag/${rel.tag_name}`,
+    };
+    renderUpdateBadge();
+    if (autoOpen && localStorage.getItem(SKIP_VERSION_KEY) !== remote) openUpdateDialog();
+    return state.updateInfo;
+  } catch (_) {
+    return null;
+  }
+}
+
+function updateBusy() {
+  return ['downloading', 'stopping', 'applying'].includes(state.updatePhase);
+}
+
+function openUpdateDialog() {
+  const info = state.updateInfo;
+  if (!info || updateBusy()) return;
+  $('#updateTitle').textContent = `发现新版本 v${info.version}`;
+  $('#updateCurrent').textContent = `当前版本 ${currentAppVersion() || '-'} → v${info.version}`;
+  const section = (info.notes.split(/\n---\n/)[0] || '')
+    .replace(/^##\s*\[[^\]]+\][^\n]*\n?/, '')
+    .trim();
+  $('#updateNotes').textContent = section || '打开 Release 页面查看更新内容。';
+  $('#updateStopHint').hidden = !state.proxyRunning;
+  setUpdatePhase('ready');
+  $('#updateDialogScrim').classList.add('open');
+}
+
+function closeUpdateDialog() {
+  if (updateBusy()) return; // 下载/安装进行中不允许关闭
+  state.updatePhase = null;
+  $('#updateDialogScrim').classList.remove('open');
+}
+
+function setUpdatePhase(phase) {
+  state.updatePhase = phase === 'ready' ? null : phase;
+  $('#updateActions').hidden = phase !== 'ready';
+  $('#updateErrorActions').hidden = phase !== 'error';
+  $('#updateProgress').hidden = phase !== 'downloading';
+  $('#updateStatus').hidden = phase === 'ready';
+}
+
+function setUpdateStatus(text) {
+  const el = $('#updateStatus');
+  if (el) el.textContent = text;
+}
+
+function updateFailed(msg) {
+  setUpdatePhase('error');
+  setUpdateStatus(msg);
+  addLog(`更新失败: ${msg}`, true);
+}
+
+// Poll the helper's download progress while the request runs in background.
+async function pollUpdateProgress() {
+  for (let i = 0; i < 2000; i++) { // up to ~10 min
+    await new Promise((r) => setTimeout(r, 300));
+    let p;
+    try {
+      p = await api('/update/progress');
+    } catch (_) {
+      continue;
+    }
+    if (p.state === 'downloading') {
+      const done = p.done || 0;
+      const total = p.total > 0 ? p.total : 0;
+      if (total > 0) {
+        const pct = Math.min(100, Math.floor((done * 100) / total));
+        const spin = $('#updateSpinner');
+        if (spin) spin.value = pct;
+        $('#updatePercentText').textContent = `${pct}%`;
+      } else {
+        $('#updatePercentText').textContent = `${(done / 1048576).toFixed(1)} MB`;
+      }
+      continue;
+    }
+    if (p.state === 'done' && p.path) return p;
+    state.updateError = p.state === 'error' ? (p.error || '下载失败') : '下载状态异常';
+    return null;
+  }
+  state.updateError = '下载超时';
+  return null;
+}
+
+// 立即更新：下载 → (自动)停止兔流 → 干净退出并交给静默安装器。
+async function startUpdate() {
+  const info = state.updateInfo;
+  if (!info || updateBusy()) return;
+  if (!state.helperOnline) {
+    updateFailed('helper 未连接，无法更新');
+    return;
+  }
+  setUpdatePhase('downloading');
+  setUpdateStatus(info.sha ? '正在下载安装包…' : '正在下载安装包…（Release 未附 SHA256，跳过校验）');
+  let prog;
+  try {
+    const ack = await api('/update/download', {
+      method: 'PUT',
+      body: JSON.stringify({ url: info.url, sha256: info.sha }),
+    });
+    if (!ack?.ok) throw new Error(ack?.error || '下载任务创建失败');
+    prog = await pollUpdateProgress();
+  } catch (e) {
+    updateFailed(`下载失败: ${e.message}`);
+    return;
+  }
+  if (!prog) {
+    updateFailed(state.updateError || '下载失败');
+    return;
+  }
+  if (state.proxyRunning) {
+    setUpdatePhase('stopping');
+    setUpdateStatus('正在停止免流…');
+    try {
+      await api('/proxy/stop', { method: 'POST' });
+      setRunning(false);
+    } catch (e) {
+      updateFailed(`停止免流失败: ${e.message}，更新已中止`);
+      return;
+    }
+  }
+  setUpdatePhase('applying');
+  setUpdateStatus('正在安装新版本并重启…');
+  let applied;
+  try {
+    applied = await tauriInvoke('update_apply', { installer: prog.path });
+  } catch (e) {
+    updateFailed(`启动安装器失败: ${e.message}`);
+    return;
+  }
+  if (applied !== 'ok') {
+    updateFailed('浏览器预览环境无法安装更新');
+    return;
+  }
+  addLog(`更新到 v${info.version}：安装器已启动，应用即将退出并重启`);
+}
 
 /* ── Mode Selector ────────────────────────────────────────────── */
 
@@ -699,6 +908,29 @@ function wireEvents() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeQuitDialog();
   });
+
+  // Update dialog: actions + backdrop/Escape (busy phases are blocked
+  // inside closeUpdateDialog)
+  $('#updateLater')?.addEventListener('click', closeUpdateDialog);
+  $('#updateSkip')?.addEventListener('click', () => {
+    const v = state.updateInfo?.version;
+    if (v) {
+      try { localStorage.setItem(SKIP_VERSION_KEY, v); } catch (_) { /* ignore */ }
+      addLog(`已跳过版本 v${v}（设置页版本行仍可查看并手动更新）`);
+    }
+    closeUpdateDialog();
+  });
+  $('#updateNow')?.addEventListener('click', startUpdate);
+  $('#updateClose')?.addEventListener('click', closeUpdateDialog);
+  $('#updateOpenPage')?.addEventListener('click', () => {
+    if (state.updateInfo) openExternal(state.updateInfo.htmlUrl);
+  });
+  $('#updateDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'updateDialogScrim') closeUpdateDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeUpdateDialog();
+  });
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
 
@@ -970,6 +1202,12 @@ function wireSettingsEvents() {
   // GitHub project — opens in the system browser
   $('#githubItem')?.addEventListener('click', () => {
     openExternal('https://github.com/evansrrr/free-v6');
+  });
+
+  // 软件版本行：发现新版时显示“有新版本”角标，点击重新打开更新弹窗
+  // （即使用户点过“跳过此版本”，这里始终可进入）
+  $('#versionItem')?.addEventListener('click', () => {
+    if (state.updateInfo) openUpdateDialog();
   });
 
   // Mode segmented chips in settings
@@ -1340,6 +1578,9 @@ function init() {
   renderLogs();
   initChart();
   refreshBackendState();
+
+  // 后台检查 GitHub 正式版更新（离线/私有仓库 404 → 静默跳过，不阻塞启动）
+  setTimeout(() => { checkForUpdate(); }, 1500);
 
   // Show proxy FAB on initial dashboard view
   $('#proxyToggle')?.classList.add('visible');

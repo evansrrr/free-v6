@@ -511,6 +511,24 @@ md-icon-button > md-icon {
   --md-text-button-label-text-line-height: 16px;
 }
 
+/* Update dialog */
+.update-dialog { width: min(440px, calc(100vw - 48px)); }
+.update-warn { font-size: 12.5px; font-weight: 600; color: var(--md-primary); }
+.update-status { font-size: 12.5px; color: var(--md-on-surface-variant); margin: 0; }
+.update-notes {
+  width: 100%; max-height: 170px; overflow-y: auto;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  font-size: 12px; line-height: 1.6; text-align: left;
+  white-space: pre-wrap; word-break: break-word;
+}
+.update-progress { display: flex; align-items: center; gap: 10px; }
+.update-progress md-circular-progress {
+  --md-circular-progress-size: 30px;
+  --md-circular-progress-active-indicator-color: var(--md-primary);
+}
+
 .drawer-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 16px 12px;
@@ -617,6 +635,12 @@ md-icon-button > md-icon {
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }
+.setting-badge {
+  display: inline-block; margin-left: 6px; padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--md-primary); color: var(--md-on-primary);
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
 .setting-desc { font-size: 11px; font-weight: 400; line-height: 1.4; color: var(--md-on-surface-variant); margin-top: 2px; }
 /* 核心 group controls: compact 32px buttons, 12/500 labels, 16px side padding */
 .setting-item md-filled-button {

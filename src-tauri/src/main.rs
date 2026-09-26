@@ -81,6 +81,31 @@ fn app_quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+// In-app update: spawn the downloaded NSIS package detached (/S = silent,
+// /FREEV6REL = our POSTINSTALL hook relaunched the new build with the token
+// this elevated process passes on — no UAC, single instance), then kill the
+// helper so freev6-helper.exe is unlocked long before NSIS reaches its File
+// copies, then exit (the desktop exe lock drops within ms; the stock silent
+// check force-kills it as a last resort). Spawn happens first: if it fails
+// the app and its helper stay alive so the UI can show the error.
+#[tauri::command]
+fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+
+    if !std::path::Path::new(&installer).is_file() {
+        return Err(format!("安装包不存在: {installer}"));
+    }
+    std::process::Command::new(&installer)
+        .args(["/S", "/FREEV6REL"])
+        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — installer survives us
+        .creation_flags(0x0000_0008 | 0x0000_0200)
+        .spawn()
+        .map_err(|e| format!("启动安装器失败: {e}"))?;
+    stop_helper(&app);
+    app.exit(0);
+    Ok("ok".into())
+}
+
 // Show (or restore) the main GUI window — shared by the tray menu item and
 // the tray left-click handler.
 fn show_main_window(app: &tauri::AppHandle) {
@@ -217,7 +242,8 @@ fn main() {
             window_close,
             window_start_dragging,
             window_show,
-            app_quit
+            app_quit,
+            update_apply
         ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")

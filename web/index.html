@@ -285,14 +285,14 @@
 
           <div class="settings-group">
             <div class="settings-group-title">关于</div>
-            <div class="setting-item">
+            <div class="setting-item" id="versionItem">
               <div class="setting-icon">
                 <md-icon>info</md-icon>
               </div>
               <div class="setting-text">
                 <div class="setting-label">软件版本</div>
               </div>
-              <span class="setting-value">FreeV6 v0.2.8</span>
+              <span class="setting-value"><span id="versionValue">FreeV6 v0.2.8</span><span class="setting-badge" id="updateBadge" hidden></span></span>
             </div>
             <md-divider></md-divider>
             <div class="setting-item clickable" id="githubItem">
@@ -375,6 +375,31 @@
       <div class="net-dialog-actions">
         <md-text-button id="quitDialogCancel">取消</md-text-button>
         <md-filled-button id="quitDialogStopQuit">停止并退出</md-filled-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update prompt: a newer stable release exists on GitHub -->
+  <div class="net-dialog-scrim" id="updateDialogScrim">
+    <div class="net-dialog update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="updateTitle">
+      <md-icon class="net-dialog-icon">system_update</md-icon>
+      <h3 id="updateTitle">发现新版本</h3>
+      <p id="updateCurrent"></p>
+      <p class="update-warn" id="updateStopHint" hidden>更新会自动停止兔流并退出软件，安装完成后自动重启。</p>
+      <div class="update-notes" id="updateNotes"></div>
+      <p class="update-status" id="updateStatus" hidden></p>
+      <div class="update-progress" id="updateProgress" hidden>
+        <md-circular-progress id="updateSpinner" max="100" value="0"></md-circular-progress>
+        <span class="update-status" id="updatePercentText">0%</span>
+      </div>
+      <div class="net-dialog-actions" id="updateActions">
+        <md-text-button id="updateSkip">跳过此版本</md-text-button>
+        <md-text-button id="updateLater">稍后</md-text-button>
+        <md-filled-button id="updateNow">立即更新</md-filled-button>
+      </div>
+      <div class="net-dialog-actions" id="updateErrorActions" hidden>
+        <md-text-button id="updateOpenPage">打开发布页</md-text-button>
+        <md-filled-button id="updateClose">关闭</md-filled-button>
       </div>
     </div>
   </div>

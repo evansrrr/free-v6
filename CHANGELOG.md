@@ -16,6 +16,10 @@ Release 永远先建为草稿（draft），检查无误后手动 Publish。
 
 ## [Unreleased]
 
+### Added
+- 启动时后台检查 GitHub 正式版 release（`releases/latest`，排除 beta/alpha），有新版弹窗提示；“跳过此版本”记住选择，设置页版本行仍显示“有新版本”角标、点击可再次打开
+- 软件内自动更新：下载进度、SHA256 校验、更新时自动停止兔流、静默安装完成后免 UAC 自动重启（无需手动下载运行 setup.exe）
+
 ## [0.2.8] - 2026-09-26
 
 ### Added

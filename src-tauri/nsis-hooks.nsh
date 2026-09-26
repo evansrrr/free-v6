@@ -62,3 +62,17 @@
   freev6_hook_done_${FreeV6HookID}:
   !undef FreeV6HookID
 !macroend
+
+; Runs after a silent in-app update (`/S /FREEV6REL`): relaunch the freshly
+; installed build with the elevated token this installer inherited — no UAC
+; prompt and no second instance (we deliberately do NOT pass /R, whose
+; RunAsUser relaunch would come up unelevated and prompt for consent).
+; Interactive installs never carry the flag, so this never fires for them.
+!macro NSIS_HOOK_POSTINSTALL
+  ${GetOptions} $CMDLINE "/FREEV6REL" $R9
+  ${IfNot} ${Errors}
+    ${If} ${Silent}
+      Exec '"$INSTDIR\${MAINBINARYNAME}.exe"'
+    ${EndIf}
+  ${EndIf}
+!macroend
