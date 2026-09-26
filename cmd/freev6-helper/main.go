@@ -54,8 +54,9 @@ func defaultSettings() settings {
 func main() {
 	root := executableRoot()
 	h := &helper{root: root}
-	// Keep the HKCU Run entry pointed at the current exe while autostart is on
-	// (covers app updates that move the install directory).
+	// Re-apply the autostart logon task while it's on: refreshes the path
+	// after app updates move the install directory, and migrates old builds'
+	// HKCU Run entry over to the task.
 	if current, err := h.loadSettings(); err == nil && current.AutoStart {
 		if syncErr := applyAutoStart(root); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "autostart re-apply failed: %v\n", syncErr)
@@ -204,9 +205,9 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			blacklistEntries = append(blacklistEntries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.Blacklist = blacklistEntries
-		// Autostart toggles the HKCU Run entry as a side effect, BEFORE the file
-		// is written: a registry failure returns 500 so the GUI reverts the
-		// switch instead of claiming a state that never took effect.
+		// Autostart toggles the Task Scheduler logon task as a side effect,
+		// BEFORE the file is written: a schtasks failure returns 500 so the GUI
+		// reverts the switch instead of claiming a state that never took effect.
 		if persisted.AutoStart != current.AutoStart {
 			var syncErr error
 			if current.AutoStart {
