@@ -6,7 +6,7 @@ use std::sync::{
 };
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
 use tauri_plugin_shell::{
@@ -69,6 +69,16 @@ fn window_start_dragging(app: tauri::AppHandle) {
     }
 }
 
+// Show (or restore) the main GUI window — shared by the tray menu item and
+// the tray left-click handler.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -86,14 +96,21 @@ fn main() {
                         .clone(),
                 )
                 .tooltip("freev6")
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                // Left click opens the GUI directly; the context menu (打开/退出)
+                // stays available on right click.
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
                     }
+                })
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
