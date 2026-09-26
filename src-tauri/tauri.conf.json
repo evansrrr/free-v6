@@ -40,7 +40,7 @@
     ],
     "windows": {
       "nsis": {
-        "installerHooks": "src-tauri/nsis-hooks.nsh"
+        "installerHooks": "nsis-hooks.nsh"
       }
     }
   }
