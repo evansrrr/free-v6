@@ -1,0 +1,171 @@
+name: Release
+
+# Push a version tag (v*) → build the Windows setup.exe exactly like a local
+# `cargo tauri build` (Go helper via beforeBuildCommand, tauri-cli pinned to
+# the developer's version) and upload it to a **draft** GitHub Release.
+#
+# Transparency rules requested for releases:
+#   * only this workflow creates the release and uploads its assets — assets
+#     are never attached by hand;
+#   * the release body links to this exact workflow run (full build log) and
+#     carries the asset's SHA256, so anyone can correlate asset ↔ build;
+#   * on public repositories a build-provenance attestation is generated, so
+#     the asset can be cryptographically verified against this workflow
+#     (`gh attestation verify <file> -o evansrrr`). Skipped automatically
+#     while the repository is private (attestations require a public repo),
+#     and turned on by itself once the repo goes public.
+#   * tags containing `-beta` or `-alpha` are marked pre-release; everything
+#     else is a normal release. Either way it starts as a **draft** for manual
+#     review before publishing.
+#
+# Release notes come from CHANGELOG.md: the workflow extracts the
+# `## [x.y.z]` section for the tag (exact tag version first, e.g.
+# `0.3.0-beta.1`, then the base version `0.3.0`); a missing section fails the
+# build so the changelog can never lag behind a release.
+#
+# Optional repository secret `BLACKLIST_B64` (base64 of the private
+# internal/mihomo/blacklist/blacklist.txt) is restored before building so the
+# released binary ships the real default blacklist instead of an empty one.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write        # create the draft release + upload assets
+  id-token: write        # provenance attestation (public repos)
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # keep in sync with the developer's `cargo tauri --version`
+  TAURI_CLI_VERSION: '2.11.4'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Caches registry + target + ~/.cargo/bin (so the pinned tauri-cli
+      # installed on the first run is restored afterwards).
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Cache NSIS toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri/NSIS
+          key: nsis-3.11
+
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $version = $tag.TrimStart('v')
+          $base = ($version -split '-')[0]
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoLine = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          $cargo = $cargoLine.Matches[0].Groups[1].Value
+          if ($conf -ne $base) { throw "tag $tag implies version '$base' but tauri.conf.json says '$conf'" }
+          if ($cargo -ne $base) { throw "tag $tag implies version '$base' but Cargo.toml says '$cargo'" }
+          Write-Host "tag $tag -> version $version (base $base) OK"
+
+      - name: Restore private blacklist (optional secret)
+        shell: pwsh
+        env:
+          BLACKLIST_B64: ${{ secrets.BLACKLIST_B64 }}
+        run: |
+          if ($env:BLACKLIST_B64) {
+            [IO.File]::WriteAllBytes('internal/mihomo/blacklist/blacklist.txt', [Convert]::FromBase64String($env:BLACKLIST_B64))
+            Write-Host 'blacklist.txt restored from BLACKLIST_B64'
+          } else {
+            Write-Host 'BLACKLIST_B64 not set - building with the empty default blacklist'
+          }
+
+      - name: Install pinned tauri-cli
+        shell: pwsh
+        run: |
+          $want = $env:TAURI_CLI_VERSION
+          $have = ''
+          try { $have = ((cargo tauri --version 2>$null | Select-Object -First 1) -replace '^tauri-cli\s+', '').Trim() } catch {}
+          if ($have -ne $want) {
+            Write-Host "installing tauri-cli $want (found '$have')"
+            cargo install tauri-cli --version $want --locked
+          } else {
+            Write-Host "tauri-cli $want already available"
+          }
+
+      - name: Build setup.exe (cargo tauri build)
+        run: cargo tauri build
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $version = $tag.TrimStart('v')
+          $base = ($version -split '-')[0]
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $section = ''
+          foreach ($v in @($version, $base)) {
+            $pattern = "(?ms)^## \[$([regex]::Escape($v))\][^\r\n]*\r?\n.*?(?=^## \[|\z)"
+            $m = [regex]::Match($changelog, $pattern)
+            if ($m.Success) { $section = $m.Value.Trim(); break }
+          }
+          if (-not $section) {
+            throw "CHANGELOG.md has no '## [$version]' or '## [$base]' section - add one before tagging."
+          }
+          $setup = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'no *-setup.exe found under target/release/bundle/nsis' }
+          $sha = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          $runUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          $body = @(
+            $section
+            ''
+            '---'
+            ''
+            "**构建过程**: [GitHub Actions 运行记录（完整日志）]($runUrl) —— release 产物仅由该运行上传"
+            ''
+            "**产物**: $($setup.Name)"
+            ''
+            "**SHA256**: $sha"
+          ) -join "`n"
+          $body | Out-File -FilePath release-notes.md -Encoding utf8
+          Write-Host "release notes extracted for $version"
+
+      - name: Check repository visibility (attestations need a public repo)
+        id: vis
+        shell: pwsh
+        run: |
+          $priv = 'true'
+          $out = gh api "repos/$env:GITHUB_REPOSITORY" --jq .private 2>$null
+          if ($LASTEXITCODE -eq 0 -and $out) { $priv = $out.Trim() }
+          "public=$($priv -ne 'true')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "repository private: $priv"
+
+      - name: Attest build provenance (public repositories)
+        if: steps.vis.outputs.public == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+
+      - name: Create draft release and upload the setup.exe
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          body_path: release-notes.md
+          files: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+          fail_on_unmatched_files: true
