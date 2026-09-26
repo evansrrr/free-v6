@@ -314,9 +314,9 @@
             <md-icon-button id="cidrBack" aria-label="返回">
               <md-icon>arrow_back</md-icon>
             </md-icon-button>
-            <h2>校园网段</h2>
+            <h2>绕过校园网/白名单</h2>
           </div>
-          <p class="cidr-hint">支持 CIDR 网段或域名，如 10.0.0.0/8、pku.edu.cn（自动包含其所有子域名）；只填写校园网相关地址，不要加入公网地址。</p>
+          <p class="cidr-hint">填写 CIDR 网段或域名，如 10.0.0.0/8、edu.cn（自动包含所有子域名）</p>
           <div class="cidr-input-row">
             <md-outlined-text-field id="cidrInput" label="10.0.0.0/8 或 pku.edu.cn" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="addCidr">添加</md-filled-button>
@@ -353,7 +353,7 @@
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
       <md-icon class="net-dialog-icon">language</md-icon>
       <h3 id="netDialogTitle">当前网络不支持免流</h3>
-      <p>未检测到 IPv6 地址，或 IPv6 不属于校园网段 <code>2001:DA8::/32</code>、<code>2001:250::/32</code>。请连接校园网后再启动免流模式。</p>
+      <p>未检测到 IPv6 地址，或 IPv6 不属于教育网。请连接支持 IPv6 的校园网后再启动免流模式。</p>
       <md-filled-button id="netDialogOk">知道了</md-filled-button>
     </div>
   </div>
