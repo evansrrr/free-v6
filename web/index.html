@@ -328,7 +328,7 @@
           </div>
           <p class="cidr-hint">填写 CIDR 网段或域名，如 10.0.0.0/8、edu.cn（自动包含所有子域名）</p>
           <div class="cidr-input-row">
-            <md-outlined-text-field id="cidrInput" label="10.0.0.0/8 或 pku.edu.cn" autocomplete="off"></md-outlined-text-field>
+            <md-outlined-text-field id="cidrInput" label="10.0.0.0/8 或 edu.cn" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="addCidr">添加</md-filled-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>
@@ -358,7 +358,6 @@
     <md-circular-progress slot="icon" id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
   </md-fab>
 
-  <!-- IPv6 gate: shown when the current network can't run 免流 -->
   <div class="net-dialog-scrim" id="netDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
       <md-icon class="net-dialog-icon">language</md-icon>
@@ -368,12 +367,11 @@
     </div>
   </div>
 
-  <!-- Quit confirm: 免流 running would outlive the app (mihomo TUN orphan) -->
   <div class="net-dialog-scrim" id="quitDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="quitDialogTitle">
       <md-icon class="net-dialog-icon">power_settings_new</md-icon>
-      <h3 id="quitDialogTitle">退出 freev6？</h3>
-      <p>免流模式仍在运行，退出前会先停止免流（mihomo），避免它继续在后台接管流量。</p>
+      <h3 id="quitDialogTitle">退出 Free V6？</h3>
+      <p>免流模式仍在运行，仍然退出？</p>
       <div class="net-dialog-actions">
         <md-text-button id="quitDialogCancel">取消</md-text-button>
         <md-filled-button id="quitDialogStopQuit">停止并退出</md-filled-button>
