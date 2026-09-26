@@ -52,11 +52,19 @@ func defaultSettings() settings {
 }
 
 func main() {
+	// Task Manager's Startup tab runs the HKCU Run marker (helper --autostart)
+	// at logon; the real launch is the "FreeV6 Autostart" logon task. Exit
+	// before binding the API port so the marker never collides with the helper
+	// the desktop app spawns.
+	if len(os.Args) > 1 && os.Args[1] == "--autostart" {
+		return
+	}
 	root := executableRoot()
 	h := &helper{root: root}
-	// Re-apply the autostart logon task while it's on: refreshes the path
-	// after app updates move the install directory, and migrates old builds'
-	// HKCU Run entry over to the task.
+	// Re-apply the autostart pieces while the switch is on: refresh the task's
+	// exe path after updates move the install directory and rewrite the Task
+	// Manager marker entry (migrating old builds' direct-exe form). Task
+	// Manager's own enable/disable state is left untouched.
 	if current, err := h.loadSettings(); err == nil && current.AutoStart {
 		if syncErr := applyAutoStart(root); syncErr != nil {
 			fmt.Fprintf(os.Stderr, "autostart re-apply failed: %v\n", syncErr)
@@ -205,9 +213,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			blacklistEntries = append(blacklistEntries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.Blacklist = blacklistEntries
-		// Autostart toggles the Task Scheduler logon task as a side effect,
-		// BEFORE the file is written: a schtasks failure returns 500 so the GUI
-		// reverts the switch instead of claiming a state that never took effect.
+		// Autostart toggles the Task Scheduler task plus its Task Manager marker
+		// entry as a side effect, BEFORE the file is written: a failure returns
+		// 500 so the GUI reverts the switch instead of claiming a state that
+		// never took effect.
 		if persisted.AutoStart != current.AutoStart {
 			var syncErr error
 			if current.AutoStart {

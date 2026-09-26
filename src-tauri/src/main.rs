@@ -79,7 +79,40 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+// The ONLOGON autostart task launches the exe with --autostart; Task
+// Manager's Startup tab toggle lives in StartupApproved\Run\FreeV6 (first
+// byte 02 = enabled, 03 = user-disabled). A missing value means the toggle
+// was never used → allow (Windows treats absence as enabled). Read through
+// reg.exe: std-only, no extra crate.
+fn task_manager_allows_autostart() -> bool {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+            "/v",
+            "FreeV6",
+        ])
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.lines()
+                .find_map(|line| line.split("REG_BINARY").nth(1))
+                .map(|hex| hex.trim().starts_with("02"))
+                .unwrap_or(true)
+        }
+        _ => true,
+    }
+}
+
 fn main() {
+    // Launched by the autostart logon task: honor Task Manager's Startup tab
+    // toggle before any window or tray icon exists. Manual launches have no
+    // --autostart flag and always run.
+    if std::env::args().any(|arg| arg.as_str() == "--autostart") && !task_manager_allows_autostart()
+    {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
