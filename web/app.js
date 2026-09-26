@@ -102,6 +102,7 @@ function renderLogs() {
 /* ── Navigation ───────────────────────────────────────────────── */
 
 const VIEW_TITLES = { dashboard: '仪表盘', proxies: '接入点', settings: '设置' };
+const MODE_LABELS = { rule: '规则', global: '全局', direct: '直连' };
 
 function showView(view) {
   if (view === state.activeView) return;
@@ -226,7 +227,7 @@ function setMode(mode, persist = true, silent = false) {
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.selected = seg.dataset.mode === mode;
   });
-  if (!silent) addLog(`切换为${mode === 'rule' ? '规则' : '全局'}模式`);
+  if (!silent) addLog(`切换为${MODE_LABELS[mode] || mode}模式`);
   if (persist) persistSettings();
 }
 
@@ -849,6 +850,8 @@ function updateSettingsUI() {
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.selected = seg.dataset.mode === state.mode;
   });
+  // 直连 option only exists in developer mode
+  $('#settingsModeGroup')?.classList.toggle('dev-mode', state.devMode);
 
   // CIDR list, developer-mode + auto-start switches
   renderCidrs();
@@ -883,9 +886,9 @@ function updateSettingsUI() {
     }
   }
 
-  // WARP status
-  const warp = $('#warpStatus');
-  if (warp) warp.textContent = state.warpRegistered ? '设备已注册' : '首次使用前请注册';
+  // WARP: the register button doubles as 重新注册 once registered
+  const warpBtn = $('#registerWarp');
+  if (warpBtn) warpBtn.textContent = state.warpRegistered ? '重新注册' : '注册';
 }
 
 function wireSettingsEvents() {
@@ -949,6 +952,7 @@ function wireSettingsEvents() {
       e.target.selected = previous;
       return;
     }
+    updateSettingsUI(); // re-evaluate dev-only rows (直连 chip visibility)
     addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
   });
 

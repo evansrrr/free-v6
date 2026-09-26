@@ -170,8 +170,8 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if current.Mode == "" {
 			current.Mode = mihomo.ModeRule
 		}
-		if current.Mode != mihomo.ModeRule && current.Mode != mihomo.ModeGlobal {
-			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "mode must be rule or global"})
+		if current.Mode != mihomo.ModeRule && current.Mode != mihomo.ModeGlobal && current.Mode != mihomo.ModeDirect {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "mode must be rule, global or direct"})
 			return
 		}
 		if current.CampusCIDRs == nil {

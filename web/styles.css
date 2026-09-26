@@ -630,6 +630,11 @@ md-icon-button > md-icon {
   --md-menu-item-bottom-space: 8px;
 }
 .setting-segmented { display: flex; gap: 8px; align-items: center; }
+/* 直连 is a developer-mode-only option: hidden until the group gets .dev-mode.
+   Outer-document rules win over the chip's :host display, so show and hide
+   both need explicit values (md-filter-chip renders inline-flex). */
+#settingsModeGroup .setting-seg[data-mode="direct"] { display: none; }
+#settingsModeGroup.dev-mode .setting-seg[data-mode="direct"] { display: inline-flex; }
 /* Status pill mirrors the 核心 buttons: 32px tall, radius-full,
    0×16 padding, 12/500 labels; colors stay semantic. */
 .setting-pill {

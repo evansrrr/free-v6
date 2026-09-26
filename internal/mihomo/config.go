@@ -45,6 +45,9 @@ var ruleSets = []struct {
 const (
 	ModeRule   = "rule"
 	ModeGlobal = "global"
+	// ModeDirect = mihomo "Global direct connection": every connection goes
+	// DIRECT, no rules matched. Developer-mode-only option in the GUI.
+	ModeDirect = "direct"
 )
 
 type RenderOptions struct {
@@ -143,7 +146,7 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	if options.Mode == "" {
 		options.Mode = ModeRule
 	}
-	if options.Mode != ModeRule && options.Mode != ModeGlobal {
+	if options.Mode != ModeRule && options.Mode != ModeGlobal && options.Mode != ModeDirect {
 		return "", fmt.Errorf("unsupported mihomo mode %q", options.Mode)
 	}
 	campusTargets, err := normalizeCampusTargets(options.CampusCIDRs)

@@ -67,6 +67,17 @@ func TestRenderWithOptions(t *testing.T) {
 	}
 }
 
+func TestRenderDirectMode(t *testing.T) {
+	device := warp.Device{PrivateKey: "private", PeerPublicKey: "peer", IPv4: "172.16.0.2", IPv6: "2606:4700::2"}
+	config, err := RenderWithOptions(device, RenderOptions{Mode: ModeDirect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(config, "mode: direct") {
+		t.Fatalf("expected mode: direct in config, got:\n%.200s", config)
+	}
+}
+
 func TestRenderRejectsIncompleteDevice(t *testing.T) {
 	if _, err := Render(warp.Device{}); err == nil {
 		t.Fatal("expected missing device data error")
