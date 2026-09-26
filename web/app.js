@@ -315,49 +315,31 @@ function renderUpdateBadge() {
   }
 }
 
-// releases/latest excludes drafts & pre-releases → 正式版 only. Every
-// failure is silent: offline, private repo (404) or rate limits must never
-// block startup.
+// 版本信息来自 release 里的 version.json（稳定地址 releases/latest/download，
+// 只命中正式版），由 helper 代理获取——完全绕开 api.github.com（共享配额会
+// 间歇403），且 helper 侧无 CORS 问题。所有失败静默：离线、私有仓库(404)、
+// 代理/直连都不可用都不阻塞启动。
 async function checkForUpdate(autoOpen = true) {
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    let resp;
-    try {
-      resp = await fetch(proxiedGitHub(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`), {
-        signal: controller.signal,
-        headers: { Accept: 'application/vnd.github+json' },
-      });
-      // 代理是共享 API 配额池，可能 403/限流 → 回退直连（本机自有配额，
-      // GitHub 与代理都返回 CORS *，WebView 内可读）
-      if (!resp.ok) {
-        resp = await fetch(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`, {
-          signal: controller.signal,
-          headers: { Accept: 'application/vnd.github+json' },
-        });
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!resp.ok) return null; // 404: no release yet or repo private
-    const rel = await resp.json();
-    const remote = (rel.tag_name || '').replace(/^v/, '');
-    const current = currentAppVersion();
-    if (!remote || !current || cmpVersion(remote, current) <= 0) {
+    const res = await api('/update/latest');
+    if (!res?.update) {
       state.updateInfo = null;
       renderUpdateBadge();
       return null;
     }
-    const asset = (rel.assets || []).find((a) => /-setup\.exe$/i.test(a.name || ''));
-    if (!asset) return null;
-    // The release workflow injects **SHA256**: <hex> into the release body.
-    const sha = /\*\*SHA256\*\*:\s*([0-9a-f]{64})/i.exec(rel.body || '')?.[1] || '';
+    const remote = String(res.version || '').trim();
+    const current = currentAppVersion();
+    if (!/^\d+\.\d+\.\d+/.test(remote) || !current || cmpVersion(remote, current) <= 0) {
+      state.updateInfo = null;
+      renderUpdateBadge();
+      return null;
+    }
     state.updateInfo = {
       version: remote,
-      url: asset.browser_download_url,
-      sha,
-      notes: rel.body || '',
-      htmlUrl: rel.html_url || `https://github.com/${UPDATE_OWNER_REPO}/releases/tag/${rel.tag_name}`,
+      url: res.download,
+      sha: /^[0-9a-f]{64}$/i.test(res.sha256 || '') ? res.sha256 : '',
+      notes: res.notes || '',
+      htmlUrl: `https://github.com/${UPDATE_OWNER_REPO}/releases/tag/${encodeURIComponent(res.tag || `v${remote}`)}`,
     };
     renderUpdateBadge();
     if (autoOpen && localStorage.getItem(SKIP_VERSION_KEY) !== remote) openUpdateDialog();

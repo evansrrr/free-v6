@@ -145,6 +145,20 @@ jobs:
           $body | Out-File -FilePath release-notes.md -Encoding utf8
           Write-Host "release notes extracted for $version"
 
+          # version.json：更新检测读这个稳定地址
+          # （releases/latest/download/version.json，随 latest 重定向、只命中
+          # 正式版），完全绕开 api.github.com 的共享 API 配额。
+          $relInfo = [ordered]@{
+            version  = $version
+            tag      = $tag
+            notes    = $section
+            setup    = $setup.Name
+            download = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($setup.Name)"
+            sha256   = $sha
+          }
+          $relInfo | ConvertTo-Json -Depth 4 | Out-File -FilePath version.json -Encoding utf8
+          Write-Host "version.json written for $version"
+
       - name: Check repository visibility (attestations need a public repo)
         id: vis
         shell: pwsh
@@ -159,7 +173,9 @@ jobs:
         if: steps.vis.outputs.public == 'true'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+          subject-path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            version.json
 
       - name: Create draft release and upload the setup.exe
         uses: softprops/action-gh-release@v2
@@ -167,5 +183,7 @@ jobs:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
           body_path: release-notes.md
-          files: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            version.json
           fail_on_unmatched_files: true

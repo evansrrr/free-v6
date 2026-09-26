@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,20 +77,30 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// downloadUpdateFile streams rawURL into dest and verifies sha256Hex.
-// Redirects are followed by the client (github.com release assets redirect
-// to GitHub's own CDN — trusted once github.com was validated).
-func downloadUpdateFile(client *http.Client, rawURL, sha256Hex, dest string, allowed []string, prog *updateProgress) (int64, error) {
+// validateUpdateURL enforces https (loopback http for tests) and the host
+// allowlist before any request is made.
+func validateUpdateURL(rawURL string, allowed []string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return 0, fmt.Errorf("invalid url")
+		return fmt.Errorf("invalid url")
 	}
 	loopback := hostAllowed(u.Hostname(), []string{"127.0.0.1", "localhost"})
 	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
-		return 0, fmt.Errorf("unsupported url scheme: %s", u.Scheme)
+		return fmt.Errorf("unsupported url scheme: %s", u.Scheme)
 	}
 	if !hostAllowed(u.Hostname(), allowed) {
-		return 0, fmt.Errorf("host not allowed: %s", u.Hostname())
+		return fmt.Errorf("host not allowed: %s", u.Hostname())
+	}
+	return nil
+}
+
+// downloadUpdateFile streams rawURL into dest and verifies sha256Hex.
+// Redirects are followed by the client (github.com release assets redirect
+// to GitHub's own CDN — trusted once github.com was validated; the gitproxy
+// mirror redirects to its own CDN likewise).
+func downloadUpdateFile(client *http.Client, rawURL, sha256Hex, dest string, allowed []string, prog *updateProgress) (int64, error) {
+	if err := validateUpdateURL(rawURL, allowed); err != nil {
+		return 0, err
 	}
 	if strings.TrimSpace(sha256Hex) == "" {
 		return 0, fmt.Errorf("missing sha256")
@@ -199,5 +211,115 @@ func (h *helper) updateProgress(writer http.ResponseWriter, request *http.Reques
 		"total": updateRun.prog.total.Load(),
 		"path":  path,
 		"error": errMsg,
+	})
+}
+
+// ── Latest-release check (version.json — no GitHub API) ──────────────
+//
+// Every release publishes a version.json asset; the stable URL
+// releases/latest/download/version.json redirects to the newest STABLE
+// release only (prereleases excluded) and is a web/CDN endpoint, so no API
+// quota is involved. The helper fetches it proxy-first (gitproxy mirror)
+// with a direct fallback and a cache-buster, so the frontend never talks to
+// GitHub directly: no CORS exposure, no shared-pool403s.
+
+const updateRepoSlug = "evansrrr/free-v6"
+const updateProxyPrefix = "https://api.gitproxy.dev/"
+
+// updateLatestURLs is a var so tests can point it at a local server.
+var updateLatestURLs = func() []string {
+	direct := fmt.Sprintf("https://github.com/%s/releases/latest/download/version.json", updateRepoSlug)
+	return []string{updateProxyPrefix + direct, direct}
+}
+
+// stableVersionPattern accepts a plain x.y.z base (any suffix allowed for
+// forward compatibility; /releases/latest never returns prereleases anyway).
+var stableVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+`)
+
+type latestVersionInfo struct {
+	Version  string `json:"version"`
+	Tag      string `json:"tag"`
+	Notes    string `json:"notes"`
+	Setup    string `json:"setup"`
+	Download string `json:"download"`
+	SHA256   string `json:"sha256"`
+}
+
+// parseVersionJSON accepts only a well-formed artifact: numeric version +
+// a download URL. Anything else (404 HTML, truncated body, mirror junk) is
+// treated as "no update available".
+func parseVersionJSON(data []byte) (*latestVersionInfo, error) {
+	var info latestVersionInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("invalid version.json: %w", err)
+	}
+	info.Version = strings.TrimSpace(info.Version)
+	if !stableVersionPattern.MatchString(info.Version) {
+		return nil, fmt.Errorf("invalid version: %q", info.Version)
+	}
+	if strings.TrimSpace(info.Download) == "" {
+		return nil, fmt.Errorf("version.json missing download url")
+	}
+	return &info, nil
+}
+
+// fetchVersionJSON GETs rawURL with the shared scheme/host guards, capped at
+// 1 MiB (version.json is tiny; the cap keeps a hostile mirror honest).
+func fetchVersionJSON(client *http.Client, rawURL string, allowed []string) ([]byte, error) {
+	if err := validateUpdateURL(rawURL, allowed); err != nil {
+		return nil, err
+	}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+// updateLatest answers the frontend update check:
+//   {ok:true, update:true, version, tag, notes, sha256, download} or
+//   {ok:true, update:false} when nothing newer exists or nothing is reachable
+//   (offline / private repo / mirror down — never an error, never blocking).
+func (h *helper) updateLatest(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	var info *latestVersionInfo
+	var lastErr error
+	for _, rawURL := range updateLatestURLs() {
+		// Cache-bust so the mirror's edge cache can't pin an old "latest".
+		u := rawURL + "?ts=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		body, err := fetchVersionJSON(client, u, updateAllowedHosts)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		info, err = parseVersionJSON(body)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		break
+	}
+	if info == nil {
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"ok": true, "update": false, "error": errorText(lastErr),
+		})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"ok":       true,
+		"update":   true,
+		"version":  info.Version,
+		"tag":      info.Tag,
+		"notes":    info.Notes,
+		"sha256":   info.SHA256,
+		"download": info.Download,
 	})
 }

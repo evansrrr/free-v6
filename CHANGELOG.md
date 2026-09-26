@@ -19,7 +19,7 @@ Release 永远先建为草稿（draft），检查无误后手动 Publish。
 ### Added
 - 启动时后台检查 GitHub 正式版 release（`releases/latest`，排除 beta/alpha），有新版弹窗提示；“跳过此版本”记住选择，设置页版本行仍显示“有新版本”角标、点击可再次打开
 - 软件内自动更新：下载进度、SHA256 校验、更新时自动停止兔流、静默安装完成后免 UAC 自动重启（无需手动下载运行 setup.exe）
-- 更新检查与安装包下载前部走 `api.gitproxy.dev` 代理加速大陆访问；代理共享配额限流（403）时检查自动回退直连
+- 更新检查与安装包下载前部走 `api.gitproxy.dev` 代理加速大陆访问；检查改读 release 内的 `version.json` 稳定地址（`releases/latest/download`，仅命中正式版、不占 api.github.com 配额），代理失败自动回退直连，检查由 helper 代理获取（无 CORS 问题）
 
 ## [0.2.8] - 2026-09-26
 

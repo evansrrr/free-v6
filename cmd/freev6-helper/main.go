@@ -82,6 +82,7 @@ func main() {
 	mux.HandleFunc("/api/v1/warp/register", h.registerWarp)
 	mux.HandleFunc("/api/v1/update/download", h.updateDownload)
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
+	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
 	server := &http.Server{Addr: listenAddress, Handler: withCORS(mux), ReadHeaderTimeout: 5 * time.Second}
 	// Bind with orphan takeover: killing the desktop via Task Manager leaves
 	// its helper child alive (Windows doesn't cascade-kill), and that orphan

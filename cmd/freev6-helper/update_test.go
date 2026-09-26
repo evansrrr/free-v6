@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,4 +165,100 @@ func resetUpdateRun() {
 	updateRun.busy = false
 	updateRun.prog.done.Store(0)
 	updateRun.prog.total.Store(0)
+}
+
+func TestParseVersionJSON(t *testing.T) {
+	valid := `{"version":"0.2.9","tag":"v0.2.9","notes":"## [0.2.9] - 2026-09-27\n- stuff","setup":"FreeV6_0.2.9_x64-setup.exe","download":"https://github.com/o/r/releases/download/v0.2.9/FreeV6_0.2.9_x64-setup.exe","sha256":"` + strings.Repeat("ab", 32) + `"}`
+	info, err := parseVersionJSON([]byte(valid))
+	if err != nil {
+		t.Fatalf("valid version.json rejected: %v", err)
+	}
+	if info.Version != "0.2.9" || !strings.HasSuffix(info.Download, "FreeV6_0.2.9_x64-setup.exe") {
+		t.Fatalf("parsed wrong: %+v", info)
+	}
+	if !strings.Contains(info.Notes, "## [0.2.9]") || info.SHA256 != strings.Repeat("ab", 32) {
+		t.Fatalf("notes/sha lost: %+v", info)
+	}
+
+	invalid := []string{
+		`{`,                              // truncated
+		`{"version":"latest","download":"x"}`, // not numeric
+		`{"version":"v0.2.9","download":"x"}`, // v-prefix
+		`{"version":"0.2.9"}`,               // no download url
+		``,                                  // empty
+	}
+	for _, body := range invalid {
+		if _, err := parseVersionJSON([]byte(body)); err == nil {
+			t.Errorf("expected rejection for %q", body)
+		}
+	}
+}
+
+func TestFetchVersionJSON(t *testing.T) {
+	payload := []byte(`{"version":"9.9.9","download":"https://x/y"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	got, err := fetchVersionJSON(server.Client(), server.URL+"/version.json", []string{"127.0.0.1"})
+	if err != nil {
+		t.Fatalf("fetchVersionJSON: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("body mismatch: %q", got)
+	}
+	// host guard rejects before any network I/O
+	if _, err := fetchVersionJSON(server.Client(), "https://evil.example/version.json", []string{"github.com"}); err == nil {
+		t.Fatal("expected host rejection")
+	}
+}
+
+// Handler flow: proxy→direct URL list is overridable; success maps the JSON,
+// an unreachable list degrades to {update:false} instead of an error.
+func TestUpdateLatestHandlerFlow(t *testing.T) {
+	orig := updateLatestURLs
+	t.Cleanup(func() { updateLatestURLs = orig })
+	origHosts := append([]string(nil), updateAllowedHosts...)
+	updateAllowedHosts = append(updateAllowedHosts, "127.0.0.1")
+	t.Cleanup(func() { updateAllowedHosts = origHosts })
+
+	payload := []byte(`{"version":"0.3.0","tag":"v0.3.0","notes":"## [0.3.0]","setup":"FreeV6_0.3.0_x64-setup.exe","download":"https://github.com/o/r/releases/download/v0.3.0/FreeV6_0.3.0_x64-setup.exe","sha256":"` + strings.Repeat("cd", 32) + `"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	updateLatestURLs = func() []string { return []string{server.URL + "/version.json"} }
+
+	h := &helper{root: t.TempDir()}
+	rec := httptest.NewRecorder()
+	h.updateLatest(rec, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
+	var okResp struct {
+		Update   bool   `json:"update"`
+		Version  string `json:"version"`
+		Download string `json:"download"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &okResp); err != nil {
+		t.Fatal(err)
+	}
+	if !okResp.Update || okResp.Version != "0.3.0" || !strings.HasSuffix(okResp.Download, "FreeV6_0.3.0_x64-setup.exe") {
+		t.Fatalf("unexpected success response: %s", rec.Body.String())
+	}
+
+	// unreachable list (closed loopback server) → silent no-update
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+	updateLatestURLs = func() []string { return []string{deadURL + "/version.json"} }
+	rec2 := httptest.NewRecorder()
+	h.updateLatest(rec2, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
+	var noResp struct {
+		Update bool `json:"update"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &noResp); err != nil {
+		t.Fatal(err)
+	}
+	if noResp.Update {
+		t.Fatalf("unreachable must yield update:false: %s", rec2.Body.String())
+	}
 }
