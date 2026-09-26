@@ -279,6 +279,12 @@ window.handleTrayQuit = handleTrayQuit;
 
 const UPDATE_OWNER_REPO = 'evansrrr/free-v6';
 const SKIP_VERSION_KEY = 'freev6-skip-version';
+const GITHUB_PROXY = 'https://api.gitproxy.dev/';
+
+// 大陆访问加速：请求前部拼接代理前缀；已是代理地址则不重复拼接。
+function proxiedGitHub(url) {
+  return url.startsWith(GITHUB_PROXY) ? url : GITHUB_PROXY + url;
+}
 
 // Version source: the 关于 row (kept in sync with tauri.conf.json / Cargo.toml
 // by the release workflow's tag-version guard).
@@ -318,10 +324,18 @@ async function checkForUpdate(autoOpen = true) {
     const timer = setTimeout(() => controller.abort(), 8000);
     let resp;
     try {
-      resp = await fetch(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`, {
+      resp = await fetch(proxiedGitHub(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`), {
         signal: controller.signal,
         headers: { Accept: 'application/vnd.github+json' },
       });
+      // 代理是共享 API 配额池，可能 403/限流 → 回退直连（本机自有配额，
+      // GitHub 与代理都返回 CORS *，WebView 内可读）
+      if (!resp.ok) {
+        resp = await fetch(`https://api.github.com/repos/${UPDATE_OWNER_REPO}/releases/latest`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -441,7 +455,7 @@ async function startUpdate() {
   try {
     const ack = await api('/update/download', {
       method: 'PUT',
-      body: JSON.stringify({ url: info.url, sha256: info.sha }),
+      body: JSON.stringify({ url: proxiedGitHub(info.url), sha256: info.sha }),
     });
     if (!ack?.ok) throw new Error(ack?.error || '下载任务创建失败');
     prog = await pollUpdateProgress();

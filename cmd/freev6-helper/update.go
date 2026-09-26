@@ -23,13 +23,15 @@ import (
 // the installer.
 //
 // The local API is CORS-open, so this endpoint must not become an
-// arbitrary-file fetcher: only https GitHub release hosts are accepted
-// (loopback http is allowed for tests only).
+// arbitrary-file fetcher: only https GitHub release hosts plus the gitproxy
+// acceleration mirror are accepted (loopback http is allowed for tests
+// only).
 
 var updateAllowedHosts = []string{
 	"github.com",
 	"objects.githubusercontent.com",
 	"release-assets.githubusercontent.com",
+	"api.gitproxy.dev", // 大陆访问加速代理（直通 github release 资产）
 }
 
 // updateProgress is written by the download goroutine and read by the

@@ -14,13 +14,15 @@ import (
 )
 
 func TestHostAllowed(t *testing.T) {
-	allowed := []string{"github.com", "objects.githubusercontent.com"}
+	allowed := []string{"github.com", "objects.githubusercontent.com", "api.gitproxy.dev"}
 	cases := map[string]bool{
 		"github.com":                    true,
 		"objects.githubusercontent.com": true,
 		"GITHUB.COM":                    true, // case-insensitive
+		"api.gitproxy.dev":              true, // 大陆加速代理
 		"evil-github.com":               false,
 		"github.com.evil.net":           false,
+		"evilgitproxy.dev":              false,
 		"example.com":                   false,
 	}
 	for host, want := range cases {
