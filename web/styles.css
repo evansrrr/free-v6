@@ -582,6 +582,7 @@ md-icon-button > md-icon {
 .fab-item:hover { transform: translateY(-3px); }
 .fab-item:active { transform: translateY(0); }
 .fab-item md-icon { --md-icon-size: 24px; }
+.fab-item md-icon svg { width: var(--md-icon-size, 24px); height: var(--md-icon-size, 24px); display: block; }
 .proxy-fab.running {
   --md-fab-container-color: var(--green-container);
   --md-fab-label-text-color: var(--green);

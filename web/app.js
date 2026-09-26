@@ -136,12 +136,17 @@ function showView(view) {
 
 /* ── Proxy Toggle ─────────────────────────────────────────────── */
 
+// FAB icons (hand-drawn, single-color currentColor so they follow the theme
+// and dynamic color): rounded play triangle / rounded square.
+const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3.5"/></svg>';
+
 function setRunning(running) {
   state.proxyRunning = running;
   const fab = $('#proxyToggle');
   const icon = $('#toggleIcon');
 
-  if (icon) icon.textContent = running ? 'stop' : 'play_arrow';
+  if (icon) icon.innerHTML = running ? ICON_STOP : ICON_PLAY;
   if (fab) fab.label = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
 }
