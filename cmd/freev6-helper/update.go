@@ -281,9 +281,10 @@ func fetchVersionJSON(client *http.Client, rawURL string, allowed []string) ([]b
 }
 
 // updateLatest answers the frontend update check:
-//   {ok:true, update:true, version, tag, notes, sha256, download} or
-//   {ok:true, update:false} when nothing newer exists or nothing is reachable
-//   (offline / private repo / mirror down — never an error, never blocking).
+//
+//	{ok:true, update:true, version, tag, notes, sha256, download} or
+//	{ok:true, update:false} when nothing newer exists or nothing is reachable
+//	(offline / private repo / mirror down — never an error, never blocking).
 func (h *helper) updateLatest(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

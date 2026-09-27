@@ -181,11 +181,11 @@ func TestParseVersionJSON(t *testing.T) {
 	}
 
 	invalid := []string{
-		`{`,                              // truncated
+		`{`,                                   // truncated
 		`{"version":"latest","download":"x"}`, // not numeric
 		`{"version":"v0.2.9","download":"x"}`, // v-prefix
-		`{"version":"0.2.9"}`,               // no download url
-		``,                                  // empty
+		`{"version":"0.2.9"}`,                 // no download url
+		``,                                    // empty
 	}
 	for _, body := range invalid {
 		if _, err := parseVersionJSON([]byte(body)); err == nil {
