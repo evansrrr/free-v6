@@ -1,0 +1,74 @@
+freev6 — THIRD-PARTY LICENSES
+==============================
+
+freev6 itself is MIT-licensed (see LICENSE in the repository root). This file
+lists the third-party components it uses. The full license texts that ship
+inside the Windows installer live in src-tauri/LICENSES/ and are installed to
+<install dir>\LICENSES\.
+
+--------------------------------------------------------------------------
+REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
+--------------------------------------------------------------------------
+
+1. Tauri (tauri, tauri-build, tauri-plugin-opener, tauri-plugin-shell)
+   License:   MIT OR Apache-2.0
+   Copyright: Tauri Programme within The Commons Conservancy
+   Source:    https://github.com/tauri-apps/tauri
+
+2. @material/web (vendored at web/vendor/material-web/)
+   License:   Apache-2.0
+   Copyright: Google LLC
+   Source:    https://github.com/material-components/material-web
+
+3. Lit / lit-html / lit-element / @lit/reactive-element
+   (vendored at web/vendor/lit, web/vendor/lit-html, web/vendor/lit-element,
+    web/vendor/@lit/reactive-element)
+   License:   MIT
+   Copyright: Google LLC
+   Source:    https://github.com/lit/lit
+
+4. tslib (vendored at web/vendor/tslib/)
+   License:   MIT
+   Copyright: Microsoft Corporation
+   Source:    https://github.com/microsoft/tslib
+
+5. NSIS - Nullsoft Scriptable Install System (installer runtime embedded in
+   the produced setup.exe)
+   License:   zlib/libpng
+   Copyright: Nullsoft / NSIS contributors
+   Source:    https://nsis.sourceforge.io/
+   Note: the NSIS toolchain is downloaded by the Tauri bundler at build time.
+
+6. nsis_tauri_utils (NSIS plugin embedded in the produced setup.exe)
+   License:   MIT OR Apache-2.0
+   Copyright: Tauri Programme within The Commons Conservancy
+   Source:    https://github.com/tauri-apps/nsis-tauri-utils
+
+--------------------------------------------------------------------------
+LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
+--------------------------------------------------------------------------
+
+7. Material Symbols Outlined icon font
+   License:   Apache-2.0
+   Copyright: Google LLC
+   Loaded on demand from fonts.googleapis.com; not bundled.
+
+8. DM Sans, Manrope, JetBrains Mono fonts
+   License:   SIL Open Font License 1.1
+   Copyright: the respective font authors (see each font's OFL.txt)
+   Loaded on demand from fonts.googleapis.com; not bundled.
+
+9. mihomo (Clash.Meta core)
+   License:   GPL-3.0-only
+   Copyright: MetaCubeX contributors
+   Source:    https://github.com/MetaCubeX/mihomo
+   NOTE: mihomo is downloaded at first use by freev6-helper and is NOT part
+   of this repository or of the setup.exe; its use is governed by GPL-3.0.
+   Do not bundle mihomo into this product without accepting GPL obligations.
+
+--------------------------------------------------------------------------
+BUILD TOOLCHAINS (build/test time only, not redistributed)
+--------------------------------------------------------------------------
+
+Go standard toolchain (BSD-3-Clause) - https://go.dev/
+Rust / Cargo (MIT OR Apache-2.0)      - https://github.com/rust-lang/rust
