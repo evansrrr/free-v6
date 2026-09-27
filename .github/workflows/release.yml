@@ -150,12 +150,21 @@ jobs:
       - name: Check repository visibility (attestations need a public repo)
         id: vis
         shell: pwsh
+        env:
+          # gh on hosted runners is NOT authenticated unless GH_TOKEN is
+          # passed explicitly — without it `gh api` errors out (and its exit
+          # code 1 fails this step via the pwsh wrapper's $LASTEXITCODE)
+          # while the repo still reads as private.
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $priv = 'true'
+          # Advisory flag only: on any failure default to "not public"
+          # (skip attestation) and never fail the build — hence exit 0.
+          $pub = 'false'
           $out = gh api "repos/$env:GITHUB_REPOSITORY" --jq .private 2>$null
-          if ($LASTEXITCODE -eq 0 -and $out) { $priv = $out.Trim() }
-          "public=$($priv -ne 'true')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "repository private: $priv"
+          if ($LASTEXITCODE -eq 0 -and $out -and $out.Trim() -eq 'false') { $pub = 'true' }
+          "public=$pub" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "repository public: $pub"
+          exit 0
 
       - name: Attest build provenance (public repositories)
         if: steps.vis.outputs.public == 'true'
