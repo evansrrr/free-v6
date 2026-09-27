@@ -35,6 +35,8 @@ const state = {
   runtimePresent: false,
   runtimeChecked: false,
   warpRegistered: false,
+  warpRegistering: false,   // /warp/register 在途，避免自动+手动并发重复注册
+  warpAutoTried: false,     // 每次启动最多自动注册一次
 
   // Logs
   logs: [],
@@ -283,6 +285,17 @@ const GUIDE_PAGE_COUNT = 2;
 const GUIDE_TITLES = ['欢迎使用 FreeV6', '使用说明与反馈'];
 let guidePage = 0;
 
+// 老版本（引导功能上线前）每次启动都会写 freev6-theme / freev6-skip-version 等键。
+// 本常量在 app.js 解析时求值，早于 init() → loadSavedTheme() 的写入，因此：
+//   有旧痕迹 ⇒ 覆盖安装的老用户 ⇒ 不再显示引导（并补写 GUIDE_DONE_KEY）；
+//   无痕迹  ⇒ 全新安装 ⇒ 显示引导。升级安装不会重弹。
+const HAD_PRIOR_STORAGE = (() => {
+  try {
+    return ['freev6-theme', 'freev6-skip-version', 'freev6-dynamic-color', 'freev6-pure-black']
+      .some((key) => localStorage.getItem(key) !== null);
+  } catch (_) { return false; }
+})();
+
 function renderGuide() {
   // 横向轨道：每页占轨道 50%，位移 -50% 即前进一页
   const track = $('#guideTrack');
@@ -317,7 +330,15 @@ function advanceGuide() {
 }
 
 function guideSeen() {
-  try { return localStorage.getItem(GUIDE_DONE_KEY) === '1'; } catch (_) { return false; }
+  try {
+    if (localStorage.getItem(GUIDE_DONE_KEY) === '1') return true;
+    // 升级安装（老用户）：直接补写标记，之后统一走 GUIDE_DONE_KEY
+    if (HAD_PRIOR_STORAGE) {
+      localStorage.setItem(GUIDE_DONE_KEY, '1');
+      return true;
+    }
+  } catch (_) { /* ignore */ }
+  return false;
 }
 
 // URL 带 ?guide 或 #guide 时强制重看，便于预览/演示
@@ -711,6 +732,35 @@ function updateStatsRing() {
   $('#totalDown').textContent = formatBytes(state.totalDownload);
 }
 
+/* ── WARP registration (手动按钮 + 首次使用自动注册) ────────── */
+
+async function registerWarp(isAuto) {
+  if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
+  if (state.warpRegistering) return false;   // 自动/手动撞车时不重复请求
+  state.warpRegistering = true;
+  try {
+    await api('/warp/register', { method: 'POST', body: JSON.stringify({ name: 'freev6-windows' }) });
+    state.warpRegistered = true;
+    updateSettingsUI();
+    addLog(isAuto ? '首次使用：已自动注册 WARP' : 'WARP 注册成功');
+    return true;
+  } catch (e) {
+    addLog(`${isAuto ? '自动注册 WARP 失败' : 'WARP 注册失败'}: ${e.message}`, true);
+    return false;
+  } finally {
+    state.warpRegistering = false;
+  }
+}
+
+// 第一次使用且 helper 报告未注册 WARP → 自动注册一次。每次启动最多尝试一次，
+// 失败交给「注册」按钮或下次启动，避免轮询反复请求 Cloudflare。
+function maybeAutoRegisterWarp() {
+  if (state.warpRegistered || state.warpAutoTried) return;
+  state.warpAutoTried = true;
+  addLog('未注册 WARP，正在自动注册…');
+  registerWarp(true);
+}
+
 /* ── Backend State Refresh ────────────────────────────────────── */
 
 async function refreshBackendState() {
@@ -738,6 +788,8 @@ async function refreshBackendState() {
 
     state.warpRegistered = status.warp?.registered || false;
     updateSettingsUI();
+    // 首次拉到状态：未注册则自动注册（每会话仅一次）
+    maybeAutoRegisterWarp();
 
     addLog('已连接 freev6 helper');
   } catch (error) {
@@ -836,6 +888,10 @@ async function pollStatus() {
       addLog('已连接 freev6 helper');
       // Helper is up: retry a dynamic-color seed fetch that failed at load
       if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
+      // 首次连上：同步 WARP 注册状态，未注册则自动注册一次
+      state.warpRegistered = Boolean(status.warp?.registered);
+      updateSettingsUI();
+      maybeAutoRegisterWarp();
     }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
@@ -1389,18 +1445,8 @@ function wireSettingsEvents() {
     }
   });
 
-  // Register WARP
-  $('#registerWarp')?.addEventListener('click', async () => {
-    if (!state.helperOnline) { addLog('helper 未连接', true); return; }
-    try {
-      await api('/warp/register', { method: 'POST', body: JSON.stringify({ name: 'freev6-windows' }) });
-      state.warpRegistered = true;
-      updateSettingsUI();
-      addLog('WARP 注册成功');
-    } catch (e) {
-      addLog(`WARP 注册失败: ${e.message}`, true);
-    }
-  });
+  // Register WARP（手动；首次使用的自动注册见 maybeAutoRegisterWarp）
+  $('#registerWarp')?.addEventListener('click', () => { registerWarp(false); });
 }
 
 // CIDR (10.0.0.0/8) or bare domain (pku.edu.cn); the helper validates precisely
