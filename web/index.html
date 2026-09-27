@@ -404,6 +404,37 @@
     </div>
   </div>
 
+  <!-- First-run guide: shown until 「开始使用」 is clicked (设置无关，仅首次) -->
+  <div class="guide-scrim" id="guideScrim">
+    <div class="guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guideHeroTitle">
+      <div class="guide-hero">
+        <div class="guide-brand" aria-hidden="true">F 6</div>
+        <h2 class="guide-hero-title" id="guideHeroTitle">欢迎使用 FreeV6</h2>
+      </div>
+      <div class="guide-viewport">
+        <div class="guide-track" id="guideTrack">
+          <section class="guide-page" data-guide-page="0">
+            <p>本软件开源免费</p>
+            <p class="guide-note">继续使用即代表你同意使用条款与隐私协议</p>
+          </section>
+          <section class="guide-page" data-guide-page="1">
+            <ul class="guide-tips">
+              <li><md-icon>menu_book</md-icon><span>在设置-关于中可以查看使用说明</span></li>
+              <li><md-icon>feedback</md-icon><span>也可以提交反馈与建议</span></li>
+            </ul>
+          </section>
+        </div>
+      </div>
+      <div class="guide-footer">
+        <div class="guide-dots" id="guideDots" aria-label="引导页码">
+          <button type="button" class="guide-dot active" data-guide-dot="0" aria-label="第 1 页"></button>
+          <button type="button" class="guide-dot" data-guide-dot="1" aria-label="第 2 页"></button>
+        </div>
+        <md-filled-button id="guideNext">继续</md-filled-button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

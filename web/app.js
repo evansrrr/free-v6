@@ -275,6 +275,56 @@ async function handleTrayQuit() {
 }
 window.handleTrayQuit = handleTrayQuit;
 
+/* ── First-run guide (欢迎引导) ─────────────────────────────── */
+
+const GUIDE_DONE_KEY = 'freev6-guide-done';
+const GUIDE_PAGE_COUNT = 2;
+// 标题显示在 hero 里，随页切换
+const GUIDE_TITLES = ['欢迎使用 FreeV6', '使用说明与反馈'];
+let guidePage = 0;
+
+function renderGuide() {
+  // 横向轨道：每页占轨道 50%，位移 -50% 即前进一页
+  const track = $('#guideTrack');
+  if (track) track.style.transform = `translateX(-${guidePage * 50}%)`;
+  const title = $('#guideHeroTitle');
+  if (title) title.textContent = GUIDE_TITLES[guidePage] || GUIDE_TITLES[0];
+  $$('#guideDots .guide-dot').forEach((d, i) => d.classList.toggle('active', i === guidePage));
+  // 最后一页：翻页按钮变成「开始使用」
+  const next = $('#guideNext');
+  if (next) next.textContent = guidePage >= GUIDE_PAGE_COUNT - 1 ? '开始使用' : '继续';
+}
+
+function openGuide() {
+  guidePage = 0;
+  renderGuide();
+  $('#guideScrim')?.classList.add('open');
+}
+
+function closeGuide() {
+  $('#guideScrim')?.classList.remove('open');
+}
+
+// 翻页；到最后一页再点 → 记录已读并关闭（条款只能通过按钮同意）
+function advanceGuide() {
+  if (guidePage < GUIDE_PAGE_COUNT - 1) {
+    guidePage += 1;
+    renderGuide();
+    return;
+  }
+  try { localStorage.setItem(GUIDE_DONE_KEY, '1'); } catch (_) { /* ignore */ }
+  closeGuide();
+}
+
+function guideSeen() {
+  try { return localStorage.getItem(GUIDE_DONE_KEY) === '1'; } catch (_) { return false; }
+}
+
+// URL 带 ?guide 或 #guide 时强制重看，便于预览/演示
+function guideForced() {
+  return new URLSearchParams(location.search).has('guide') || location.hash === '#guide';
+}
+
 /* ── Update (GitHub release check + in-app install) ──────────── */
 
 const UPDATE_OWNER_REPO = 'evansrrr/free-v6';
@@ -903,6 +953,16 @@ function wireEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeQuitDialog();
+  });
+
+  // First-run guide: 翻页按钮 / 页码点；只能点「开始使用」关闭
+  // （不响应 Escape 与遮罩点击 —— 继续使用即代表同意条款）
+  $('#guideNext')?.addEventListener('click', advanceGuide);
+  $$('#guideDots .guide-dot').forEach((dot) => {
+    dot.addEventListener('click', () => {
+      guidePage = parseInt(dot.dataset.guideDot, 10) || 0;
+      renderGuide();
+    });
   });
 
   // Update dialog: actions + backdrop/Escape (busy phases are blocked
@@ -1580,6 +1640,9 @@ function init() {
 
   // Show proxy FAB on initial dashboard view
   $('#proxyToggle')?.classList.add('visible');
+
+  // 首次启动显示欢迎引导（已同意过，或未带强制参数时不显示）
+  if (guideForced() || !guideSeen()) setTimeout(openGuide, 400);
 
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
