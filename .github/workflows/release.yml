@@ -123,11 +123,7 @@ jobs:
             ''
             '---'
             ''
-            "**构建过程**: [GitHub Actions 运行记录（完整日志）]($runUrl) —— release 产物仅由该运行上传"
-            ''
-            "**产物**: $($setup.Name)"
-            ''
-            "**SHA256**: $sha"
+            "[构建过程]($runUrl)"
           ) -join "`n"
           $body | Out-File -FilePath release-notes.md -Encoding utf8
           Write-Host "release notes extracted for $version"
