@@ -9,11 +9,10 @@ name: Release
 #     are never attached by hand;
 #   * the release body links to this exact workflow run (full build log) and
 #     carries the asset's SHA256, so anyone can correlate asset ↔ build;
-#   * on public repositories a build-provenance attestation is generated, so
-#     the asset can be cryptographically verified against this workflow
-#     (`gh attestation verify <file> -o evansrrr`). Skipped automatically
-#     while the repository is private (attestations require a public repo),
-#     and turned on by itself once the repo goes public.
+#   * a build-provenance attestation is generated for every asset, so the
+#     asset can be cryptographically verified against this workflow
+#     (`gh attestation verify <file> -o evansrrr`). Requires a PUBLIC
+#     repository — attestations fail on private ones.
 #   * tags containing `-beta` or `-alpha` are marked pre-release; everything
 #     else is a normal release. Either way it starts as a **draft** for manual
 #     review before publishing.
@@ -147,27 +146,7 @@ jobs:
           $relInfo | ConvertTo-Json -Depth 4 | Out-File -FilePath version.json -Encoding utf8
           Write-Host "version.json written for $version"
 
-      - name: Check repository visibility (attestations need a public repo)
-        id: vis
-        shell: pwsh
-        env:
-          # gh on hosted runners is NOT authenticated unless GH_TOKEN is
-          # passed explicitly — without it `gh api` errors out (and its exit
-          # code 1 fails this step via the pwsh wrapper's $LASTEXITCODE)
-          # while the repo still reads as private.
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Advisory flag only: on any failure default to "not public"
-          # (skip attestation) and never fail the build — hence exit 0.
-          $pub = 'false'
-          $out = gh api "repos/$env:GITHUB_REPOSITORY" --jq .private 2>$null
-          if ($LASTEXITCODE -eq 0 -and $out -and $out.Trim() -eq 'false') { $pub = 'true' }
-          "public=$pub" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "repository public: $pub"
-          exit 0
-
-      - name: Attest build provenance (public repositories)
-        if: steps.vis.outputs.public == 'true'
+      - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
