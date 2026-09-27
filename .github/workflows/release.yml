@@ -23,9 +23,9 @@ name: Release
 # `0.3.0-beta.1`, then the base version `0.3.0`); a missing section fails the
 # build so the changelog can never lag behind a release.
 #
-# Optional repository secret `BLACKLIST_B64` (base64 of the private
-# internal/mihomo/blacklist/blacklist.txt) is restored before building so the
-# released binary ships the real default blacklist instead of an empty one.
+# internal/mihomo/blacklist/blacklist.txt is tracked in git, so the embedded
+# default blacklist needs no secret — `go build` picks it straight from the
+# checkout.
 
 on:
   push:
@@ -82,18 +82,6 @@ jobs:
           if ($conf -ne $base) { throw "tag $tag implies version '$base' but tauri.conf.json says '$conf'" }
           if ($cargo -ne $base) { throw "tag $tag implies version '$base' but Cargo.toml says '$cargo'" }
           Write-Host "tag $tag -> version $version (base $base) OK"
-
-      - name: Restore private blacklist (optional secret)
-        shell: pwsh
-        env:
-          BLACKLIST_B64: ${{ secrets.BLACKLIST_B64 }}
-        run: |
-          if ($env:BLACKLIST_B64) {
-            [IO.File]::WriteAllBytes('internal/mihomo/blacklist/blacklist.txt', [Convert]::FromBase64String($env:BLACKLIST_B64))
-            Write-Host 'blacklist.txt restored from BLACKLIST_B64'
-          } else {
-            Write-Host 'BLACKLIST_B64 not set - building with the empty default blacklist'
-          }
 
       - name: Install pinned tauri-cli
         shell: pwsh

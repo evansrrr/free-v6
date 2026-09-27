@@ -22,8 +22,10 @@ so every copy installed from the setup package ships with this list.
 
 ## Workflow
 
-1. Edit `blacklist.txt` locally (never committed).
+1. Edit `blacklist.txt` locally and commit it — the file is tracked, so
+   clones and the release workflow build with the real default list
+   (no repository secret needed).
 2. `cargo tauri build` — the before-build step recompiles `freev6-helper`
    and embeds the current file into the binary that goes into the installer.
-3. Fresh clones without `blacklist.txt` still build fine, with an empty
-   default list (`go test` / CI stay green).
+3. A missing `blacklist.txt` (e.g. a partial checkout) still builds fine
+   with an empty default list (`go test` / CI stay green).

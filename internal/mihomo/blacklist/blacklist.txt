@@ -1,0 +1,49 @@
+# freev6 default domain blacklist
+#
+# format:
+#   - one domain per line, blocks the domain and all of its subdomains (DOMAIN-SUFFIX,<DOMAIN>,REJECT)
+#   - lines start with # and empty lines are ignored
+#   - only domain in lowcase, no CIDR
+#
+# note：this file is in .gitignore and will not be tracked
+# priority: blacklist in settings.json > this file, forbid in developer mode
+
+bbc.com
+bbc.co.uk
+bloomberg.com
+discord.com
+duckduckgo.com
+facebook.com
+flickr.com
+google.com
+google.com.hk
+instagram.com
+line.me
+netflix.com
+nytimes.com
+pinterest.com
+pornhub.com
+reddit.com
+reuters.com
+signal.org
+snapchat.com
+t.me
+telegram.org
+theguardian.com
+threads.net
+tiktok.com
+torproject.org
+tumblr.com
+twitch.tv
+twitter.com
+washingtonpost.com
+whatsapp.com
+wsj.com
+vimeo.com
+x.com
+xvideos.com
+yahoo.com
+yahoo.co.jp
+yandex.com
+youtube.com
+youtu.be

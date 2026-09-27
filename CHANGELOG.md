@@ -22,6 +22,7 @@ Release 永远先建为草稿（draft），检查无误后手动 Publish。
 - 更新检查与安装包下载使用 `api.gitproxy.dev` 代理加速大陆访问；检查改读 release 内的 `version.json` 稳定地址，代理失败自动回退直连
 - 新增 Github Workflow 发布新版本
 - 添加MIT及第三方开源许可证
+- 黑名单默认列表改为随仓库分发，发布构建不再依赖 secret
 
 ## [0.2.8] - 2026-09-26
 
