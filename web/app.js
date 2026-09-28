@@ -230,6 +230,18 @@ function closeNetGateDialog() {
   $('#netDialogScrim')?.classList.remove('open');
 }
 
+/* ── Missing core (启动免流前的下载引导) ────────────────────── */
+
+function showCoreDialog() {
+  const dl = $('#coreDialogDownload');
+  if (dl) { dl.disabled = false; dl.textContent = '下载'; }
+  $('#coreDialogScrim')?.classList.add('open');
+}
+
+function closeCoreDialog() {
+  $('#coreDialogScrim')?.classList.remove('open');
+}
+
 /* ── Quit confirm (tray 退出) ──────────────────────────────── */
 
 function openQuitDialog() {
@@ -732,6 +744,28 @@ function updateStatsRing() {
   $('#totalDown').textContent = formatBytes(state.totalDownload);
 }
 
+/* ── mihomo core download (设置页核心行 + 启动拦截弹窗共用) ─── */
+
+// 下载核心；btn 传入时显示「下载中…」进度，成功返回 true。
+async function downloadCore(btn) {
+  if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
+  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  try {
+    const result = await api('/runtime/download', { method: 'POST' });
+    state.runtimePresent = true;
+    state.runtimeChecked = true;
+    addLog(`mihomo 核心下载完成${result.version ? `: ${result.version}` : ''}`);
+    return true;
+  } catch (e) {
+    addLog(`下载失败: ${e.message}`, true);
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '下载'; }
+    updateSettingsUI();
+    updateConnectionChip(state.helperOnline);
+  }
+}
+
 /* ── WARP registration (手动按钮 + 首次使用自动注册) ────────── */
 
 async function registerWarp(isAuto) {
@@ -948,6 +982,18 @@ function wireEvents() {
         setRunning(false);
         addLog('免流模式已停止');
       } else {
+        // 核心检测（本地 stat，很便宜）：缺失 → 弹窗引导先下载，不发起启动
+        try {
+          const runtime = await api('/runtime');
+          state.runtimePresent = Boolean(runtime.present);
+          state.runtimeChecked = true;
+        } catch (_) { /* 保持上次已知状态 */ }
+        updateConnectionChip(state.helperOnline);
+        if (!state.runtimePresent) {
+          showCoreDialog();
+          addLog('启动已取消：未检测到运行核心，请先下载', true);
+          return;
+        }
         // IPv6 gate: 免流 only works on campus IPv6. Developer mode skips it.
         if (!state.devMode) {
           fab.label = '检测中…';
@@ -999,6 +1045,19 @@ function wireEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeNetGateDialog();
+  });
+
+  // Missing-core dialog: 下载 / 取消 / 遮罩 / Escape（下载成功后自动关闭）
+  $('#coreDialogDownload')?.addEventListener('click', async () => {
+    const ok = await downloadCore($('#coreDialogDownload'));
+    if (ok) closeCoreDialog();
+  });
+  $('#coreDialogCancel')?.addEventListener('click', closeCoreDialog);
+  $('#coreDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'coreDialogScrim') closeCoreDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeCoreDialog();
   });
 
   // Quit confirm dialog: act via buttons, dismiss via backdrop or Escape
@@ -1427,23 +1486,8 @@ function wireSettingsEvents() {
     addLog(state.pureBlack ? '纯黑背景已开启（深色主题下生效）' : '纯黑背景已关闭');
   });
 
-  // Download core
-  $('#downloadCore')?.addEventListener('click', async () => {
-    if (!state.helperOnline) { addLog('helper 未连接', true); return; }
-    const btn = $('#downloadCore');
-    if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
-    try {
-      const result = await api('/runtime/download', { method: 'POST' });
-      state.runtimePresent = true;
-      state.runtimeChecked = true;
-      addLog(`mihomo 核心下载完成${result.version ? `: ${result.version}` : ''}`);
-    } catch (e) {
-      addLog(`下载失败: ${e.message}`, true);
-    } finally {
-      updateSettingsUI();
-      updateConnectionChip(state.helperOnline);
-    }
-  });
+  // Download core（设置页「核心」行，与启动拦截弹窗共用 downloadCore）
+  $('#downloadCore')?.addEventListener('click', () => { downloadCore($('#downloadCore')); });
 
   // Register WARP（手动；首次使用的自动注册见 maybeAutoRegisterWarp）
   $('#registerWarp')?.addEventListener('click', () => { registerWarp(false); });

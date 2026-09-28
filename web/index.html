@@ -292,7 +292,7 @@
               <div class="setting-text">
                 <div class="setting-label">软件版本</div>
               </div>
-              <span class="setting-value"><span id="versionValue">FreeV6 v0.3.0</span><span class="setting-badge" id="updateBadge" hidden></span></span>
+              <span class="setting-value"><span id="versionValue">FreeV6 v0.3.3</span><span class="setting-badge" id="updateBadge" hidden></span></span>
             </div>
             <md-divider></md-divider>
             <div class="setting-item clickable" id="githubItem">
@@ -375,6 +375,19 @@
       <div class="net-dialog-actions">
         <md-text-button id="quitDialogCancel">取消</md-text-button>
         <md-filled-button id="quitDialogStopQuit">停止并退出</md-filled-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Missing core: 启动免流 前的下载引导 -->
+  <div class="net-dialog-scrim" id="coreDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="coreDialogTitle">
+      <md-icon class="net-dialog-icon">download</md-icon>
+      <h3 id="coreDialogTitle">未检测到运行核心，请先下载</h3>
+      <p>下载并安装核心（~21MB）即可启动免流模式</p>
+      <div class="net-dialog-actions">
+        <md-text-button id="coreDialogCancel">取消</md-text-button>
+        <md-filled-button id="coreDialogDownload">下载</md-filled-button>
       </div>
     </div>
   </div>
