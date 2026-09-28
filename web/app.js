@@ -1363,10 +1363,10 @@ function updateSettingsUI() {
 }
 
 function wireSettingsEvents() {
-  // Theme select
+  // Theme select（切换走色彩渐变过渡）
   $('#themeSelect')?.addEventListener('change', (e) => {
     const theme = e.target.value;
-    applyTheme(theme);
+    withColorTransition(() => applyTheme(theme));
     addLog(`切换主题: ${theme}`);
   });
 
@@ -1473,16 +1473,16 @@ function wireSettingsEvents() {
       await refreshDynamicColor(false);
     } else {
       state.dynamicSeed = null;
-      applyDynamicPalette();
+      withColorTransition(() => applyDynamicPalette());
       addLog('动态取色已关闭');
     }
   });
 
-  // Pure black background (OLED) — surfaces go #000, dark themes only
+  // Pure black background (OLED) — surfaces go #000, dark themes only（渐变过渡）
   $('#pureBlackSwitch')?.addEventListener('change', (e) => {
     state.pureBlack = e.target.selected;
     try { localStorage.setItem('freev6-pure-black', state.pureBlack ? '1' : '0'); } catch (_) {}
-    applyPureBlack(state.pureBlack);
+    withColorTransition(() => applyPureBlack(state.pureBlack));
     addLog(state.pureBlack ? '纯黑背景已开启（深色主题下生效）' : '纯黑背景已关闭');
   });
 
@@ -1518,6 +1518,26 @@ function addCidr() {
   input.value = '';
 }
 
+/* ── 色彩切换过渡（主题 / 动态取色 / 纯黑背景） ────────────── */
+
+// View Transitions：旧画面保持不动、新画面淡入，两套颜色在屏上混合渐变，
+// 而不是属性一改整屏硬切。连续切换时先 skip 上一个过渡避免排队；
+// 不支持 startViewTransition 的环境（老 WebView）退化为直接切换。
+let _colorVT = null;
+function withColorTransition(fn) {
+  if (typeof document.startViewTransition !== 'function') { fn(); return null; }
+  if (_colorVT) { try { _colorVT.skipTransition(); } catch (_) {} _colorVT = null; }
+  try {
+    const t = document.startViewTransition(fn);
+    _colorVT = t;
+    // ready/finished 都可能因被 skip 而 reject（快速连续切换）——
+    // 必须各自接住，否则会冒成 unhandledrejection
+    t.ready?.catch(() => {});
+    t.finished.then(() => { if (_colorVT === t) _colorVT = null; }, () => {});
+    return t;
+  } catch (_) { fn(); return null; }
+}
+
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   try { localStorage.setItem('freev6-theme', theme); } catch (_) {}
@@ -1530,7 +1550,8 @@ function applyTheme(theme) {
       state._systemThemeListener.addEventListener('change', () => {
         // CSS variables auto-switch via [data-theme="system"] + media query;
         // the derived palette needs a manual re-derive for the new scheme
-        applyDynamicPalette();
+        // （跟随时也走渐变，避免系统切换时硬跳）
+        withColorTransition(() => applyDynamicPalette());
       });
     }
   }
@@ -1650,7 +1671,9 @@ async function refreshDynamicColor(silent = false) {
       return;
     }
     state.dynamicSeed = res.color;
-    applyDynamicPalette();
+    // 后台静默刷新（初始化/断线重连）不动画；用户打开开关时走渐变过渡
+    if (silent) applyDynamicPalette();
+    else withColorTransition(() => applyDynamicPalette());
     if (!silent) {
       addLog(res.source === 'wallpaper'
         ? `动态取色已应用（壁纸主色 ${res.color}）`

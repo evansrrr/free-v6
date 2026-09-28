@@ -884,3 +884,21 @@ md-icon-button > md-icon {
     border-color: var(--md-outline-variant);
   }
 }
+
+/* ── 色彩切换渐变（主题 / 动态取色 / 纯黑背景） ──────────────── */
+/* app.js 的 withColorTransition() 在切换时启动 View Transition：
+   新快照在旧快照上方淡入（Chromium 对 root 用 plus-lighter 叠加混合）。
+
+   关键：旧快照必须【同步淡出】（保留 UA 的 fade-out 动画，绝不能设
+   animation-name:none）。否则亮色叠加 → 过曝闪白帧，黑色叠加 → 完全
+   不可见（纯黑背景切换会“卡”在旧画面）。旧淡出 + 新叠加 = 严格的
+   old×(1−a) + new×a 交叉溶解，中间帧永远是两端颜色的自然线性混合。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 380ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation-duration: 1ms; }
+}
