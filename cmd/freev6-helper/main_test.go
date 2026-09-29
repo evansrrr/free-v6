@@ -56,6 +56,50 @@ func TestSettingsDefaultAutoRunProxyOff(t *testing.T) {
 	}
 }
 
+// 快捷键 defaults off: the app must not grab F6 unasked.
+func TestSettingsDefaultHotkeyEnabledOff(t *testing.T) {
+	if (settings{}).HotkeyEnabled {
+		t.Fatal("hotkeyEnabled must default to false")
+	}
+	if defaultSettings().HotkeyEnabled {
+		t.Fatal("defaultSettings must keep hotkeyEnabled false")
+	}
+}
+
+// PUT must persist hotkeyEnabled — main.rs reads it from settings.json at
+// startup to register F6 before the webview exists.
+func TestSettingsHandlerPersistsHotkeyEnabled(t *testing.T) {
+	root := t.TempDir()
+	h := &helper{root: root}
+
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"rule","campusCidrs":["edu.cn"],"hotkeyEnabled":true}`)))
+	putRec := httptest.NewRecorder()
+	h.settings(putRec, put)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", putRec.Code, putRec.Body.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "config", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"hotkeyEnabled": true`)) {
+		t.Fatalf("settings.json must store hotkeyEnabled, got:\n%s", raw)
+	}
+
+	// A PUT that omits the key (older GUI) must keep the stored value.
+	second := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"global","campusCidrs":["edu.cn"]}`)))
+	secondRec := httptest.NewRecorder()
+	h.settings(secondRec, second)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second PUT status = %d, body = %s", secondRec.Code, secondRec.Body.String())
+	}
+	if !bytes.Contains(secondRec.Body.Bytes(), []byte(`"hotkeyEnabled":true`)) {
+		t.Fatalf("omitted hotkeyEnabled must keep stored true, got: %s", secondRec.Body.String())
+	}
+}
+
 // A proxy start must not wipe the autoRun switch: mergeStartSettings only
 // overlays mode/cidrs/devMode onto the stored settings.
 func TestMergeStartSettingsPreservesAutoRunProxy(t *testing.T) {

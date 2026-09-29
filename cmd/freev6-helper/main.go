@@ -36,6 +36,9 @@ type settings struct {
 	// 自动运行免流（设置 → 通用）：打开软件后由前端自动尝试启动免流，
 	// 开机自启动时等到网络恢复等合适时机再试；默认关闭。
 	AutoRunProxy bool `json:"autoRunProxy"`
+	// 快捷键（设置 → 通用）：启用后按 F6 由桌面壳弹出主窗口，即使窗口
+	// 处于托盘驻留/静默启动状态；默认关闭。
+	HotkeyEnabled bool `json:"hotkeyEnabled"`
 }
 
 type proxyRequest struct {
@@ -229,6 +232,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		// (or a partial PUT) must not silently turn 自动运行免流 off.
 		if !jsonKeyPresent(body, "autoRunProxy") {
 			current.AutoRunProxy = persisted.AutoRunProxy
+		}
+		// 同上：省略 hotkeyEnabled 时保留存储值，否则 bool 零值会悄悄解绑 F6
+		if !jsonKeyPresent(body, "hotkeyEnabled") {
+			current.HotkeyEnabled = persisted.HotkeyEnabled
 		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {

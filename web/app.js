@@ -10,6 +10,7 @@ const state = {
   autoStart: false,
   silentStart: false,
   autoRunProxy: false,
+  hotkeyEnabled: false,
   // Update (GitHub release check + in-app install)
   updateInfo: null,
   updatePhase: null,
@@ -790,7 +791,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -1020,6 +1021,7 @@ async function refreshBackendState() {
     if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
     if (typeof status.settings?.silentStart === 'boolean') state.silentStart = status.settings.silentStart;
     if (typeof status.settings?.autoRunProxy === 'boolean') state.autoRunProxy = status.settings.autoRunProxy;
+    if (typeof status.settings?.hotkeyEnabled === 'boolean') state.hotkeyEnabled = status.settings.hotkeyEnabled;
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
@@ -1157,11 +1159,13 @@ async function pollStatus() {
     const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
     const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
     const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
-    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy) {
+    const nextHotkeyEnabled = typeof status.settings?.hotkeyEnabled === 'boolean' ? status.settings.hotkeyEnabled : state.hotkeyEnabled;
+    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled) {
       state.devMode = nextDevMode;
       state.autoStart = nextAutoStart;
       state.silentStart = nextSilentStart;
       state.autoRunProxy = nextAutoRunProxy;
+      state.hotkeyEnabled = nextHotkeyEnabled;
       updateSettingsUI();
     }
     // 状态已同步：helper 连上且设置开启时排队一次自动启动（幂等）
@@ -1524,6 +1528,8 @@ function updateSettingsUI() {
   if (silentSwitch) silentSwitch.selected = state.silentStart;
   const autoRunSwitch = $('#autoRunSwitch');
   if (autoRunSwitch) autoRunSwitch.selected = state.autoRunProxy;
+  const hotkeySwitch = $('#hotkeySwitch');
+  if (hotkeySwitch) hotkeySwitch.selected = state.hotkeyEnabled;
   const dynSwitch = $('#dynamicColorSwitch');
   if (dynSwitch) dynSwitch.selected = state.dynamicColor;
   const oledSwitch = $('#pureBlackSwitch');
@@ -1688,6 +1694,32 @@ function wireSettingsEvents() {
       addLog('已关闭自动运行免流');
       disarmAutoRun();
     }
+  });
+
+  // 快捷键 —— 启用后按 F6 打开主窗口，即使窗口正驻留托盘/静默启动。
+  // 先让桌面壳注册/注销系统级热键（F6 被占用会失败），成功后再落盘；
+  // 注册失败则回滚开关，UI 不声称一个没生效的状态。
+  $('#hotkeySwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.hotkeyEnabled;
+    state.hotkeyEnabled = next;
+    try {
+      await tauriInvoke('hotkey_set', { enabled: next });
+    } catch (err) {
+      state.hotkeyEnabled = previous;
+      e.target.selected = previous;
+      addLog(`快捷键设置失败: ${err}`, true);
+      return;
+    }
+    const saved = await persistSettings();
+    if (!saved) {
+      // 落盘失败 → 回滚热键注册与开关状态
+      state.hotkeyEnabled = previous;
+      e.target.selected = previous;
+      tauriInvoke('hotkey_set', { enabled: previous });
+      return;
+    }
+    addLog(next ? '已开启快捷键（按 F6 打开主窗口）' : '已关闭快捷键');
   });
 
   // Dynamic color — seed from the wallpaper (system accent as fallback) via

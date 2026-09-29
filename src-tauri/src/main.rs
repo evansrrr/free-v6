@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Mutex,
 };
 use tauri::{
@@ -158,19 +158,12 @@ fn task_manager_allows_autostart() -> bool {
 }
 
 // Tray-only launch decision: the autostart task passes --minimized/--autostart,
-// and 静默启动 (设置 → 通用) makes EVERY launch skip the window. The setting is
-// read from config/settings.json next to the exe (the helper persists the
-// silentStart field there); whitespace is stripped first so hand-edited
-// spacing still matches. Manual launches without it show the window.
-fn should_show_window() -> bool {
-    let flagged = std::env::args().any(|arg| {
-        let arg = arg.as_str();
-        arg == "--minimized" || arg == "--autostart"
-    });
-    if flagged {
-        return false;
-    }
-    let silent = std::env::current_exe()
+// and 静默启动 (设置 → 通用) makes EVERY launch skip the window. Both this and
+// the F6 hotkey read their flag from config/settings.json next to the exe (the
+// helper persists the fields there); whitespace is stripped first so
+// hand-edited spacing still matches. Manual launches without it show the window.
+fn settings_flag(name: &str) -> bool {
+    std::env::current_exe()
         .ok()
         .and_then(|exe| {
             exe.parent()
@@ -179,10 +172,157 @@ fn should_show_window() -> bool {
         .and_then(|path| std::fs::read_to_string(path).ok())
         .map(|raw| {
             let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
-            compact.contains("\"silentStart\":true")
+            compact.contains(&format!("\"{name}\":true"))
         })
-        .unwrap_or(false);
-    !silent
+        .unwrap_or(false)
+}
+
+fn should_show_window() -> bool {
+    let flagged = std::env::args().any(|arg| {
+        let arg = arg.as_str();
+        arg == "--minimized" || arg == "--autostart"
+    });
+    if flagged {
+        return false;
+    }
+    !settings_flag("silentStart")
+}
+
+/* ── Global hotkey (设置 → 通用「快捷键」) ─────────────────────────── */
+// F6 opens the main window even while it is hidden (close-to-tray,
+// --minimized, 静默启动). RegisterHotKey binds the hot key to the thread
+// that registers it, so a dedicated thread owns BOTH the registration and
+// the GetMessage loop that receives WM_HOTKEY. The web UI toggles it at
+// runtime via hotkey_set → PostThreadMessageW to that thread; the
+// acknowledgment travels back over a channel so a busy F6 (already taken by
+// another app) fails the GUI switch instead of silently doing nothing.
+// Raw Win32 FFI instead of a crate: nothing else from user32 is needed and
+// Cargo.lock stays untouched.
+const HOTKEY_ID: i32 = 0x4635_0001; // 'F'6… arbitrary unique id
+const HOTKEY_VK_F6: u32 = 0x75;
+const HOTKEY_MOD_NOREPEAT: u32 = 0x4000;
+const WM_HOTKEY: u32 = 0x0312;
+// WM_APP + 1: wParam 1 → register, 0 → unregister (payload from hotkey_set)
+const WM_HOTKEY_CMD: u32 = 0x8001;
+
+static HOTKEY_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static HOTKEY_ACK: Mutex<Option<std::sync::mpsc::Sender<bool>>> = Mutex::new(None);
+
+// Win32 MSG. Only message/wParam are read; layout is asserted below and the
+// struct is deliberately LARGER than the SDK's MSG so GetMessageW can never
+// write past our buffer. Field names mirror the SDK (hence non_snake_case).
+#[repr(C)]
+#[derive(Default)]
+#[allow(non_snake_case)]
+struct Win32Msg {
+    hwnd: isize,
+    message: u32,
+    wParam: usize,
+    lParam: isize,
+    time: u32,
+    pt_x: i32,
+    pt_y: i32,
+    l_private: u32,
+    _extra: [u32; 8],
+}
+
+const _: () = assert!(std::mem::offset_of!(Win32Msg, message) == 8);
+const _: () = assert!(std::mem::offset_of!(Win32Msg, wParam) == 16);
+
+#[link(name = "user32")]
+extern "system" {
+    fn RegisterHotKey(hWnd: isize, id: i32, fsModifiers: u32, vk: u32) -> i32;
+    fn UnregisterHotKey(hWnd: isize, id: i32) -> i32;
+    fn GetMessageW(lpMsg: *mut Win32Msg, hWnd: isize, filterMin: u32, filterMax: u32) -> i32;
+    fn PeekMessageW(lpMsg: *mut Win32Msg, hWnd: isize, filterMin: u32, filterMax: u32, remove: u32) -> i32;
+    fn PostThreadMessageW(idThread: u32, msg: u32, wParam: usize, lParam: isize) -> i32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentThreadId() -> u32;
+}
+
+// Runs on its own thread: registers `vk` (when initially_enabled) and pumps
+// WM_HOTKEY forever, invoking `on_hotkey` on every press. `vk` is a parameter
+// so tests can grab an unused key (VK_F24) instead of fighting over F6.
+fn start_hotkey_thread(
+    on_hotkey: impl Fn() + Send + 'static,
+    initially_enabled: bool,
+    vk: u32,
+) {
+    std::thread::spawn(move || {
+        let mut msg = Win32Msg::default();
+        unsafe {
+            // PeekMessageW creates this thread's message queue. PostThreadMessageW
+            // fails against a thread with no queue, so the id is published only
+            // AFTER this call.
+            PeekMessageW(&mut msg, 0, 0, 0, 0);
+        }
+        HOTKEY_THREAD_ID.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+
+        let mut registered = false;
+        if initially_enabled {
+            registered = unsafe { RegisterHotKey(0, HOTKEY_ID, HOTKEY_MOD_NOREPEAT, vk) } != 0;
+            if !registered {
+                eprintln!("hotkey: registration failed (key already taken by another app?)");
+            }
+        }
+
+        while unsafe { GetMessageW(&mut msg, 0, 0, 0) } > 0 {
+            if msg.message == WM_HOTKEY && msg.wParam == HOTKEY_ID as usize {
+                on_hotkey();
+            } else if msg.message == WM_HOTKEY_CMD {
+                let want = msg.wParam != 0;
+                let ok = if want == registered {
+                    true // idempotent — nothing to do
+                } else if want {
+                    registered = unsafe { RegisterHotKey(0, HOTKEY_ID, HOTKEY_MOD_NOREPEAT, vk) } != 0;
+                    registered
+                } else {
+                    unsafe { UnregisterHotKey(0, HOTKEY_ID) };
+                    registered = false;
+                    true
+                };
+                // Hand the result back to hotkey_set (None if it gave up waiting).
+                if let Some(tx) = HOTKEY_ACK.lock().ok().and_then(|mut g| g.take()) {
+                    let _ = tx.send(ok);
+                }
+            }
+        }
+    });
+}
+
+// Register/unregister F6 at runtime (设置 → 通用「快捷键」). Blocking wait on
+// the hotkey thread's ack, but it normally answers in well under a millisecond;
+// the timeout only bounds the pathological "thread not pumping" case.
+#[tauri::command]
+fn hotkey_set(enabled: bool) -> Result<(), String> {
+    let tid = HOTKEY_THREAD_ID.load(Ordering::SeqCst);
+    if tid == 0 {
+        return Err("热键线程未就绪".into());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let mut guard = HOTKEY_ACK.lock().map_err(|_| "热键状态锁不可用".to_string())?;
+        *guard = Some(tx);
+    }
+    if unsafe { PostThreadMessageW(tid, WM_HOTKEY_CMD, enabled as usize, 0) } == 0 {
+        if let Ok(mut guard) = HOTKEY_ACK.lock() {
+            *guard = None;
+        }
+        return Err("热键设置消息投递失败".into());
+    }
+    match rx.recv_timeout(std::time::Duration::from_millis(1500)) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("F6 已被其他软件占用，快捷键注册失败".into()),
+        Err(_) => {
+            if let Ok(mut guard) = HOTKEY_ACK.lock() {
+                *guard = None;
+            }
+            Err("热键线程未响应".into())
+        }
+    }
 }
 
 fn main() {
@@ -198,6 +338,15 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             start_helper(app)?;
+            // F6 hotkey must work even when the window never shows (tray-only /
+            // 静默启动), so it lives outside the webview: register per the
+            // persisted setting before any UI exists.
+            let handle = app.handle().clone();
+            start_hotkey_thread(
+                move || show_main_window(&handle),
+                settings_flag("hotkeyEnabled"),
+                HOTKEY_VK_F6,
+            );
             let show = MenuItem::with_id(app, "show", "打开 freev6", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -258,6 +407,7 @@ fn main() {
             window_start_dragging,
             window_show,
             app_quit,
+            hotkey_set,
             update_apply,
             open_readme
         ])
@@ -331,5 +481,61 @@ fn stop_helper(app: &tauri::AppHandle) {
                 let _ = child.kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    // End-to-end over the real Win32 thread: enable → register, WM_HOTKEY →
+    // callback, disable → unregister. Uses VK_F24 (0x87) instead of F6 so a
+    // parallel test run — or any app that grabbed F6 — can't make this flaky.
+    // One test only: the thread id / ack channel are process-wide statics.
+    #[test]
+    fn hotkey_thread_enable_press_disable() {
+        const VK_F24: u32 = 0x87;
+        let presses = Arc::new(AtomicUsize::new(0));
+        let counter = presses.clone();
+        start_hotkey_thread(move || { counter.fetch_add(1, Ordering::SeqCst); }, false, VK_F24);
+
+        // The thread publishes its id only after PeekMessageW created its queue.
+        let mut tid = 0u32;
+        for _ in 0..200 {
+            tid = HOTKEY_THREAD_ID.load(Ordering::SeqCst);
+            if tid != 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_ne!(tid, 0, "hotkey thread never published its id");
+
+        // Disabled at start → first enable must really call RegisterHotKey.
+        hotkey_set(true).expect("VK_F24 registration should succeed");
+
+        // Synthesize the WM_HOTKEY Windows sends on a press.
+        unsafe {
+            assert_ne!(
+                PostThreadMessageW(tid, WM_HOTKEY, HOTKEY_ID as usize, 0),
+                0,
+                "PostThreadMessageW(WM_HOTKEY) failed"
+            );
+        }
+        let mut got = 0;
+        for _ in 0..200 {
+            got = presses.load(Ordering::SeqCst);
+            if got > 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(got, 1, "WM_HOTKEY must reach the callback exactly once");
+
+        // Toggle off and back on — both are idempotent against live state.
+        hotkey_set(false).expect("unregister should succeed");
+        hotkey_set(true).expect("re-register should succeed");
+        hotkey_set(true).expect("second enable is a no-op, still Ok");
+        hotkey_set(false).expect("final unregister should succeed");
     }
 }
