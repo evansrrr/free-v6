@@ -9,6 +9,7 @@ const state = {
   devMode: false,
   autoStart: false,
   silentStart: false,
+  autoRunProxy: false,
   // Update (GitHub release check + in-app install)
   updateInfo: null,
   updatePhase: null,
@@ -189,6 +190,202 @@ function updateConnectionChip(online) {
   } else {
     headerStatus.textContent = '核心已就绪';
   }
+}
+
+/* ── 启动免流（手动 FAB 与「自动运行免流」共用的完整流程） ────── */
+
+// 核心检测 → IPv6 门禁 → /proxy/start。
+// 返回 { ok: true } 或 { ok: false, reason, message, detail }：
+//   core    未检测到运行核心
+//   offline 网络未就绪（IPv6 探测请求都没打出去）—— 自动运行可稍后重试
+//   net     网络已通但不是校园网 IPv6
+//   busy    上一次启动流程尚未结束
+//   api     /proxy/start 报错
+// auto=true（自动运行）时不改 FAB 文案、不写过程日志、不弹对话框。
+let startFlowBusy = false;
+async function startProxyFlow(auto = false) {
+  if (startFlowBusy) return { ok: false, reason: 'busy', message: '启动流程正在进行' };
+  if (!state.helperOnline) return { ok: false, reason: 'helper', message: 'helper 未连接' };
+  startFlowBusy = true;
+  try {
+    // 核心检测（本地 stat，很便宜）：缺失 → 引导先下载，不发起启动
+    try {
+      const runtime = await api('/runtime');
+      state.runtimePresent = Boolean(runtime.present);
+      state.runtimeChecked = true;
+    } catch (_) { /* 保持上次已知状态 */ }
+    updateConnectionChip(state.helperOnline);
+    if (!state.runtimePresent) return { ok: false, reason: 'core', message: '未检测到运行核心' };
+
+    // IPv6 gate: 免流 only works on campus IPv6. Developer mode skips it.
+    if (!state.devMode) {
+      if (!auto) {
+        $('#proxyToggle').label = '检测中…';
+        addLog('启动前检测本机 IPv6…');
+      }
+      let ip = '';
+      let detail = '';
+      try {
+        ip = await detectPublicIPv6();
+      } catch (e) {
+        detail = `（检测失败: ${e.message}）`;
+      }
+      if (!ip) {
+        return { ok: false, reason: 'offline', message: `IPv6 检测失败${detail}`, detail };
+      }
+      if (!isInCampusIPv6(ip)) {
+        return { ok: false, reason: 'net', message: `当前网络不支持免流${detail}`, detail };
+      }
+      if (!auto) addLog(`IPv6 检测通过: ${ip}`);
+    } else if (!auto) {
+      addLog('开发者模式：跳过 IPv6 检测');
+    }
+
+    try {
+      await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
+    } catch (e) {
+      return { ok: false, reason: 'api', message: e.message };
+    }
+    setRunning(true);
+    addLog(auto ? '自动启动免流成功' : '免流模式已启动');
+    autoDelayTestAfterStart();
+    return { ok: true };
+  } finally {
+    startFlowBusy = false;
+  }
+}
+
+// 手动启动失败：按原因给出引导弹窗与日志（自动运行的失败见 autoRunFail）
+function reportStartFailure(res) {
+  if (res.reason === 'core') {
+    showCoreDialog();
+    addLog('启动已取消：未检测到运行核心，请先下载', true);
+  } else if (res.reason === 'net' || res.reason === 'offline') {
+    showNetGateDialog();
+    addLog(`启动已取消：当前网络不支持免流${res.detail || ''}`, true);
+  } else {
+    addLog(`操作失败: ${res.message}`, true);
+  }
+}
+
+/* ── 自动运行免流 (设置 → 通用) ──────────────────────────────── */
+
+// 开关打开后：软件被打开（helper 首次连上）即自动尝试启动免流。开机自启动
+// 常落在网络就绪之前，因此离线 / IPv6 探测失败 / 接入凭据未注册都视为
+// “时机未到”，监听 online 事件并按间隔重试；核心缺失、非校园网、启动接口
+// 报错等确定性失败才弹出主窗口交给用户处理。
+// 每个会话只走一轮：启动成功、失败或用户手动接管（FAB 启动/停止）后不再自动尝试。
+const autoRun = { armed: false, done: false, startupHandled: false, tries: 0, offlineTries: 0, regTries: 0, timer: null, lastWhy: '' };
+const AUTO_RUN_RETRY_MS = 5000;
+const AUTO_RUN_MAX_TRIES = 60;       // 联网但未就绪的重试上限（≈5 分钟，覆盖开机后 IPv6 缓慢获取）
+const AUTO_RUN_MAX_OFFLINE = 120;    // 离线等待上限（≈10 分钟，开机自启等网络恢复）
+const AUTO_RUN_MAX_REG_TRIES = 3;    // WARP 凭据自动补注册次数
+
+function disarmAutoRun() {
+  autoRun.armed = false;
+  if (autoRun.timer) {
+    clearTimeout(autoRun.timer);
+    autoRun.timer = null;
+  }
+}
+
+function scheduleAutoRun(delay) {
+  if (!autoRun.armed) return;
+  if (autoRun.timer) clearTimeout(autoRun.timer);
+  autoRun.timer = setTimeout(() => {
+    autoRun.timer = null;
+    runAutoStart().catch((e) => autoRunFail({ reason: 'api', message: e.message }));
+  }, delay);
+}
+
+// helper 首次连上（即“软件被打开”）时判断一次：开关已开且免流未运行则排队自动启动。
+// 本次会话只认这一次（startupHandled）——中途打开开关不立即启动，按需求要等到
+// 下次打开软件才生效；helper 晚些才连上也没问题，首次连上时仍会排队。
+function maybeArmAutoRun() {
+  if (autoRun.startupHandled) return;
+  if (!state.helperOnline) return; // helper 未就绪，等下一次连上再判断
+  autoRun.startupHandled = true;
+  if (!state.autoRunProxy) return;
+  if (state.proxyRunning) { autoRun.done = true; return; }
+  if (autoRun.armed || autoRun.done) return;
+  autoRun.armed = true;
+  autoRun.tries = 0;
+  autoRun.offlineTries = 0;
+  autoRun.regTries = 0;
+  autoRun.lastWhy = '';
+  addLog('自动运行免流已就绪，稍后尝试启动');
+  scheduleAutoRun(1200);
+}
+
+function autoRunRetry(why) {
+  if (navigator.onLine) {
+    autoRun.tries += 1;
+    if (autoRun.tries > AUTO_RUN_MAX_TRIES) {
+      autoRunFail({ reason: 'timeout', message: `自动启动免流超时：${why}` });
+      return;
+    }
+  } else {
+    // 离线等待单独计数（开机自启动常要等网络就绪），online 事件会立即重试
+    autoRun.tries = 0;
+    autoRun.offlineTries += 1;
+    if (autoRun.offlineTries > AUTO_RUN_MAX_OFFLINE) {
+      autoRunFail({ reason: 'timeout', message: '自动启动免流超时：网络长时间未恢复' });
+      return;
+    }
+  }
+  // 只在原因变化或每 6 次（≈30 秒）记一条，避免刷屏
+  if (why !== autoRun.lastWhy || (autoRun.tries > 0 && autoRun.tries % 6 === 0)) {
+    autoRun.lastWhy = why;
+    addLog(`自动运行免流：${why}，稍后重试`);
+  }
+  scheduleAutoRun(AUTO_RUN_RETRY_MS);
+}
+
+// 确定性失败：记日志、弹出主窗口，并给出能解释原因的界面
+async function autoRunFail(res) {
+  disarmAutoRun();
+  autoRun.done = true;
+  if (!state.autoRunProxy) return; // 期间被用户关掉 → 不再打扰
+  addLog(`自动启动免流失败：${res.message}`, true);
+  try { await tauriInvoke('window_show'); } catch (_) { /* 浏览器预览无宿主 */ }
+  if (res.reason === 'core') {
+    showCoreDialog();
+  } else if (res.reason === 'net') {
+    showNetGateDialog();
+  } else {
+    // 没有专用弹窗：直接展开日志，让用户看到失败原因
+    $('#logDrawer')?.classList.add('open');
+    $('#scrim')?.classList.add('open');
+  }
+}
+
+async function runAutoStart() {
+  if (!autoRun.armed || !state.autoRunProxy) { disarmAutoRun(); return; }
+  if (state.proxyRunning) { disarmAutoRun(); autoRun.done = true; return; }
+  if (!state.helperOnline) { autoRunRetry('helper 未连接'); return; }
+  if (!navigator.onLine) { autoRunRetry('等待网络恢复'); return; }
+  // /proxy/start 依赖 state/warp.json：凭据注册失败（多因网络未就绪）时按重试兜底，
+  // 但只自动补注册有限次，避免反复打 Cloudflare
+  if (!state.warpRegistered) {
+    if (!state.warpRegistering && autoRun.regTries < AUTO_RUN_MAX_REG_TRIES) {
+      autoRun.regTries += 1;
+      registerWarp(true); // 不阻塞等待，成败交给下一轮
+    }
+    // 注册在途也计入重试，保证整轮自动启动有上限（不会无限等下去）
+    autoRunRetry(state.warpRegistering ? '接入凭据注册中' : '接入凭据未就绪');
+    return;
+  }
+  const res = await startProxyFlow(true);
+  if (res.ok) {
+    disarmAutoRun();
+    autoRun.done = true;
+    return;
+  }
+  if (res.reason === 'offline' || res.reason === 'busy' || res.reason === 'helper') {
+    autoRunRetry(res.message);
+    return;
+  }
+  await autoRunFail(res);
 }
 
 /* ── IPv6 gate (启动免流前检测) ─────────────────────────────── */
@@ -456,7 +653,7 @@ function openUpdateDialog() {
   const info = state.updateInfo;
   if (!info || updateBusy()) return;
   $('#updateTitle').textContent = `发现新版本 v${info.version}`;
-  $('#updateCurrent').textContent = `当前版本 ${currentAppVersion() || '-'} → v${info.version}`;
+  $('#updateCurrent').textContent = `当前版本 v${currentAppVersion() || '-'} → v${info.version}`;
   const section = (info.notes.split(/\n---\n/)[0] || '')
     .replace(/^##\s*\[[^\]]+\][^\n]*\n?/, '')
     .trim();
@@ -593,7 +790,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -822,6 +1019,7 @@ async function refreshBackendState() {
     if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
     if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
     if (typeof status.settings?.silentStart === 'boolean') state.silentStart = status.settings.silentStart;
+    if (typeof status.settings?.autoRunProxy === 'boolean') state.autoRunProxy = status.settings.autoRunProxy;
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
@@ -840,6 +1038,8 @@ async function refreshBackendState() {
     updateSettingsUI();
     // 首次拉到状态：未注册则自动注册（每会话仅一次）
     maybeAutoRegisterWarp();
+    // 设置开启时：软件被打开后自动尝试启动免流
+    maybeArmAutoRun();
 
     addLog('已连接 freev6 helper');
   } catch (error) {
@@ -956,12 +1156,16 @@ async function pollStatus() {
     const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
     const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
     const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
-    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart) {
+    const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
+    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy) {
       state.devMode = nextDevMode;
       state.autoStart = nextAutoStart;
       state.silentStart = nextSilentStart;
+      state.autoRunProxy = nextAutoRunProxy;
       updateSettingsUI();
     }
+    // 状态已同步：helper 连上且设置开启时排队一次自动启动（幂等）
+    maybeArmAutoRun();
   } catch (_) {
     if (state.helperOnline) {
       state.helperOnline = false;
@@ -997,43 +1201,15 @@ function wireEvents() {
         await api('/proxy/stop', { method: 'POST' });
         setRunning(false);
         addLog('免流模式已停止');
+        // 手动接管：本会话不再自动启动
+        autoRun.done = true;
+        disarmAutoRun();
       } else {
-        // 核心检测（本地 stat，很便宜）：缺失 → 弹窗引导先下载，不发起启动
-        try {
-          const runtime = await api('/runtime');
-          state.runtimePresent = Boolean(runtime.present);
-          state.runtimeChecked = true;
-        } catch (_) { /* 保持上次已知状态 */ }
-        updateConnectionChip(state.helperOnline);
-        if (!state.runtimePresent) {
-          showCoreDialog();
-          addLog('启动已取消：未检测到运行核心，请先下载', true);
-          return;
-        }
-        // IPv6 gate: 免流 only works on campus IPv6. Developer mode skips it.
-        if (!state.devMode) {
-          fab.label = '检测中…';
-          addLog('启动前检测本机 IPv6…');
-          let ip = '';
-          let reason = '';
-          try {
-            ip = await detectPublicIPv6();
-          } catch (e) {
-            reason = `（检测失败: ${e.message}）`;
-          }
-          if (!isInCampusIPv6(ip)) {
-            showNetGateDialog();
-            addLog(`启动已取消：当前网络不支持免流${reason}`, true);
-            return;
-          }
-          addLog(`IPv6 检测通过: ${ip}`);
-        } else {
-          addLog('开发者模式：跳过 IPv6 检测');
-        }
-        await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
-        setRunning(true);
-        addLog('免流模式已启动');
-        autoDelayTestAfterStart();
+        // 手动接管：取消排队中的自动启动，改由本次点击决定结果
+        autoRun.done = true;
+        disarmAutoRun();
+        const res = await startProxyFlow(false);
+        if (!res.ok) reportStartFailure(res);
       }
     } catch (e) {
       addLog(`操作失败: ${e.message}`, true);
@@ -1346,6 +1522,8 @@ function updateSettingsUI() {
   if (autoSwitch) autoSwitch.selected = state.autoStart;
   const silentSwitch = $('#silentStartSwitch');
   if (silentSwitch) silentSwitch.selected = state.silentStart;
+  const autoRunSwitch = $('#autoRunSwitch');
+  if (autoRunSwitch) autoRunSwitch.selected = state.autoRunProxy;
   const dynSwitch = $('#dynamicColorSwitch');
   if (dynSwitch) dynSwitch.selected = state.dynamicColor;
   const oledSwitch = $('#pureBlackSwitch');
@@ -1488,6 +1666,28 @@ function wireSettingsEvents() {
       return;
     }
     addLog(next ? '已开启静默启动（开机自启与手动打开均仅驻留托盘）' : '已关闭静默启动');
+  });
+
+  // 自动运行免流 —— 打开软件后自动尝试启动；网络未就绪时等待合适时机，
+  // 确定性失败则自动弹出主窗口。与静默启动同样的回滚约定。
+  $('#autoRunSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.autoRunProxy;
+    state.autoRunProxy = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.autoRunProxy = previous;
+      e.target.selected = previous;
+      return;
+    }
+    if (next) {
+      // 只保存设置，不立即启动：自动启动按需求发生在“软件被打开”时
+      addLog('已开启自动运行免流（下次打开软件时自动尝试启动）');
+      autoRun.done = false;
+    } else {
+      addLog('已关闭自动运行免流');
+      disarmAutoRun();
+    }
   });
 
   // Dynamic color — seed from the wallpaper (system accent as fallback) via
@@ -1786,6 +1986,16 @@ function init() {
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
+
+  // 自动运行免流：网络恢复后立即重试（离线期间按间隔静默等待）
+  window.addEventListener('online', () => {
+    if (!autoRun.armed) return;
+    autoRun.tries = 0;
+    autoRun.offlineTries = 0;
+    autoRun.lastWhy = '';
+    addLog('网络已恢复，重新尝试自动启动免流');
+    scheduleAutoRun(600);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

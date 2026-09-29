@@ -222,6 +222,17 @@
               </div>
               <md-switch id="silentStartSwitch" aria-label="静默启动"></md-switch>
             </div>
+            <md-divider></md-divider>
+            <div class="setting-item">
+              <div class="setting-icon">
+                <md-icon>autorenew</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">自动运行免流</div>
+                <div class="setting-desc">应用打开时自动尝试启动免流模式</div>
+              </div>
+              <md-switch id="autoRunSwitch" aria-label="自动运行免流"></md-switch>
+            </div>
             
           </div>
 
@@ -414,7 +425,7 @@
   <div class="net-dialog-scrim" id="updateDialogScrim">
     <div class="net-dialog update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="updateTitle">
       <md-icon class="net-dialog-icon">system_update</md-icon>
-      <h3 id="updateTitle">发现新版本</h3>
+      <h3 id="updateTitle">发现新版本（~6.7MB）</h3>
       <p id="updateCurrent"></p>
       <p class="update-warn" id="updateStopHint" hidden>更新会自动停止兔流并退出软件，安装完成后自动重启。</p>
       <div class="update-notes" id="updateNotes"></div>

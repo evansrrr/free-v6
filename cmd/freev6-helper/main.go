@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,9 @@ type settings struct {
 	DevMode     bool     `json:"devMode"`
 	AutoStart   bool     `json:"autoStart"`
 	SilentStart bool     `json:"silentStart"`
+	// 自动运行免流（设置 → 通用）：打开软件后由前端自动尝试启动免流，
+	// 开机自启动时等到网络恢复等合适时机再试；默认关闭。
+	AutoRunProxy bool `json:"autoRunProxy"`
 }
 
 type proxyRequest struct {
@@ -183,8 +187,13 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeJSON(writer, http.StatusOK, current)
 	case http.MethodPut:
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
 		var current settings
-		if err := json.NewDecoder(request.Body).Decode(&current); err != nil {
+		if err := json.Unmarshal(body, &current); err != nil {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 			return
 		}
@@ -215,6 +224,11 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		// keep the value from settings.json (edit it there manually).
 		if current.Blacklist == nil {
 			current.Blacklist = persisted.Blacklist
+		}
+		// Same contract for autoRunProxy: a client that predates the switch
+		// (or a partial PUT) must not silently turn 自动运行免流 off.
+		if !jsonKeyPresent(body, "autoRunProxy") {
+			current.AutoRunProxy = persisted.AutoRunProxy
 		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
@@ -447,6 +461,18 @@ func (h *helper) loadSettings() (settings, error) {
 		current.Blacklist = []string{}
 	}
 	return current, nil
+}
+
+// jsonKeyPresent reports whether the top level of a JSON object body carries
+// the given key. Used by the settings PUT so an omitted field means "leave the
+// stored value alone" rather than "reset to false" (bool zero value).
+func jsonKeyPresent(body []byte, key string) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	_, ok := probe[key]
+	return ok
 }
 
 // mergeStartSettings overlays a proxy-start request onto the stored settings:

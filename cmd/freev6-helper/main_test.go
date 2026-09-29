@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // A proxy start must not drop settings fields the start request never carries.
 // Regression: startProxy saved settings{Mode, CampusCIDRs} — a partial struct
@@ -36,5 +43,98 @@ func TestSettingsDefaultSilentStartOff(t *testing.T) {
 	}
 	if defaultSettings().SilentStart {
 		t.Fatal("defaultSettings must keep silentStart false")
+	}
+}
+
+// 自动运行免流 defaults off: opening the app must not start 免流 unasked.
+func TestSettingsDefaultAutoRunProxyOff(t *testing.T) {
+	if (settings{}).AutoRunProxy {
+		t.Fatal("autoRunProxy must default to false")
+	}
+	if defaultSettings().AutoRunProxy {
+		t.Fatal("defaultSettings must keep autoRunProxy false")
+	}
+}
+
+// A proxy start must not wipe the autoRun switch: mergeStartSettings only
+// overlays mode/cidrs/devMode onto the stored settings.
+func TestMergeStartSettingsPreservesAutoRunProxy(t *testing.T) {
+	stored := settings{
+		Mode:         "rule",
+		CampusCIDRs:  []string{"edu.cn"},
+		AutoRunProxy: true,
+	}
+	got := mergeStartSettings(stored, proxyRequest{Mode: "global", CampusCIDRs: []string{"edu.cn"}})
+	if !got.AutoRunProxy {
+		t.Fatal("autoRunProxy must survive a proxy start")
+	}
+}
+
+// PUT must persist autoRunProxy and GET must hand it back — the GUI switch
+// reverts itself whenever the helper drops the field on save.
+func TestSettingsHandlerPersistsAutoRunProxy(t *testing.T) {
+	root := t.TempDir()
+	h := &helper{root: root}
+
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"rule","campusCidrs":["edu.cn"],"autoRunProxy":true}`)))
+	putRec := httptest.NewRecorder()
+	h.settings(putRec, put)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", putRec.Code, putRec.Body.String())
+	}
+
+	// The file must contain the flag for main.rs / other readers too.
+	raw, err := os.ReadFile(filepath.Join(root, "config", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"autoRunProxy": true`)) {
+		t.Fatalf("settings.json must store autoRunProxy, got:\n%s", raw)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	getRec := httptest.NewRecorder()
+	h.settings(getRec, get)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d", getRec.Code)
+	}
+	if !bytes.Contains(getRec.Body.Bytes(), []byte(`"autoRunProxy":true`)) {
+		t.Fatalf("GET must return autoRunProxy, got: %s", getRec.Body.String())
+	}
+}
+
+// A PUT that omits autoRunProxy (older GUI, partial update) must keep the
+// stored value — a bool zero value would silently disable 自动运行免流.
+func TestSettingsPutOmittedAutoRunProxyKeepsStored(t *testing.T) {
+	root := t.TempDir()
+	h := &helper{root: root}
+
+	first := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"rule","campusCidrs":["edu.cn"],"autoRunProxy":true}`)))
+	firstRec := httptest.NewRecorder()
+	h.settings(firstRec, first)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first PUT status = %d, body = %s", firstRec.Code, firstRec.Body.String())
+	}
+
+	second := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"global","campusCidrs":["edu.cn"]}`)))
+	secondRec := httptest.NewRecorder()
+	h.settings(secondRec, second)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("second PUT status = %d, body = %s", secondRec.Code, secondRec.Body.String())
+	}
+	if !bytes.Contains(secondRec.Body.Bytes(), []byte(`"autoRunProxy":true`)) {
+		t.Fatalf("omitted autoRunProxy must keep stored true, got: %s", secondRec.Body.String())
+	}
+
+	// Explicit false still turns it off.
+	third := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		bytes.NewReader([]byte(`{"mode":"rule","campusCidrs":["edu.cn"],"autoRunProxy":false}`)))
+	thirdRec := httptest.NewRecorder()
+	h.settings(thirdRec, third)
+	if !bytes.Contains(thirdRec.Body.Bytes(), []byte(`"autoRunProxy":false`)) {
+		t.Fatalf("explicit false must persist, got: %s", thirdRec.Body.String())
 	}
 }
