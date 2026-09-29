@@ -14,7 +14,7 @@
 Release 永远先建为草稿（draft），检查无误后手动 Publish。
 -->
 
-## [Unreleased]
+## [0.3.6] - 2026-09-29
 
 ### 改动
 
