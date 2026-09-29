@@ -77,6 +77,22 @@ async function api(path, options = {}) {
   return payload;
 }
 
+// Invoke a Tauri host command through __TAURI_INTERNALS__ (the same channel
+// the custom window controls use). Returns false outside the Tauri webview
+// so callers can fall back to plain browser navigation.
+async function invokeHost(cmd) {
+  try {
+    const tauri = window.__TAURI_INTERNALS__;
+    if (tauri && typeof tauri.invoke === 'function') {
+      await tauri.invoke(cmd);
+      return true;
+    }
+  } catch (e) {
+    addLog(`调用 ${cmd} 失败: ${e}`, true);
+  }
+  return false;
+}
+
 /* Open a URL in the system browser (Tauri opener plugin), or a new tab when
    the UI runs standalone in a normal browser (dev server). */
 async function openExternal(url) {
@@ -1373,6 +1389,16 @@ function wireSettingsEvents() {
   // GitHub project — opens in the system browser
   $('#githubItem')?.addEventListener('click', () => {
     openExternal('https://github.com/evansrrr/free-v6');
+  });
+  $('#feedbackItem')?.addEventListener('click', () => {
+    openExternal('https://github.com/evansrrr/free-v6/issues');
+  });
+  // 使用说明: README.md ships with the installer (bundle.resources maps
+  // ../README.md -> README.md under resource_dir); the host command resolves
+  // the install dir. A standalone browser falls back to the repository page.
+  $('#readmeItem')?.addEventListener('click', async () => {
+    if (await invokeHost('open_readme')) return;
+    window.open('https://github.com/evansrrr/free-v6#readme', '_blank', 'noopener,noreferrer');
   });
 
   // 软件版本行：发现新版时显示“有新版本”角标，点击重新打开更新弹窗
