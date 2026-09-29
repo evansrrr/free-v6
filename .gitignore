@@ -1,4 +1,3 @@
-# Build output
 /bin/
 /dist/
 /target/
@@ -9,17 +8,14 @@ src-tauri/gen/
 *.exe
 *.test
 
-# Local runtime state and secrets
 state/
 *.local.json
 mihomo.yaml
 
-# Agent tooling (local only, not part of the project)
 .agents/
-docs/
+docs/agent/
 skills-lock.json
 
-# IDE / OS
 .vscode/
 .idea/
 .DS_Store
