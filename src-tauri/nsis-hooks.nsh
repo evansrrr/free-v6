@@ -104,10 +104,10 @@ Function F6ConsentCreate
   Pop $R9
   ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
 
-  ${NSD_CreateLabel} 0 0 100% 62u "《用户协议》与《隐私政策》说明本软件的功能定位、第三方服务风险、免责声明、责任限制与数据处理方式。$\n$\n本软件为免费、开源（MIT 许可证）的自由软件，按“现状”提供，不附带任何商业服务承诺。完整文本随安装包位于安装目录 docs\，亦发布于项目仓库。"
+  ${NSD_CreateLabel} 0 0 100% 62u "本软件为免费、开源的自由软件，采用 MIT 许可证。完整文本将放置在安装目录下，亦发布于项目仓库 https://github.com/evansrrr/free-v6 "
   Pop $R0
 
-  ${NSD_CreateLabel} 0 74u 100% 10u "在浏览器中打开完整文本："
+  ${NSD_CreateLabel} 0 74u 100% 10u "在浏览器中查看："
   Pop $R0
   ${NSD_CreateLink} 0 90u 70u 12u "用户协议"
   Pop $R1
