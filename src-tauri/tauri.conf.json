@@ -31,7 +31,12 @@
     "active": true,
     "targets": "nsis",
     "externalBin": ["binaries/freev6-helper"],
-    "resources": { "LICENSES": "LICENSES", "../README.md": "README.md" },
+    "resources": {
+      "LICENSES": "LICENSES",
+      "../README.md": "README.md",
+      "../docs/agreement.md": "docs/agreement.md",
+      "../docs/privacy.md": "docs/privacy.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

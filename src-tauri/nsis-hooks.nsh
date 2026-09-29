@@ -76,3 +76,83 @@
     ${EndIf}
   ${EndIf}
 !macroend
+
+; ── 用户协议 / 隐私政策 同意勾选页 ─────────────────────────────────────
+; The hooks file is included right after MUI2.nsh and BEFORE every MUI page
+; declaration, so this `Page custom` becomes the FIRST wizard page (the stock
+; script has no License page — !define LICENSE "" skips MUI_PAGE_LICENSE).
+;
+; Gating: the Next button starts disabled and only enables when the box is
+; ticked; the leave function double-checks (defense in depth). Silent installs
+; never call page creators (in-app updates unaffected) and /P passive mode is
+; skipped via the template's own SkipIfPassive (forward Call is fine — the
+; template does the same for its page PRE functions).
+Var F6ConsentChecked
+
+!define F6_AGREEMENT_URL "https://github.com/evansrrr/free-v6/blob/main/docs/agreement.md"
+!define F6_PRIVACY_URL "https://github.com/evansrrr/free-v6/blob/main/docs/privacy.md"
+
+Page custom F6ConsentCreate F6ConsentLeave
+
+Function F6ConsentCreate
+  Call SkipIfPassive
+  StrCpy $F6ConsentChecked 0
+
+  !insertmacro MUI_HEADER_TEXT "用户协议与隐私政策" "请阅读以下条款并勾选同意后继续安装"
+
+  nsDialogs::Create 1018
+  Pop $R9
+  ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
+
+  ${NSD_CreateLabel} 0 0 100% 62u "《用户协议》与《隐私政策》说明本软件的功能定位、第三方服务风险、免责声明、责任限制与数据处理方式。$\n$\n本软件为免费、开源（MIT 许可证）的自由软件，按“现状”提供，不附带任何商业服务承诺。完整文本随安装包位于安装目录 docs\，亦发布于项目仓库。"
+  Pop $R0
+
+  ${NSD_CreateLabel} 0 74u 100% 10u "在浏览器中打开完整文本："
+  Pop $R0
+  ${NSD_CreateLink} 0 90u 70u 12u "用户协议"
+  Pop $R1
+  ${NSD_OnClick} $R1 F6OpenAgreement
+  ${NSD_CreateLink} 84u 90u 70u 12u "隐私政策"
+  Pop $R2
+  ${NSD_OnClick} $R2 F6OpenPrivacy
+
+  ${NSD_CreateCheckbox} 0 118u 100% 18u "我已阅读并同意《用户协议》与《隐私政策》"
+  Pop $R3
+  ${NSD_OnClick} $R3 F6ConsentToggle
+
+  ; Next (control id 1) stays disabled until consent is given
+  GetDlgItem $R4 $HWNDPARENT 1
+  EnableWindow $R4 0
+  ${NSD_SetFocus} $R3
+
+  nsDialogs::Show
+FunctionEnd
+
+Function F6ConsentToggle
+  Pop $R0
+  ${NSD_GetState} $R0 $R1
+  ${If} $R1 = ${BST_CHECKED}
+    StrCpy $F6ConsentChecked 1
+  ${Else}
+    StrCpy $F6ConsentChecked 0
+  ${EndIf}
+  GetDlgItem $R2 $HWNDPARENT 1
+  EnableWindow $R2 $F6ConsentChecked
+FunctionEnd
+
+Function F6ConsentLeave
+  ${If} $F6ConsentChecked != "1"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "请先勾选同意《用户协议》与《隐私政策》，然后再继续安装。"
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function F6OpenAgreement
+  Pop $R0
+  ExecShell "open" "${F6_AGREEMENT_URL}"
+FunctionEnd
+
+Function F6OpenPrivacy
+  Pop $R0
+  ExecShell "open" "${F6_PRIVACY_URL}"
+FunctionEnd
