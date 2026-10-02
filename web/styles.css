@@ -404,6 +404,7 @@ md-icon-button > md-icon {
    Clickable: click / Enter opens the 本月+累计 detail hint card below. */
 .card-stats {
   width: fit-content;
+  min-width: 236px; /* same footprint as .traffic-hint below */
   max-width: 100%;
   position: relative;
   cursor: pointer;
@@ -456,6 +457,7 @@ md-icon-button > md-icon {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
+  right: 0; /* stretch to the card so both always share one width */
   z-index: 60;
   min-width: 236px;
   padding: 12px 14px;
@@ -506,7 +508,6 @@ md-icon-button > md-icon {
 }
 .traffic-hint-sum b { font-weight: 700; }
 .traffic-hint md-divider { margin: 10px 0; }
-.traffic-hint-note { margin: 10px 0 0; font-size: 10px; color: var(--md-on-surface-variant); }
 
 /* ── Log Drawer ───────────────────────────────────────────────── */
 
