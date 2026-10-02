@@ -958,6 +958,109 @@ function updateStatsRing() {
   $('#totalDown').textContent = formatBytes(state.totalDownload);
 }
 
+/* ── Persistent Traffic Stats + detail hint card ─────────────── */
+// 本月/累计流量与上面的会话累计同源（pollTraffic 的 delta），存 localStorage
+// 跨会话保留；只在本地计算与展示，不上传（见 docs/privacy.md）。
+
+const TRAFFIC_STATS_KEY = 'freev6-traffic-stats';
+const TRAFFIC_FLUSH_MS = 3000; // 每秒都有增量：合并写入，避免高频落盘
+
+const trafficStats = { total: { up: 0, down: 0 }, months: {}, dirty: false, lastFlush: 0 };
+
+function monthKey(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function loadTrafficStats() {
+  try {
+    const raw = localStorage.getItem(TRAFFIC_STATS_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    const num = v => (typeof v === 'number' && isFinite(v) && v > 0 ? v : 0);
+    if (data?.total) trafficStats.total = { up: num(data.total.up), down: num(data.total.down) };
+    if (data?.months && typeof data.months === 'object') {
+      const months = {};
+      for (const [key, val] of Object.entries(data.months)) {
+        if (/^\d{4}-(0[1-9]|1[0-2])$/.test(key) && val) months[key] = { up: num(val.up), down: num(val.down) };
+      }
+      trafficStats.months = months;
+    }
+  } catch (_) { /* 数据损坏 → 从零重新累计 */ }
+}
+
+function addTrafficStats(up, down) {
+  if (up <= 0 && down <= 0) return;
+  trafficStats.total.up += up;
+  trafficStats.total.down += down;
+  const key = monthKey();
+  const month = trafficStats.months[key] || (trafficStats.months[key] = { up: 0, down: 0 });
+  month.up += up;
+  month.down += down;
+  trafficStats.dirty = true;
+}
+
+function flushTrafficStats(force = false) {
+  if (!trafficStats.dirty) return;
+  const now = Date.now();
+  if (!force && now - trafficStats.lastFlush < TRAFFIC_FLUSH_MS) return;
+  try {
+    localStorage.setItem(TRAFFIC_STATS_KEY, JSON.stringify({ total: trafficStats.total, months: trafficStats.months }));
+    trafficStats.dirty = false;
+    trafficStats.lastFlush = now;
+  } catch (_) { /* 存储不可用：内存继续累计，下次再试 */ }
+}
+
+function renderTrafficHint() {
+  const hint = $('#trafficHint');
+  if (!hint || hint.hidden) return;
+  const key = monthKey();
+  const month = trafficStats.months[key] || { up: 0, down: 0 };
+  $('#hintMonthKey').textContent = `${key.slice(0, 4)}年${parseInt(key.slice(5), 10)}月`;
+  $('#hintMonthUp').textContent = formatBytes(month.up);
+  $('#hintMonthDown').textContent = formatBytes(month.down);
+  $('#hintMonthSum').textContent = formatBytes(month.up + month.down);
+  $('#hintTotalUp').textContent = formatBytes(trafficStats.total.up);
+  $('#hintTotalDown').textContent = formatBytes(trafficStats.total.down);
+  $('#hintTotalSum').textContent = formatBytes(trafficStats.total.up + trafficStats.total.down);
+}
+
+// 卡片下方空间不足（窗口较矮）时翻转到卡片上方；打开时与窗口 resize 时都会跑
+function positionTrafficHint() {
+  const hint = $('#trafficHint');
+  const card = $('#statsCard');
+  if (!hint || hint.hidden || !card) return;
+  hint.classList.remove('above');
+  if (card.getBoundingClientRect().bottom + hint.offsetHeight + 10 > window.innerHeight) {
+    hint.classList.add('above');
+  }
+}
+
+function openTrafficHint() {
+  const hint = $('#trafficHint');
+  const card = $('#statsCard');
+  if (!hint || !card) return;
+  hint.hidden = false;
+  positionTrafficHint();
+  card.classList.add('open');
+  card.setAttribute('aria-expanded', 'true');
+  renderTrafficHint();
+}
+
+function closeTrafficHint() {
+  const hint = $('#trafficHint');
+  if (!hint || hint.hidden) return;
+  hint.hidden = true;
+  const card = $('#statsCard');
+  card?.classList.remove('open');
+  card?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleTrafficHint() {
+  const hint = $('#trafficHint');
+  if (!hint) return;
+  if (hint.hidden) openTrafficHint(); else closeTrafficHint();
+}
+
 /* ── mihomo core download (设置页核心行 + 启动拦截弹窗共用) ─── */
 
 // 下载核心；btn 传入时显示「下载中…」进度，成功返回 true。
@@ -1083,6 +1186,8 @@ async function pollTraffic() {
       if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
       state.totalUpload += deltaUp;
       state.totalDownload += deltaDown;
+      // 同一份增量同时计入本月 / 累计（跨会话持久化）
+      addTrafficStats(deltaUp, deltaDown);
     }
 
     state.lastUpload = upTotal;
@@ -1094,6 +1199,8 @@ async function pollTraffic() {
 
     // Update stats
     updateStatsRing();
+    flushTrafficStats();
+    renderTrafficHint();
 
     // Redraw chart
     drawChart();
@@ -1306,6 +1413,33 @@ function wireEvents() {
     addLog('手动刷新');
     refreshBackendState();
     fetchProxies();
+  });
+
+  // 流量统计卡：点击 / 回车弹出「本月 + 累计」详情提示卡
+  // 点到提示卡内部不算切换（否则点内容会把它关掉），交给外部点击/Esc 关闭
+  $('#statsCard')?.addEventListener('click', (e) => {
+    if (e.target?.closest?.('#trafficHint')) return;
+    toggleTrafficHint();
+  });
+  $('#statsCard')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleTrafficHint();
+    }
+  });
+  // 点击提示卡以外区域 / Esc 关闭
+  document.addEventListener('click', (e) => {
+    if (!e.target?.closest?.('#statsCard')) closeTrafficHint();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeTrafficHint();
+  });
+  // 提示卡打开期间调整窗口 → 重新判断上/下翻转
+  window.addEventListener('resize', positionTrafficHint);
+  // 离开页面或切到后台时，把未落盘的统计强制写入 localStorage
+  window.addEventListener('pagehide', () => flushTrafficStats(true));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushTrafficStats(true);
   });
 }
 
@@ -1998,6 +2132,7 @@ function wireTitlebar() {
 function init() {
   loadSavedTheme();
   loadAppearancePrefs();
+  loadTrafficStats();
   wireTitlebar();
   wireEvents();
   wireProxyEvents();

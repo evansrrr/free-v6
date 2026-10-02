@@ -42,6 +42,7 @@
   --red-container: #3d1418;
 
   --shadow-drawer: -8px 0 24px rgba(0,0,0,.3);
+  --shadow-hint: 0 12px 28px rgba(0,0,0,.3);
 
   --radius-xs: 6px;
   --radius-sm: 10px;
@@ -134,6 +135,7 @@
   --red: #ba1a1a;
   --red-container: #ffdad6;
   --shadow-drawer: -8px 0 24px rgba(0,0,0,.08);
+  --shadow-hint: 0 8px 24px rgba(0,0,0,.12);
 }
 
 /* ── System preference auto-switch ────────────────────────────── */
@@ -173,6 +175,7 @@
     --red: #ba1a1a;
     --red-container: #ffdad6;
     --shadow-drawer: -8px 0 24px rgba(0,0,0,.08);
+    --shadow-hint: 0 8px 24px rgba(0,0,0,.12);
   }
 }
 
@@ -397,8 +400,24 @@ md-icon-button > md-icon {
 .card-header-text p { font-size: 11px; color: var(--md-on-surface-variant); margin: 0; }
 
 .card-traffic { margin-bottom: 10px; }
-/* stats card hugs its content instead of spanning the full column */
-.card-stats { width: fit-content; max-width: 100%; }
+/* stats card hugs its content instead of spanning the full column.
+   Clickable: click / Enter opens the 本月+累计 detail hint card below. */
+.card-stats {
+  width: fit-content;
+  max-width: 100%;
+  position: relative;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.card-stats:hover { background: var(--md-surface-container-high); }
+.card-stats:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+.stats-expand {
+  --md-icon-size: 16px;
+  margin-left: auto;
+  color: var(--md-on-surface-variant);
+  transition: transform 200ms var(--ease-decelerate);
+}
+.card-stats.open .stats-expand { transform: rotate(180deg); }
 
 /* ── Traffic Chart ────────────────────────────────────────────── */
 
@@ -430,6 +449,64 @@ md-icon-button > md-icon {
 .stats-legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .stats-legend-text { font-size: 11px; color: var(--md-on-surface-variant); }
 .stats-legend-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; color: var(--md-on-surface); margin-left: auto; }
+
+/* ── Traffic Hint Card (点击统计卡弹出的详情提示) ─────────────── */
+
+.traffic-hint {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  min-width: 236px;
+  padding: 12px 14px;
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-hint);
+  animation: traffic-hint-in 180ms var(--ease-decelerate) both;
+}
+.traffic-hint[hidden] { display: none; }
+/* not enough room below the card (short window) → flip above it */
+.traffic-hint.above { top: auto; bottom: calc(100% + 8px); }
+@keyframes traffic-hint-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.traffic-hint-head { font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+.traffic-hint-group { display: flex; flex-direction: column; gap: 6px; }
+.traffic-hint-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--md-on-surface-variant);
+}
+.traffic-hint-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.traffic-hint-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--md-on-surface-variant);
+}
+.traffic-hint-row b {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--md-on-surface);
+}
+.traffic-hint-sum b { font-weight: 700; }
+.traffic-hint md-divider { margin: 10px 0; }
+.traffic-hint-note { margin: 10px 0 0; font-size: 10px; color: var(--md-on-surface-variant); }
 
 /* ── Log Drawer ───────────────────────────────────────────────── */
 
