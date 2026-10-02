@@ -466,6 +466,33 @@ function closeQuitDialog() {
   $('#quitDialogScrim')?.classList.remove('open');
 }
 
+/* ── Developer mode confirm (开启前确认) ────────────────────── */
+
+function openDevModeDialog() {
+  $('#devModeDialogScrim')?.classList.add('open');
+}
+
+function closeDevModeDialog() {
+  $('#devModeDialogScrim')?.classList.remove('open');
+}
+
+// 开关真正落库的唯一入口（开启可来自确认弹窗）：先改状态并同步开关，
+// helper 确认保存成功才留下；失败则拨回，UI 永不显示未持久化的状态。
+async function applyDevMode(next) {
+  const sw = $('#devModeSwitch');
+  const previous = state.devMode;
+  state.devMode = next;
+  if (sw) sw.selected = next;
+  const saved = await persistSettings();
+  if (!saved) {
+    state.devMode = previous;
+    if (sw) sw.selected = previous;
+    return;
+  }
+  updateSettingsUI(); // re-evaluate dev-only rows (直连 chip visibility)
+  addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
+}
+
 // Stop 免流 first, then quit — a failed stop keeps the app open so the
 // error stays visible instead of quitting over a broken state.
 async function stopAndQuit() {
@@ -1373,6 +1400,19 @@ function wireEvents() {
     if (e.key === 'Escape') closeQuitDialog();
   });
 
+  // Developer mode confirm: 取消/遮罩/Esc → 开关保持关闭；继续 → 落库
+  $('#devModeDialogCancel')?.addEventListener('click', closeDevModeDialog);
+  $('#devModeDialogConfirm')?.addEventListener('click', () => {
+    closeDevModeDialog();
+    applyDevMode(true);
+  });
+  $('#devModeDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'devModeDialogScrim') closeDevModeDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDevModeDialog();
+  });
+
   // First-run guide: 翻页按钮 / 页码点；只能点「开始使用」关闭
   // （不响应 Escape 与遮罩点击 —— 继续使用即代表同意条款）
   $('#guideNext')?.addEventListener('click', advanceGuide);
@@ -1760,21 +1800,17 @@ function wireSettingsEvents() {
   $('#addCidr')?.addEventListener('click', addCidr);
   $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
 
-  // Developer mode — when on, the blacklist is not applied. Only announce it
-  // after the helper confirmed the save; otherwise revert the switch so the
-  // UI never claims a state that did not persist (e.g. helper offline).
-  $('#devModeSwitch')?.addEventListener('change', async (e) => {
+  // Developer mode — 打开前必须弹窗确认（取消/遮罩/Esc → 保持关闭）；
+  // 关闭直接生效。落库与失败拨回统一走 applyDevMode。
+  $('#devModeSwitch')?.addEventListener('change', (e) => {
     const next = e.target.selected;
-    const previous = state.devMode;
-    state.devMode = next;
-    const saved = await persistSettings();
-    if (!saved) {
-      state.devMode = previous;
-      e.target.selected = previous;
+    if (next === state.devMode) return; // 程序化复位会再次触发 change，忽略
+    if (next) {
+      e.target.selected = false; // 先拨回，确认通过后才真正开启
+      openDevModeDialog();
       return;
     }
-    updateSettingsUI(); // re-evaluate dev-only rows (直连 chip visibility)
-    addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
+    applyDevMode(false);
   });
 
   // Auto-start with Windows — helper registers the ONLOGON task plus the
