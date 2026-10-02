@@ -1,4 +1,4 @@
-/* ── State ─────────────────────────────────────────────────────── */
+/* ── State ── */
 
 const state = {
   activeView: 'dashboard',
@@ -11,11 +11,11 @@ const state = {
   silentStart: false,
   autoRunProxy: false,
   hotkeyEnabled: false,
-  // Update (GitHub release check + in-app install)
+  // Update
   updateInfo: null,
   updatePhase: null,
   updateError: '',
-  // Appearance (persisted in localStorage, like the theme)
+  // Appearance
   dynamicColor: false,
   pureBlack: false,
   dynamicSeed: null,
@@ -37,8 +37,8 @@ const state = {
   runtimePresent: false,
   runtimeChecked: false,
   warpRegistered: false,
-  warpRegistering: false,   // /warp/register 在途，避免自动+手动并发重复注册
-  warpAutoTried: false,     // 每次启动最多自动注册一次
+  warpRegistering: false,
+  warpAutoTried: false,
 
   // Logs
   logs: [],
@@ -51,7 +51,7 @@ const TRAFFIC_POINTS = 60;
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
-/* ── Utility ──────────────────────────────────────────────────── */
+/* ── Utility ── */
 
 function formatBytes(bytes) {
   if (bytes < 1024) return bytes + ' B';
@@ -67,7 +67,7 @@ function formatSpeed(bytesPerSec) {
   return (bytesPerSec / 1073741824).toFixed(2) + ' GB/s';
 }
 
-/* ── API ──────────────────────────────────────────────────────── */
+/* ── API ── */
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -107,7 +107,7 @@ async function openExternal(url) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-/* ── Logging ──────────────────────────────────────────────────── */
+/* ── Logging ── */
 
 function addLog(message, isError = false) {
   const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -124,7 +124,7 @@ function renderLogs() {
   ).join('');
 }
 
-/* ── Navigation ───────────────────────────────────────────────── */
+/* ── Navigation ── */
 
 const VIEW_TITLES = { dashboard: '仪表盘', proxies: '接入点', settings: '设置' };
 const MODE_LABELS = { rule: '规则', global: '全局', direct: '直连' };
@@ -159,7 +159,7 @@ function showView(view) {
   });
 }
 
-/* ── Proxy Toggle ─────────────────────────────────────────────── */
+/* ── Proxy Toggle ── */
 
 // FAB icons (hand-drawn, single-color currentColor so they follow the theme
 // and dynamic color): rounded play triangle / rounded square.
@@ -193,23 +193,23 @@ function updateConnectionChip(online) {
   }
 }
 
-/* ── 启动免流（手动 FAB 与「自动运行免流」共用的完整流程） ────── */
+/* ── start ── */
 
-// 核心检测 → IPv6 门禁 → /proxy/start。
-// 返回 { ok: true } 或 { ok: false, reason, message, detail }：
-//   core    未检测到运行核心
-//   offline 网络未就绪（IPv6 探测请求都没打出去）—— 自动运行可稍后重试
-//   net     网络已通但不是校园网 IPv6
-//   busy    上一次启动流程尚未结束
-//   api     /proxy/start 报错
-// auto=true（自动运行）时不改 FAB 文案、不写过程日志、不弹对话框。
+// core detect → IPv6 gatekeeper → /proxy/start。
+// output { ok: true } or { ok: false, reason, message, detail }：
+//   core    no runtime core detected
+//   offline no internet
+//   net     not cernet2 IPv6
+//   busy    last start still in progress
+//   api     /proxy/start failed
+// auto=true
 let startFlowBusy = false;
 async function startProxyFlow(auto = false) {
   if (startFlowBusy) return { ok: false, reason: 'busy', message: '启动流程正在进行' };
   if (!state.helperOnline) return { ok: false, reason: 'helper', message: 'helper 未连接' };
   startFlowBusy = true;
   try {
-    // 核心检测（本地 stat，很便宜）：缺失 → 引导先下载，不发起启动
+    // core detect: fehlen → hint download
     try {
       const runtime = await api('/runtime');
       state.runtimePresent = Boolean(runtime.present);
@@ -218,7 +218,7 @@ async function startProxyFlow(auto = false) {
     updateConnectionChip(state.helperOnline);
     if (!state.runtimePresent) return { ok: false, reason: 'core', message: '未检测到运行核心' };
 
-    // IPv6 gate: 免流 only works on campus IPv6. Developer mode skips it.
+    // IPv6 gate: only works on campus IPv6. Developer mode skips it.
     if (!state.devMode) {
       if (!auto) {
         $('#proxyToggle').label = '检测中…';
@@ -466,8 +466,6 @@ function closeQuitDialog() {
   $('#quitDialogScrim')?.classList.remove('open');
 }
 
-/* ── Developer mode confirm (开启前确认) ────────────────────── */
-
 function openDevModeDialog() {
   $('#devModeDialogScrim')?.classList.add('open');
 }
@@ -476,8 +474,6 @@ function closeDevModeDialog() {
   $('#devModeDialogScrim')?.classList.remove('open');
 }
 
-// 开关真正落库的唯一入口（开启可来自确认弹窗）：先改状态并同步开关，
-// helper 确认保存成功才留下；失败则拨回，UI 永不显示未持久化的状态。
 async function applyDevMode(next) {
   const sw = $('#devModeSwitch');
   const previous = state.devMode;
@@ -489,8 +485,8 @@ async function applyDevMode(next) {
     if (sw) sw.selected = previous;
     return;
   }
-  updateSettingsUI(); // re-evaluate dev-only rows (直连 chip visibility)
-  addLog(next ? '开发者模式已开启，不阻断黑名单域名' : '开发者模式已关闭，恢复阻断黑名单域名');
+  updateSettingsUI();
+  addLog(next ? '开发者模式已开启' : '开发者模式已关闭');
 }
 
 // Stop 免流 first, then quit — a failed stop keeps the app open so the
@@ -1400,7 +1396,7 @@ function wireEvents() {
     if (e.key === 'Escape') closeQuitDialog();
   });
 
-  // Developer mode confirm: 取消/遮罩/Esc → 开关保持关闭；继续 → 落库
+  // Developer mode confirm
   $('#devModeDialogCancel')?.addEventListener('click', closeDevModeDialog);
   $('#devModeDialogConfirm')?.addEventListener('click', () => {
     closeDevModeDialog();
