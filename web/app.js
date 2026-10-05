@@ -222,7 +222,7 @@ async function startProxyFlow(auto = false) {
     if (!state.devMode) {
       if (!auto) {
         $('#proxyToggle').label = '检测中…';
-        addLog('启动前检测本机 IPv6…');
+        addLog('检测本机 IPv6…');
       }
       let ip = '';
       let detail = '';
@@ -314,7 +314,7 @@ function maybeArmAutoRun() {
   autoRun.offlineTries = 0;
   autoRun.regTries = 0;
   autoRun.lastWhy = '';
-  addLog('自动运行免流已就绪，稍后尝试启动');
+  addLog('自动运行免流已就绪');
   scheduleAutoRun(1200);
 }
 
@@ -753,7 +753,7 @@ async function startUpdate() {
     return;
   }
   setUpdatePhase('downloading');
-  setUpdateStatus(info.sha ? '正在下载安装包…' : '正在下载安装包…（Release 未附 SHA256，跳过校验）');
+  setUpdateStatus(info.sha ? '正在下载安装包…' : '正在下载安装包…（未附 SHA256，跳过校验）');
   let prog;
   try {
     const ack = await api('/update/download', {
@@ -1117,7 +1117,7 @@ async function downloadCore(btn) {
     const result = await api('/runtime/download', { method: 'POST' });
     state.runtimePresent = true;
     state.runtimeChecked = true;
-    addLog(`mihomo 核心下载完成${result.version ? `: ${result.version}` : ''}`);
+    addLog(`核心下载完成${result.version ? `: ${result.version}` : ''}`);
     return true;
   } catch (e) {
     addLog(`下载失败: ${e.message}`, true);
@@ -1139,10 +1139,10 @@ async function registerWarp(isAuto) {
     await api('/warp/register', { method: 'POST', body: JSON.stringify({ name: 'freev6-windows' }) });
     state.warpRegistered = true;
     updateSettingsUI();
-    addLog(isAuto ? '首次使用：已自动注册 WARP' : 'WARP 注册成功');
+    addLog(isAuto ? '已自动注册接入凭据' : '接入凭据注册成功');
     return true;
   } catch (e) {
-    addLog(`${isAuto ? '自动注册 WARP 失败' : 'WARP 注册失败'}: ${e.message}`, true);
+    addLog(`${isAuto ? '自动注册接入凭据失败' : '接入凭据注册失败'}: ${e.message}`, true);
     return false;
   } finally {
     state.warpRegistering = false;
@@ -1154,7 +1154,7 @@ async function registerWarp(isAuto) {
 function maybeAutoRegisterWarp() {
   if (state.warpRegistered || state.warpAutoTried) return;
   state.warpAutoTried = true;
-  addLog('未注册 WARP，正在自动注册…');
+  addLog('未注册接入凭据，正在自动注册…');
   registerWarp(true);
 }
 
@@ -1449,7 +1449,7 @@ function wireEvents() {
     const v = state.updateInfo?.version;
     if (v) {
       try { localStorage.setItem(SKIP_VERSION_KEY, v); } catch (_) { /* ignore */ }
-      addLog(`已跳过版本 v${v}（设置页版本行仍可查看并手动更新）`);
+      addLog(`跳过版本 v${v}（设置页仍可查看更新）`);
     }
     closeUpdateDialog();
   });
@@ -1579,9 +1579,9 @@ async function switchProxy(name) {
     });
     if (state.proxyGroup) state.proxyGroup.now = name;
     renderNodeGrid();
-    addLog(`切换节点: ${name}`);
+    addLog(`切换接入点: ${name}`);
   } catch (e) {
-    addLog(`切换节点失败: ${e.message}`, true);
+    addLog(`切换接入点失败: ${e.message}`, true);
   }
 }
 
@@ -1638,7 +1638,7 @@ async function runDelayTest() {
   state.delaysReady = true;
   resetFab();
   renderNodeGrid(); // re-render with auto-sort
-  addLog(`延迟测试完成: ${nodes.length} 个节点`);
+  addLog(`延迟测试完成: ${nodes.length} 个接入点`);
 }
 
 function resetFab() {
@@ -1670,7 +1670,7 @@ async function autoDelayTestAfterStart() {
   if (state.proxyGroup && state.proxyGroup.all.length) {
     runDelayTest();
   } else {
-    addLog('自动延迟测试跳过: 节点列表未就绪', true);
+    addLog('跳过自动延迟测试: 接入点列表未就绪', true);
   }
 }
 
@@ -1680,7 +1680,7 @@ function renderCidrs() {
   const desc = $('#cidrDesc');
   if (desc) desc.textContent = state.cidrs.length
     ? `${state.cidrs.length} 个网段/域名`
-    : '管理绕过 WARP 的网段与域名';
+    : '管理绕过免流的网段与域名';
 
   const list = $('#cidrList');
   if (!list) return;
@@ -1845,7 +1845,7 @@ function wireSettingsEvents() {
       e.target.selected = previous;
       return;
     }
-    addLog(next ? '已开启开机自启动（启动后仅驻留托盘）' : '已关闭开机自启动');
+    addLog(next ? '已开启开机自启动' : '已关闭开机自启动');
   });
 
   // Silent start — with it on, every launch (autostart or manual) skips the
@@ -1860,7 +1860,7 @@ function wireSettingsEvents() {
       e.target.selected = previous;
       return;
     }
-    addLog(next ? '已开启静默启动（开机自启与手动打开均仅驻留托盘）' : '已关闭静默启动');
+    addLog(next ? '已开启静默启动' : '已关闭静默启动');
   });
 
   // 自动运行免流 —— 打开软件后自动尝试启动；网络未就绪时等待合适时机，
@@ -1877,7 +1877,7 @@ function wireSettingsEvents() {
     }
     if (next) {
       // 只保存设置，不立即启动：自动启动按需求发生在“软件被打开”时
-      addLog('已开启自动运行免流（下次打开软件时自动尝试启动）');
+      addLog('已开启自动运行免流（下次打开软件生效）');
       autoRun.done = false;
     } else {
       addLog('已关闭自动运行免流');
@@ -1908,7 +1908,7 @@ function wireSettingsEvents() {
       tauriInvoke('hotkey_set', { enabled: previous });
       return;
     }
-    addLog(next ? '已开启快捷键（按 F6 打开主窗口）' : '已关闭快捷键');
+    addLog(next ? '已开启快捷键' : '已关闭快捷键');
   });
 
   // Dynamic color — seed from the wallpaper (system accent as fallback) via
@@ -1930,7 +1930,7 @@ function wireSettingsEvents() {
     state.pureBlack = e.target.selected;
     try { localStorage.setItem('freev6-pure-black', state.pureBlack ? '1' : '0'); } catch (_) {}
     withColorTransition(() => applyPureBlack(state.pureBlack));
-    addLog(state.pureBlack ? '纯黑背景已开启（深色主题下生效）' : '纯黑背景已关闭');
+    addLog(state.pureBlack ? '已开启纯黑背景（深色主题下生效）' : '纯黑背景已关闭');
   });
 
   // Download core（设置页「核心」行，与启动拦截弹窗共用 downloadCore）

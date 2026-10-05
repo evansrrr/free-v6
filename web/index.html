@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#121318" />
-  <title>freev6</title>
+  <title>FreeV6</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@600;700;800&display=swap" />
@@ -400,7 +400,7 @@
           </div>
           <p class="cidr-hint">填写 CIDR 网段或域名，如 10.0.0.0/8、edu.cn（自动包含所有子域名）</p>
           <div class="cidr-input-row">
-            <md-outlined-text-field id="cidrInput" label="10.0.0.0/8 或 edu.cn" autocomplete="off"></md-outlined-text-field>
+            <md-outlined-text-field id="cidrInput" label="格式：10.0.0.0/8 或 edu.cn" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="addCidr">添加</md-filled-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>
@@ -451,7 +451,7 @@
     </div>
   </div>
 
-  <!-- Developer mode: 开启前的谨慎确认（关闭不需要确认） -->
+  <!-- Developer mode confirmation -->
   <div class="net-dialog-scrim" id="devModeDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="devModeDialogTitle">
       <md-icon class="net-dialog-icon">warning</md-icon>
@@ -463,7 +463,7 @@
     </div>
   </div>
 
-  <!-- Missing core: 启动免流 前的下载引导 -->
+  <!-- Missing core -->
   <div class="net-dialog-scrim" id="coreDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="coreDialogTitle">
       <md-icon class="net-dialog-icon">download</md-icon>
@@ -476,13 +476,13 @@
     </div>
   </div>
 
-  <!-- Update prompt: a newer stable release exists on GitHub -->
+  <!-- Update prompt -->
   <div class="net-dialog-scrim" id="updateDialogScrim">
     <div class="net-dialog update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="updateTitle">
       <md-icon class="net-dialog-icon">system_update</md-icon>
       <h3 id="updateTitle">发现新版本（~6.7MB）</h3>
       <p id="updateCurrent"></p>
-      <p class="update-warn" id="updateStopHint" hidden>更新会自动停止兔流并退出软件，安装完成后自动重启。</p>
+      <p class="update-warn" id="updateStopHint" hidden>更新会自动停止兔流并退出软件，安装完成后自动重启软件。</p>
       <div class="update-notes" id="updateNotes"></div>
       <p class="update-status" id="updateStatus" hidden></p>
       <div class="update-progress" id="updateProgress" hidden>
@@ -501,13 +501,13 @@
     </div>
   </div>
 
-  <!-- Lightweight confirmation toast: saved, effective on next proxy start -->
+  <!-- Confirmation toast -->
   <div class="toast" id="toast" role="status" aria-live="polite">
     <md-icon class="toast-icon">check_circle</md-icon>
     <span class="toast-text" id="toastText"></span>
   </div>
 
-  <!-- First-run guide: shown until 「开始使用」 is clicked (设置无关，仅首次) -->
+  <!-- First-run guide -->
   <div class="guide-scrim" id="guideScrim">
     <div class="guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guideHeroTitle">
       <div class="guide-hero">
