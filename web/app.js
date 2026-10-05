@@ -487,6 +487,7 @@ async function applyDevMode(next) {
   }
   updateSettingsUI();
   addLog(next ? '开发者模式已开启' : '开发者模式已关闭');
+  notifyEffectiveNextStart(saved); // 运行中改动要重启免流才生效
 }
 
 // Stop 免流 first, then quit — a failed stop keeps the app open so the
@@ -800,13 +801,15 @@ async function startUpdate() {
 
 function setMode(mode, persist = true, silent = false) {
   if (mode === state.mode && silent) return;
+  const changed = mode !== state.mode;
   state.mode = mode;
   // Sync settings page segmented chips (md-filter-chip)
   $$('#settingsModeGroup .setting-seg').forEach(seg => {
     seg.selected = seg.dataset.mode === mode;
   });
   if (!silent) addLog(`切换为${MODE_LABELS[mode] || mode}模式`);
-  if (persist) persistSettings();
+  // 运行中切换模式要重启免流才生效 → 保存成功后轻提醒
+  if (persist) persistSettings().then(saved => { if (changed) notifyEffectiveNextStart(saved); });
 }
 
 function persistSettings() {
@@ -817,6 +820,26 @@ function persistSettings() {
   return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
+}
+
+/* ── Settings save feedback (toast) ─────────────────────────── */
+
+let toastTimer = null;
+
+function showToast(message) {
+  const el = $('#toast');
+  const text = $('#toastText');
+  if (!el || !text) return;
+  text.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// 免流运行中，模式 / 绕过白名单 / 开发者模式的改动要重启免流才生效；
+// 保存成功后弹轻提醒。未在运行时这些设置本就即时生效，不打扰。
+function notifyEffectiveNextStart(saved) {
+  if (saved && state.proxyRunning) showToast('已保存，将在下次启动免流时生效');
 }
 
 /* ── Traffic Chart (Canvas) ───────────────────────────────────── */
@@ -1674,7 +1697,7 @@ function renderCidrs() {
       const idx = Number(btn.dataset.idx);
       const removed = state.cidrs.splice(idx, 1)[0];
       renderCidrs();
-      persistSettings();
+      persistSettings().then(notifyEffectiveNextStart);
       addLog(`移除条目: ${removed}`);
     });
   });
@@ -1936,7 +1959,7 @@ function addCidr() {
   if (!state.cidrs.includes(value)) {
     state.cidrs.push(value);
     renderCidrs();
-    persistSettings();
+    persistSettings().then(notifyEffectiveNextStart);
     addLog(`添加条目: ${value}`);
   }
   input.value = '';

@@ -509,6 +509,34 @@ md-icon-button > md-icon {
 .traffic-hint-sum b { font-weight: 700; }
 .traffic-hint md-divider { margin: 10px 0; }
 
+/* ── Toast (轻提醒，自动消失) ─────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  z-index: 130;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(380px, calc(100vw - 32px));
+  padding: 10px 14px;
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-hint);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(8px);
+  transition: opacity 200ms var(--ease-decelerate), transform 200ms var(--ease-decelerate);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast-icon { --md-icon-size: 16px; color: var(--green); }
+.toast-text { line-height: 1.5; }
+
 /* ── Log Drawer ───────────────────────────────────────────────── */
 
 .scrim {
@@ -920,6 +948,7 @@ md-icon-button > md-icon {
   .page-title { font-size: 17px; }
   .node-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .fab-item { bottom: 64px; right: 12px; }
+  .toast { bottom: 132px; } /* clear the bottom-bar FABs */
   .setting-item { padding: 10px 12px; }
 }
 
