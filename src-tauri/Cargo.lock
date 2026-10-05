@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "freev6-desktop"
-version = "0.3.6"
+version = "0.3.9"
 dependencies = [
  "tauri",
  "tauri-build",

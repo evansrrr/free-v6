@@ -1,18 +1,30 @@
 # Changelog
 
 <!--
-发布流程（配合 .github/workflows/release.yml）：
-1. 递增 src-tauri/tauri.conf.json 与 src-tauri/Cargo.toml 的 version；
-2. 把 [Unreleased] 的内容整理成本次版本的 `## [x.y.z] - YYYY-MM-DD` 小节；
-3. 打 tag 并推送：
+发布流程（.github/workflows/release.yml）
+1. 递增 tauri.conf.json 与 Cargo.toml 的版本号
+2. 对应版本号新建 `## [x.y.z] - YYYY-MM-DD` 小节
+3. tag 并推送：
      git tag vX.Y.Z
      git push origin vX.Y.Z
    （带 -beta / -alpha 后缀的 tag 会自动标记为 Pre-release）
-工作流按 tag 提取对应小节作为 GitHub Release 描述：
-先匹配完整版本（如 0.3.0-beta.1），再匹配基础版本（0.3.0）；
-两者都没有 → 构建失败，提醒先补本文件。
-Release 永远先建为草稿（draft），检查无误后手动 Publish。
+工作流按 tag 提取对应小节作为 Release 描述：
+先匹配完整版本（如 0.3.0-beta.1），再匹配基础版本（0.3.0）
+两者都没有会构建失败
+Release 先建为草稿，需要手动发布
 -->
+
+## [0.3.9] - 2026-10-05
+
+### 改动
+
+- 新增流量详情卡片，包含本月及累计数据，可点击查看
+- 开发者模式加入二次确认
+- 加入下次生效提示
+
+### 修复
+
+- 一些日志描述
 
 ## [0.3.6] - 2026-09-29
 
