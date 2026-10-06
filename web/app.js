@@ -11,6 +11,9 @@ const state = {
   silentStart: false,
   autoRunProxy: false,
   hotkeyEnabled: false,
+  hotspotShare: false,
+  // /status 下报的热点共享运行态（下降沿弹“下次生效”提示用）
+  hotspotActive: false,
   // Update
   updateInfo: null,
   updatePhase: null,
@@ -242,18 +245,42 @@ async function startProxyFlow(auto = false) {
       addLog('开发者模式：跳过 IPv6 检测');
     }
 
+    let started;
     try {
-      await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
+      started = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
     } catch (e) {
       return { ok: false, reason: 'api', message: e.message };
     }
     setRunning(true);
+    reportHotspotResult(started?.hotspot, auto);
     addLog(auto ? '自动启动免流成功' : '免流模式已启动');
     autoDelayTestAfterStart();
     return { ok: true };
   } finally {
     startFlowBusy = false;
   }
+}
+
+// /proxy/start 响应里的热点共享结果（非阻断）：成功/未开热点记普通日志，
+// 失败记错误日志并展开日志界面（自动启动时先把主窗口叫出来）。
+function reportHotspotResult(hs, auto = false) {
+  if (!hs) return;
+  if (hs.applied) {
+    state.hotspotActive = true;
+    addLog(hs.path === 'winrt' ? '已将移动热点切换到代理出口（WinRT）' : '已将移动热点切换到代理出口');
+    return;
+  }
+  if (hs.reason === 'not-running') {
+    addLog('未检测到移动热点，共享跳过');
+    return;
+  }
+  if (hs.reason === 'failed') {
+    addLog(`热点共享失败: ${hs.error || '未知错误'}`, true);
+    if (auto) tauriInvoke('window_show');
+    $('#logDrawer')?.classList.add('open');
+    $('#scrim')?.classList.add('open');
+  }
+  // disabled → 静默
 }
 
 // 手动启动失败：按原因给出引导弹窗与日志（自动运行的失败见 autoRunFail）
@@ -817,7 +844,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -1313,14 +1340,25 @@ async function pollStatus() {
     const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
     const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
     const nextHotkeyEnabled = typeof status.settings?.hotkeyEnabled === 'boolean' ? status.settings.hotkeyEnabled : state.hotkeyEnabled;
-    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled) {
+    const nextHotspotShare = typeof status.settings?.hotspotShare === 'boolean' ? status.settings.hotspotShare : state.hotspotShare;
+    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled || nextHotspotShare !== state.hotspotShare) {
       state.devMode = nextDevMode;
       state.autoStart = nextAutoStart;
       state.silentStart = nextSilentStart;
       state.autoRunProxy = nextAutoRunProxy;
       state.hotkeyEnabled = nextHotkeyEnabled;
+      state.hotspotShare = nextHotspotShare;
       updateSettingsUI();
     }
+    // 热点共享下降沿：仍在共享但 active 掉线 → 弹“下次启动生效”提示，
+    // 每次断开只弹一次（hotspotActive 记上次值；停止免流后不弹）。
+    const hsStatus = status.hotspot;
+    const hsSharedRunning = Boolean(hsStatus?.shared && hsStatus.active !== false && isRunning);
+    if (hsStatus?.shared && hsStatus.active === false && state.hotspotActive && isRunning) {
+      showToast('热点已断开，将在下次启动免流时重新共享');
+      addLog('移动热点已断开，热点共享将在下次启动免流时恢复');
+    }
+    state.hotspotActive = hsSharedRunning;
     // 状态已同步：helper 连上且设置开启时排队一次自动启动（幂等）
     maybeArmAutoRun();
   } catch (_) {
@@ -1723,6 +1761,8 @@ function updateSettingsUI() {
   if (autoRunSwitch) autoRunSwitch.selected = state.autoRunProxy;
   const hotkeySwitch = $('#hotkeySwitch');
   if (hotkeySwitch) hotkeySwitch.selected = state.hotkeyEnabled;
+  const hotspotSwitch = $('#hotspotShareSwitch');
+  if (hotspotSwitch) hotspotSwitch.selected = state.hotspotShare;
   const dynSwitch = $('#dynamicColorSwitch');
   if (dynSwitch) dynSwitch.selected = state.dynamicColor;
   const oledSwitch = $('#pureBlackSwitch');
@@ -1909,6 +1949,23 @@ function wireSettingsEvents() {
       return;
     }
     addLog(next ? '已开启快捷键' : '已关闭快捷键');
+  });
+
+  // 共享移动热点 —— 运行中改动下次启动生效（notifyEffectiveNextStart 弹
+  // 轻提醒）；保存失败拨回开关（回滚约定同静默启动）。
+  $('#hotspotShareSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.hotspotShare;
+    if (next === previous) return;
+    state.hotspotShare = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.hotspotShare = previous;
+      e.target.selected = previous;
+      return;
+    }
+    addLog(next ? '已开启共享移动热点' : '已关闭共享移动热点');
+    notifyEffectiveNextStart(saved);
   });
 
   // Dynamic color — seed from the wallpaper (system accent as fallback) via
