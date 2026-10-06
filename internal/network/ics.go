@@ -51,7 +51,8 @@ func psQuote(s string) string {
 }
 
 // jsonUnmarshalFlexible 容错解析 PowerShell 输出：去掉首尾空白后再解码，
-// 输出混入噪声行时退回到“取最后一个 { 或 [ 开始的片段”。
+// 输出混入噪声行时按序尝试每个 `{`/`[` 起点，取第一个能解析成功的片段
+// （正向扫描而非取最后一个 —— JSON 自身嵌套的括号会被误判成起点）。
 func jsonUnmarshalFlexible(output []byte, target any) error {
 	trimmed := strings.TrimSpace(string(output))
 	if trimmed == "" {
@@ -60,12 +61,15 @@ func jsonUnmarshalFlexible(output []byte, target any) error {
 	if err := json.Unmarshal([]byte(trimmed), target); err == nil {
 		return nil
 	}
-	// 脚本在 ConvertTo-Json 之前打印了噪声：截取最后一段 JSON。
-	start := strings.LastIndexAny(trimmed, "{[")
-	if start < 0 {
-		return fmt.Errorf("no JSON in PowerShell output: %.200s", trimmed)
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] != '{' && trimmed[i] != '[' {
+			continue
+		}
+		if err := json.Unmarshal([]byte(trimmed[i:]), target); err == nil {
+			return nil
+		}
 	}
-	return json.Unmarshal([]byte(trimmed[start:]), target)
+	return fmt.Errorf("no JSON in PowerShell output: %.200s", trimmed)
 }
 
 const psHeader = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
@@ -124,6 +128,7 @@ func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 			continue
 		}
 		entry.Device = firstString(object["device"])
+		entry.Kind = kind
 		entry.Enabled, _ = object["enabled"].(bool)
 		sharing = append(sharing, entry)
 	}

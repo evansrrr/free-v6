@@ -21,6 +21,13 @@ import (
 
 const listenAddress = "127.0.0.1:13335"
 
+// icsOpTimeout 覆盖 WinRT tethering 异步操作的最坏情况（Stop/Start 各
+// 最多 Wait-Op 60s），正常几百毫秒完成；探测单独给短超时。
+const (
+	icsOpTimeout     = 120 * time.Second
+	icsDetectTimeout = 30 * time.Second
+)
+
 type helper struct {
 	root string
 	mu   sync.Mutex
@@ -130,6 +137,15 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		currentSettings = defaultSettings()
 	}
 	_, warpErr := os.Stat(filepath.Join(h.root, "state", "warp.json"))
+	// 热点共享状态：仅免流运行中且本会话已切换时有意义。active 用本机
+	// 地址探测（无子进程，3s 轮询无压力）；前端观察 shared→断开 的下降沿
+	// 弹“下次启动生效”提示。
+	var hotspot any
+	if running {
+		if snap, snapErr := network.LoadSnapshot(filepath.Join(h.root, "state", "network-snapshot.json")); snapErr == nil && snap.Hotspot != nil && snap.Hotspot.Applied {
+			hotspot = map[string]any{"shared": true, "active": network.HotspotActive(snap.Hotspot), "path": snap.Hotspot.Path}
+		}
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ok":         true,
 		"root":       h.root,
@@ -138,6 +154,7 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		"proxy":      map[string]any{"running": running, "pid": pid, "error": errorText(statusErr)},
 		"warp":       map[string]any{"registered": warpErr == nil},
 		"settings":   currentSettings,
+		"hotspot":    hotspot,
 	})
 }
 
@@ -353,6 +370,22 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})
 		return
 	}
+	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。上次会话
+	// 异常退出可能留下旧快照（ICS 仍处于切换态）——先按它还原再重新抓取，
+	// 否则新基线会把“已切换状态”记成原状，停止时永远还原不回去。
+	if old, healErr := network.LoadSnapshot(snapshotPath); healErr == nil {
+		healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
+		err := network.RestoreSnapshot(healCtx, old)
+		healCancel()
+		if err != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("restore leftover network snapshot: %v", err)})
+			return
+		}
+		_ = os.Remove(snapshotPath)
+	} else if !errors.Is(healErr, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": healErr.Error()})
+		return
+	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
 	snapshot, err := network.CaptureSnapshot(snapshotCtx)
 	snapshotCancel()
@@ -402,7 +435,79 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		stored = defaultSettings()
 	}
 	_ = h.saveSettings(mergeStartSettings(stored, input))
-	writeJSON(writer, http.StatusOK, map[string]any{"running": true})
+	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
+	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
+	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
+	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult})
+}
+
+// applyHotspotShare 执行移动热点上游切换（ICS 拓扑方案）。开关关 → disabled；
+// 热点未运行 → not-running；切换失败 → 回滚基线并返回 failed。成功时把
+// Hotspot 元数据写回快照，供 /status 探测与停止免流时还原。任何失败都只
+// 体现在返回值里，不影响免流本身（非阻断决策）。
+func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled bool) map[string]any {
+	if !enabled {
+		return map[string]any{"applied": false, "reason": "disabled"}
+	}
+	if len(snapshot.Sharing) == 0 {
+		return map[string]any{"applied": false, "reason": "failed", "error": "未取到 ICS 共享基线，无法安全切换"}
+	}
+	// 探测/切换用独立超时（Background 而非请求上下文）：客户端断开也不能
+	// 把系统留在半切换状态。
+	detectCtx, detectCancel := context.WithTimeout(context.Background(), icsDetectTimeout)
+	status, err := network.DetectHotspot(detectCtx)
+	detectCancel()
+	if err != nil {
+		return map[string]any{"applied": false, "reason": "failed", "error": err.Error()}
+	}
+	if !status.Active {
+		return map[string]any{"applied": false, "reason": "not-running"}
+	}
+	switchCtx, switchCancel := context.WithTimeout(context.Background(), icsOpTimeout)
+	defer switchCancel()
+	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
+	if switchErr != nil {
+		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
+			return map[string]any{"applied": false, "reason": "failed",
+				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
+		}
+		return map[string]any{"applied": false, "reason": "failed", "error": switchErr.Error()}
+	}
+	snapshot.Hotspot = meta
+	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
+		// 元数据落不了盘 → 停止时无法还原 → 也算失败并回滚。
+		if meta.Path == "winrt" {
+			_ = network.RestoreWinRT(switchCtx, meta.OriginalProfile)
+		}
+		_ = network.RestoreICSSharing(switchCtx, snapshot)
+		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
+	}
+	return map[string]any{"applied": true, "path": meta.Path}
+}
+
+// switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
+// 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
+func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot) (*network.HotspotMeta, error) {
+	var icsErr error
+	if status.PrivateAlias != "" {
+		if _, err := network.SwitchICS(ctx, status.PrivateAlias); err == nil {
+			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: status.PrivateIP}, nil
+		} else {
+			icsErr = err
+			// 经典路径可能已改动角色：先回滚再走兜底，避免两套状态叠加。
+			if rollbackErr := network.RestoreICSSharing(ctx, snapshot); rollbackErr != nil {
+				return nil, fmt.Errorf("ics: %v（回滚失败: %v）", icsErr, rollbackErr)
+			}
+		}
+	}
+	originalProfile, err := network.SwitchWinRT(ctx)
+	if err != nil {
+		if icsErr != nil {
+			return nil, fmt.Errorf("ics: %v; winrt: %w", icsErr, err)
+		}
+		return nil, err
+	}
+	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
@@ -413,23 +518,29 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
-	if err := mihomo.Stop(pidPath); err != nil {
+	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
+	// 先还原再停进程：ICS/WinRT 还原要在 TUN 适配器仍在时完成（FreeV6TUN
+	// 连接存在才能显式禁用其共享角色）。还原失败时快照保留、mihomo 照常
+	// 停止，下次启动免流前会先按它自愈还原。
+	var restoreErr error
+	snapshot, err := network.LoadSnapshot(snapshotPath)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
+		restoreErr = network.RestoreSnapshot(ctx, snapshot)
+		cancel()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
-	snapshot, err := network.LoadSnapshot(snapshotPath)
-	if err == nil {
-		ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
-		restoreErr := network.RestoreSnapshot(ctx, snapshot)
-		cancel()
-		if restoreErr != nil {
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
-			return
-		}
+	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if stopErr := mihomo.Stop(pidPath); stopErr != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
+		return
+	}
+	if restoreErr != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"running": false})
