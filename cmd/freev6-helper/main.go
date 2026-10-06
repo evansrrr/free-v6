@@ -39,6 +39,10 @@ type settings struct {
 	// 快捷键（设置 → 通用）：启用后按 F6 由桌面壳弹出主窗口，即使窗口
 	// 处于托盘驻留/静默启动状态；默认关闭。
 	HotkeyEnabled bool `json:"hotkeyEnabled"`
+	// 共享移动热点（设置 → 通用）：启动免流时把 Windows 移动热点的上游
+	// 切到 FreeV6 TUN（ICS 拓扑切换），热点设备走电脑的代理出口，
+	// 停止免流自动还原；默认关闭。
+	HotspotShare bool `json:"hotspotShare"`
 }
 
 type proxyRequest struct {
@@ -236,6 +240,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		// 同上：省略 hotkeyEnabled 时保留存储值，否则 bool 零值会悄悄解绑 F6
 		if !jsonKeyPresent(body, "hotkeyEnabled") {
 			current.HotkeyEnabled = persisted.HotkeyEnabled
+		}
+		// 同上：省略 hotspotShare 时保留存储值，否则 bool 零值会悄悄关掉热点共享
+		if !jsonKeyPresent(body, "hotspotShare") {
+			current.HotspotShare = persisted.HotspotShare
 		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {

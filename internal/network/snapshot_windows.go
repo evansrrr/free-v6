@@ -18,5 +18,9 @@ func CaptureSnapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	// ICS 共享基线：非致命（COM 偶发失败不阻断启动）；热点切换前会再校验非空。
+	if sharing, shareErr := CaptureSharing(ctx); shareErr == nil {
+		snapshot.Sharing = sharing
+	}
 	return snapshot, nil
 }

@@ -16,6 +16,8 @@ func TestRenderMasqueConfig(t *testing.T) {
 	for _, expected := range []string{
 		"type: masque", "server: \"2606:4700:103::1\"", "private-key: private", "public-key: peer",
 		"log-level: error", "find-process-mode: 'always'", "mode: rule", "tun:", "enable: true",
+		// 固定设备名：ICS 热点共享按 FreeV6TUN 识别 TUN 适配器
+		"device: FreeV6TUN",
 		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🚀 节点选择", "rules:",
 		"2606:4700:4700::1111", "2606:4700:4700::1001", "2400:3200::1", "2400:3200:baba::1",
 	} {

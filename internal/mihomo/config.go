@@ -160,7 +160,9 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(configHeader)
-	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
+	// device: 固定 TUN 适配器显示名，供 ICS 热点共享（internal/network/ics）
+	// 按名识别 FreeV6 的虚拟网卡，不依赖 mihomo 默认名。
+	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  device: FreeV6TUN\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
 	var names []string
 	for _, endpoint := range endpoints {
 		name := endpointName(endpoint.Server, endpoint.Port)
