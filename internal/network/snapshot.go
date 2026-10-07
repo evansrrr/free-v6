@@ -29,7 +29,12 @@ type InterfaceSnapshot struct {
 	IPv6DNSServers      []string `json:"ipv6DnsServers"`
 }
 
-const PowerShellSnapshotCommand = `Get-NetIPConfiguration | Select-Object InterfaceAlias,InterfaceIndex,IPv4DefaultGateway,IPv6DefaultGateway,DNSServer | ConvertTo-Json -Depth 6 -Compress`
+// PowerShellSnapshotCommand 必须先将控制台输出编码切到 UTF-8：中文
+// Windows（代码页 936/GBK）上 PowerShell 管道输出走 GBK，Go 的
+// json.Unmarshal 会把无效字节替换成 U+FFFD，快照里的中文网卡名
+// （如 以太网）就烂掉，netsh 还原时找不到网卡 → 自愈卡死启动。
+// 与 internal/network/ics.go 的 psHeader 同一机制。
+const PowerShellSnapshotCommand = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + `Get-NetIPConfiguration | Select-Object InterfaceAlias,InterfaceIndex,IPv4DefaultGateway,IPv6DefaultGateway,DNSServer | ConvertTo-Json -Depth 6 -Compress`
 
 func ParsePowerShellSnapshot(data []byte) (Snapshot, error) {
 	var raw any

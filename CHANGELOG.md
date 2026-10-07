@@ -19,6 +19,7 @@ Release 先建为草稿，需要手动发布
 ### 修复
 
 - 新机器首启报 `wait for mihomo controller ... context deadline exceeded`（mihomo 日志停在 `Can't find GeoSite.dat, start download`）：启动前预置地理数据 GeoSite.dat（gitproxy → jsdelivr → github 镜像链，60s 超时快速报错），并用 `-d` 固定 mihomo 工作目录，缺文件/下载失败不再被就绪超时盖住；配置同时写入 `geox-url` 大陆可达镜像兜底
+- 中文 Windows（GBK 代码页）上网络快照里的网卡名变乱码（`name=��̫��`），导致启动自愈还原 DNS 报 `The filename, directory name, or volume label syntax is incorrect` 并卡死启动：快照命令强制 UTF-8 输出（与 ICS 脚本同机制）；DNS 还原失败降级为警告不阻断，已损坏的旧快照可在下次启动时自愈
 
 ### 改动
 

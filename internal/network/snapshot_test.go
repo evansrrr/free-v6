@@ -59,6 +59,15 @@ func TestParsePowerShellSnapshotSingleObject(t *testing.T) {
 	}
 }
 
+// 快照命令必须先切 UTF-8 输出：中文 Windows（GBK 代码页）上省略前缀会让
+// 中文网卡名在管道里变 GBK 字节，JSON 解析成 U+FFFD 乱码，netsh 还原时
+// 找不到网卡（线上故障：restore leftover network snapshot 卡死启动）。
+func TestSnapshotCommandForcesUTF8Output(t *testing.T) {
+	if !strings.HasPrefix(PowerShellSnapshotCommand, "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;") {
+		t.Fatalf("snapshot command must force UTF-8 console output, got: %.80s", PowerShellSnapshotCommand)
+	}
+}
+
 func TestParsePowerShellSnapshotRejectsInvalidJSON(t *testing.T) {
 	if _, err := ParsePowerShellSnapshot([]byte("not-json")); err == nil {
 		t.Fatal("expected invalid JSON error")
