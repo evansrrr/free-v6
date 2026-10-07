@@ -14,20 +14,16 @@
 Release 先建为草稿，需要手动发布
 -->
 
-## [Unreleased]
-
-### 修复
-
-- 新机器首启报 `wait for mihomo controller ... context deadline exceeded`（mihomo 日志停在 `Can't find GeoSite.dat, start download`）：启动前预置地理数据 GeoSite.dat（gitproxy → jsdelivr → github 镜像链，60s 超时快速报错），并用 `-d` 固定 mihomo 工作目录，缺文件/下载失败不再被就绪超时盖住；配置同时写入 `geox-url` 大陆可达镜像兜底
-- 中文 Windows（GBK 代码页）上网络快照里的网卡名变乱码（`name=��̫��`），导致启动自愈还原 DNS 报 `The filename, directory name, or volume label syntax is incorrect` 并卡死启动：快照命令强制 UTF-8 输出（与 ICS 脚本同机制）；DNS 还原失败降级为警告不阻断，已损坏的旧快照可在下次启动时自愈
+## [0.4.1] - 2026-10-07
 
 ### 改动
 
-- 新增「共享移动热点」开关（设置 → 通用，默认关）：启动免流时把 Windows 移动热点上游切换到代理出口（ICS 拓扑切换，识别失败自动降级 WinRT 绑定），连接热点的设备走电脑的纯 IPv6 代理；停止免流自动还原原共享状态
-- 热点共享切换失败不阻断免流：记错误日志并展开日志界面，已做的改动回滚
-- 运行中热点断开时提示「将在下次启动免流时重新共享」
-- 开关运行中改动沿用「已保存，将在下次启动免流时生效」轻提醒
-- 启动免流前自动还原上次残留的网络快照（异常退出自愈）
+- 新增共享移动热点选项
+
+### 修复
+
+- 缺失GeoSite.dat及下载挂起
+- 中文系统网卡乱码
 
 ## [0.3.9] - 2026-10-05
 
