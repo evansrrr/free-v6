@@ -112,29 +112,20 @@ func TestBuildHotspotDetectCommandAndParse(t *testing.T) {
 	}
 }
 
-// 经典切换脚本：TUN 设 PUBLIC(0)、热点私有侧设 PRIVATE(1)，经 Set-Share
-// 重试核验（容忍 0x80040201 瞬态），输出结构化 JSON 而非直接抛错。
+// 经典切换脚本：TUN 设 PUBLIC、热点私有侧设 PRIVATE，参数正确引用。
 func TestBuildICSSwitchScript(t *testing.T) {
 	script := BuildICSSwitchScript("Local Area Connection* 3")
 	for _, expected := range []string{
 		"New-Object -ComObject HNetCfg.HNetShare",
-		"function Set-Share",                          // 重试核验函数
-		"function Test-Share",
-		"Start-Sleep -Milliseconds 900",               // 瞬态错误退避
-		"$e = Set-Share $m $tun $true 0",              // TUN → public
-		"$e = Set-Share $m $priv $true 1",             // 热点私有侧 → private
+		"$tc.EnableSharing(0)",
+		"$pc.EnableSharing(1)",
 		"'Local Area Connection* 3'",
 		"'" + TunDeviceName + "'",
-		"ok=($tunOK -and $privOK)",                    // 结构化判定输出
-		"ConvertTo-Json",
+		"$ErrorActionPreference='Stop'",
 	} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("switch script missing %q:\n%s", expected, script)
 		}
-	}
-	// 不再直接抛错（业务失败走 JSON ok/error，避免半套状态）
-	if strings.Contains(script, "throw ") {
-		t.Fatalf("switch script must report via JSON, not throw:\n%s", script)
 	}
 	// 单引号注入防护：别名里的单引号被翻倍
 	script = BuildICSSwitchScript("it's-a-conn")
@@ -151,14 +142,14 @@ func TestBuildICSRestoreScript(t *testing.T) {
 	}
 	script := BuildICSRestoreScript(sharing, TunDeviceName)
 	for _, expected := range []string{
-		"'{AAA}'",         // guid 条目
-		"e=$true",         // 原 PUBLIC
+		"'{AAA}'", // guid 条目
+		"e=$true", // 原 PUBLIC
 		"t=0",
 		"'{CCC}'",
-		"e=$false",        // 原未共享
+		"e=$false", // 原未共享
 		"'" + TunDeviceName + "'",
 		"$s.DisableSharing()",
-		"$errors +=",      // 单连接失败要汇总
+		"$errors +=", // 单连接失败要汇总
 	} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("restore script missing %q:\n%s", expected, script)
@@ -167,8 +158,7 @@ func TestBuildICSRestoreScript(t *testing.T) {
 }
 
 // WinRT 切换脚本：改绑目标必须是 TunDeviceName 字面量（回归：字符串拼接
-// 曾把 Go 表达式原样写进 PowerShell）；成功判定基于 TetheringState 轮询
-// 而非 async op.Status（回归：Status 空串导致“热点实际已切换却报失败”）。
+// 曾把 Go 表达式原样写进 PowerShell）。
 func TestBuildWinRTSwitchScript(t *testing.T) {
 	script := BuildWinRTSwitchScript()
 	if !strings.Contains(script, "'"+TunDeviceName+"'") {
@@ -177,19 +167,9 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	if strings.Contains(script, "+ TunDeviceName +") || strings.Contains(script, "psQuote") {
 		t.Fatalf("Go expression leaked into PowerShell script:\n%s", script)
 	}
-	for _, expected := range []string{
-		"StartTetheringAsync", "StopTetheringAsync", "originalProfile",
-		"function Wait-State", "TetheringState -eq 'On'",   // 状态轮询判定
-		"started=$true",
-	} {
+	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("winrt switch missing %q", expected)
-		}
-	}
-	// 回归：不再信任 async op.Status（曾为空串导致假失败）
-	for _, banned := range []string{"Wait-Op", "$op2.Status", "GetResults()"} {
-		if strings.Contains(script, banned) {
-			t.Errorf("winrt switch must not trust async op field %q (use TetheringState polling)", banned)
 		}
 	}
 }

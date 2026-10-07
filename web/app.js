@@ -267,11 +267,7 @@ function reportHotspotResult(hs, auto = false) {
   if (!hs) return;
   if (hs.applied) {
     state.hotspotActive = true;
-    if (hs.note === 'already-bound') {
-      addLog('移动热点已在代理出口上（上次会话已切换），无需重复切换');
-    } else {
-      addLog(hs.path === 'winrt' ? '已将移动热点切换到代理出口（WinRT）' : '已将移动热点切换到代理出口');
-    }
+    addLog(hs.path === 'winrt' ? '已将移动热点切换到代理出口（WinRT）' : '已将移动热点切换到代理出口');
     return;
   }
   if (hs.reason === 'not-running') {
@@ -526,10 +522,9 @@ async function applyDevMode(next) {
 async function stopAndQuit() {
   closeQuitDialog();
   try {
-    const stopped = await api('/proxy/stop', { method: 'POST' });
+    await api('/proxy/stop', { method: 'POST' });
     setRunning(false);
     addLog('免流模式已停止');
-    if (stopped?.warning) addLog(`停止警告: ${stopped.warning}`, true);
   } catch (e) {
     addLog(`停止免流失败: ${e.message}`, true);
     return;
@@ -1398,10 +1393,9 @@ function wireEvents() {
     fab.style.opacity = '0.6';
     try {
       if (state.proxyRunning) {
-        const stopped = await api('/proxy/stop', { method: 'POST' });
+        await api('/proxy/stop', { method: 'POST' });
         setRunning(false);
         addLog('免流模式已停止');
-        if (stopped?.warning) addLog(`停止警告: ${stopped.warning}`, true);
         // 手动接管：本会话不再自动启动
         autoRun.done = true;
         disarmAutoRun();

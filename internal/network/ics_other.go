@@ -15,16 +15,12 @@ func DetectHotspot(context.Context) (HotspotStatus, error) {
 	return HotspotStatus{}, ErrWindowsOnly
 }
 
-func SwitchICS(context.Context, string) (ICSSwitchResult, error) {
-	return ICSSwitchResult{}, ErrWindowsOnly
+func SwitchICS(context.Context, string) (string, error) {
+	return "", ErrWindowsOnly
 }
 
-func SwitchWinRT(context.Context) (WinRTSwitchResult, error) {
-	return WinRTSwitchResult{}, ErrWindowsOnly
-}
-
-func VerifyICSApplied(context.Context, string) (bool, error) {
-	return false, ErrWindowsOnly
+func SwitchWinRT(context.Context) (string, error) {
+	return "", ErrWindowsOnly
 }
 
 func RestoreICSSharing(context.Context, Snapshot) error {
