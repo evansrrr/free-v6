@@ -445,6 +445,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 // 热点未运行 → not-running；切换失败 → 回滚基线并返回 failed。成功时把
 // Hotspot 元数据写回快照，供 /status 探测与停止免流时还原。任何失败都只
 // 体现在返回值里，不影响免流本身（非阻断决策）。
+//
+// 裁决原则：脚本自报与独立状态复核任一为真即算成功 —— 实测出现过脚本抛
+// 错（0x80040201 瞬态 / async Status 空串）而系统状态实际已切换成功的假
+// 失败，只信脚本退出码会漏记元数据导致停止时不还原。
 func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled bool) map[string]any {
 	if !enabled {
 		return map[string]any{"applied": false, "reason": "disabled"}
@@ -465,49 +469,97 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 	}
 	switchCtx, switchCancel := context.WithTimeout(context.Background(), icsOpTimeout)
 	defer switchCancel()
-	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
-	if switchErr != nil {
-		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
-			return map[string]any{"applied": false, "reason": "failed",
-				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
+
+	// 快速路径：上游已绑在 TUN（上次会话脚本假失败留下的活状态 / 重复启动）。
+	// 不再动系统，直接补记元数据 —— 否则停止免流时不还原，TUN 消失后热点断网。
+	if status.TunBound {
+		meta := &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: status.PhysicalProfile}
+		if saveErr := saveHotspotMeta(snapshot, snapshotPath, meta, switchCtx); saveErr != nil {
+			return saveErr
 		}
-		return map[string]any{"applied": false, "reason": "failed", "error": switchErr.Error()}
+		return map[string]any{"applied": true, "path": "winrt", "note": "already-bound"}
 	}
+
+	// 路径 A：经典 ICS（脚本重试自报 + 独立抓取复核，任一为真即成功）。
+	var icsErr error
+	if status.PrivateAlias != "" {
+		res, err := network.SwitchICS(switchCtx, status.PrivateAlias)
+		if err != nil {
+			icsErr = err
+		} else if !res.Ok {
+			if strings.TrimSpace(res.Error) == "" {
+				icsErr = errors.New("ICS 切换未生效")
+			} else {
+				icsErr = errors.New(res.Error)
+			}
+		}
+		applied, verifyErr := network.VerifyICSApplied(switchCtx, status.PrivateAlias)
+		if verifyErr == nil && applied {
+			meta := &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: status.PrivateIP}
+			if saveErr := saveHotspotMeta(snapshot, snapshotPath, meta, switchCtx); saveErr != nil {
+				return saveErr
+			}
+			return map[string]any{"applied": true, "path": "ics"}
+		}
+		// A 确认没生效（脚本失败且复核也失败/复核出错）→ 回滚到基线再走兜底，
+		// 避免半套 ICS 状态叠加到 WinRT 拓扑上。
+		if rbErr := network.RestoreICSSharing(switchCtx, snapshot); rbErr != nil {
+			msg := "回滚失败"
+			if icsErr != nil {
+				msg = fmt.Sprintf("%v；回滚失败: %v", icsErr, rbErr)
+			}
+			return map[string]any{"applied": false, "reason": "failed", "error": msg}
+		}
+	}
+
+	// 路径 B：WinRT 重绑。脚本自报成功，或失败后独立探测发现其实已绑上
+	// （async Status 假阴性挽救），都算成功。
+	wres, werr := network.SwitchWinRT(switchCtx)
+	success := werr == nil && wres.Started
+	if !success {
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), icsDetectTimeout)
+		st2, derr := network.DetectHotspot(verifyCtx)
+		verifyCancel()
+		if derr == nil && st2.TunBound {
+			success = true
+		}
+	}
+	if !success {
+		msg := "winrt 切换失败：脚本未报告启动成功，且独立探测未确认绑定"
+		if werr != nil {
+			msg = werr.Error()
+		}
+		if icsErr != nil {
+			msg = fmt.Sprintf("ics: %v; %s", icsErr, msg)
+		}
+		if rbErr := network.RestoreICSSharing(switchCtx, snapshot); rbErr != nil {
+			msg = fmt.Sprintf("%s；回滚失败: %v", msg, rbErr)
+		}
+		return map[string]any{"applied": false, "reason": "failed", "error": msg}
+	}
+	orig := wres.OriginalProfile
+	if orig == "" {
+		orig = status.PhysicalProfile // 脚本没记到就用探测到的物理上游提示
+	}
+	meta := &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: orig}
+	if saveErr := saveHotspotMeta(snapshot, snapshotPath, meta, switchCtx); saveErr != nil {
+		return saveErr
+	}
+	return map[string]any{"applied": true, "path": "winrt"}
+}
+
+// saveHotspotMeta 把切换元数据写回快照；失败则回滚切换（元数据落不了盘 →
+// 停止时无法还原，不能算成功），返回统一的 failed 结果。
+func saveHotspotMeta(snapshot network.Snapshot, snapshotPath string, meta *network.HotspotMeta, ctx context.Context) map[string]any {
 	snapshot.Hotspot = meta
 	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
-		// 元数据落不了盘 → 停止时无法还原 → 也算失败并回滚。
 		if meta.Path == "winrt" {
-			_ = network.RestoreWinRT(switchCtx, meta.OriginalProfile)
+			_ = network.RestoreWinRT(ctx, meta.OriginalProfile)
 		}
-		_ = network.RestoreICSSharing(switchCtx, snapshot)
+		_ = network.RestoreICSSharing(ctx, snapshot)
 		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
 	}
 	return map[string]any{"applied": true, "path": meta.Path}
-}
-
-// switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
-// 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
-func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot) (*network.HotspotMeta, error) {
-	var icsErr error
-	if status.PrivateAlias != "" {
-		if _, err := network.SwitchICS(ctx, status.PrivateAlias); err == nil {
-			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: status.PrivateIP}, nil
-		} else {
-			icsErr = err
-			// 经典路径可能已改动角色：先回滚再走兜底，避免两套状态叠加。
-			if rollbackErr := network.RestoreICSSharing(ctx, snapshot); rollbackErr != nil {
-				return nil, fmt.Errorf("ics: %v（回滚失败: %v）", icsErr, rollbackErr)
-			}
-		}
-	}
-	originalProfile, err := network.SwitchWinRT(ctx)
-	if err != nil {
-		if icsErr != nil {
-			return nil, fmt.Errorf("ics: %v; winrt: %w", icsErr, err)
-		}
-		return nil, err
-	}
-	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
@@ -521,19 +573,31 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
 	// 先还原再停进程：ICS/WinRT 还原要在 TUN 适配器仍在时完成（FreeV6TUN
 	// 连接存在才能显式禁用其共享角色）。还原失败时快照保留、mihomo 照常
-	// 停止，下次启动免流前会先按它自愈还原。
-	var restoreErr error
+	// 停止（否则停止按钮会被卡死），下次启动免流前会先按它自愈还原。
 	snapshot, err := network.LoadSnapshot(snapshotPath)
-	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		restoreErr = network.RestoreSnapshot(ctx, snapshot)
-		cancel()
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if restoreErr == nil {
-		_ = os.Remove(snapshotPath)
+	var warnings []string
+	var restoreErr error
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
+		// 防御性解绑：切换“假失败”的会话元数据没写成（Hotspot==nil），但
+		// tethering 可能实际绑在 TUN 上——不处理的话停止后 TUN 消失、热点
+		// 断网。解绑失败只记警告，不阻断停止。
+		if snapshot.Hotspot == nil {
+			if st, derr := network.DetectHotspot(ctx); derr == nil && st.TunBound {
+				if rwErr := network.RestoreWinRT(ctx, st.PhysicalProfile); rwErr != nil {
+					warnings = append(warnings, "热点上游解绑失败: "+rwErr.Error())
+				}
+			}
+		}
+		restoreErr = network.RestoreSnapshot(ctx, snapshot)
+		cancel()
+		if restoreErr == nil {
+			_ = os.Remove(snapshotPath)
+		}
 	}
 	if stopErr := mihomo.Stop(pidPath); stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
@@ -541,6 +605,10 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	if restoreErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
+		return
+	}
+	if len(warnings) > 0 {
+		writeJSON(writer, http.StatusOK, map[string]any{"running": false, "warning": strings.Join(warnings, "; ")})
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"running": false})

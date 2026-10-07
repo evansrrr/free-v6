@@ -39,28 +39,43 @@ func DetectHotspot(ctx context.Context) (HotspotStatus, error) {
 }
 
 // SwitchICS 经典路径：FreeV6TUN=PUBLIC、热点私有侧=PRIVATE。
-func SwitchICS(ctx context.Context, privateAlias string) (string, error) {
+// 脚本内部已完成重试与状态核验，返回结构化结果；仅在执行/解析层面出错时
+// 返回 error，业务失败在 result.Ok/result.Error 里。
+func SwitchICS(ctx context.Context, privateAlias string) (ICSSwitchResult, error) {
+	var result ICSSwitchResult
 	output, err := runPowerShell(ctx, BuildICSSwitchScript(privateAlias))
 	if err != nil {
-		return "", fmt.Errorf("switch ICS topology: %w", err)
+		return result, fmt.Errorf("switch ICS topology: %w", err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	if err := jsonUnmarshalFlexible(output, &result); err != nil {
+		return result, fmt.Errorf("decode ICS switch result: %w", err)
+	}
+	return result, nil
 }
 
 // SwitchWinRT 新 WDI 兜底路径：把移动热点上游改绑到 FreeV6TUN。
-// 返回切换前的原上游连接配置名（供停止时还原）。
-func SwitchWinRT(ctx context.Context) (string, error) {
+// 脚本按 TetheringState 轮询判定成功；返回原上游连接配置名。
+func SwitchWinRT(ctx context.Context) (WinRTSwitchResult, error) {
+	var result WinRTSwitchResult
 	output, err := runPowerShell(ctx, BuildWinRTSwitchScript())
 	if err != nil {
-		return "", fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
-	}
-	var result struct {
-		OriginalProfile string `json:"originalProfile"`
+		return result, fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
 	}
 	if err := jsonUnmarshalFlexible(output, &result); err != nil {
-		return "", fmt.Errorf("decode WinRT switch result: %w", err)
+		return result, fmt.Errorf("decode WinRT switch result: %w", err)
 	}
-	return result.OriginalProfile, nil
+	return result, nil
+}
+
+// VerifyICSApplied 独立复核经典拓扑是否真的生效（不信任切换脚本的自报）：
+// 重新抓共享状态，检查 TUN=public 且热点私有侧=private。
+// 用于脚本报错后的假阴性挽救 —— 实测出现过脚本抛错而状态已切换成功。
+func VerifyICSApplied(ctx context.Context, privateAlias string) (bool, error) {
+	sharing, err := CaptureSharing(ctx)
+	if err != nil {
+		return false, err
+	}
+	return ICSApplied(sharing, privateAlias), nil
 }
 
 // RestoreICSSharing 把 ICS 共享状态还原到基线；单连接失败会汇总在错误里。

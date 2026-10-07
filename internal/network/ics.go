@@ -42,7 +42,39 @@ type HotspotStatus struct {
 	Active       bool   `json:"active"`
 	PrivateAlias string `json:"privateAlias"` // 持有 ICS 网关地址的网卡显示名（经典路径）
 	PrivateIP    string `json:"privateIP"`
-	Tethering    bool   `json:"tethering"` // WinRT tethering 处于 On
+	Tethering    bool   `json:"tethering"`    // WinRT tethering 处于 On
+	TunBound     bool   `json:"tunBound"`     // tethering 已绑在 FreeV6TUN 上（残留/重复启动）
+	PhysicalProfile string `json:"physProfile"` // 物理 WLAN 连接配置名（winrt 还原的原上游提示）
+}
+
+// ICSSwitchResult 是经典路径切换脚本的结构化输出。
+type ICSSwitchResult struct {
+	Ok          bool   `json:"ok"`
+	TunPublic   bool   `json:"tunPublic"`
+	PrivPrivate bool   `json:"privPrivate"`
+	Error       string `json:"error"`
+}
+
+// WinRTSwitchResult 是 WinRT 切换脚本的结构化输出。
+type WinRTSwitchResult struct {
+	OriginalProfile string `json:"originalProfile"`
+	Started         bool   `json:"started"`
+}
+
+// ICSApplied 纯函数复核：共享状态快照里 TUN 是否已是 public 且热点私有侧
+// 是否已是 private。脚本自报与独立复核共用这一判据。
+func ICSApplied(sharing []SharingSnapshot, privateAlias string) bool {
+	tunPublic := false
+	privPrivate := privateAlias == "" // 无私有侧网卡时只看 TUN
+	for _, entry := range sharing {
+		if entry.Name == TunDeviceName && entry.Enabled && entry.Kind == "public" {
+			tunPublic = true
+		}
+		if privateAlias != "" && entry.Name == privateAlias && entry.Enabled && entry.Kind == "private" {
+			privPrivate = true
+		}
+	}
+	return tunPublic && privPrivate
 }
 
 // psQuote 把字符串包成 PowerShell 单引号字面量（内部单引号翻倍）。
@@ -73,6 +105,40 @@ func jsonUnmarshalFlexible(output []byte, target any) error {
 }
 
 const psHeader = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+
+// psSetShareFunc 是 switch/restore 脚本共用的共享设置函数：每次尝试前重新
+// 读取真实状态，带退避重试并核验目标状态 —— 0x80040201（“An event was
+// unable to invoke any of the subscribers”）这类 ICS 瞬态事件错误（状态可能
+// 已变、只是事件广播失败）在重试 + 状态核验下不再造成假失败。
+const psSetShareFunc = `
+function Test-Share($m, $c, [bool]$wantEnabled, [int]$wantType) {
+  try {
+    $s = $m.INetSharingConfigurationForINetConnection($c)
+    if (-not $wantEnabled) { return (-not [bool]$s.SharingEnabled) }
+    return ([bool]$s.SharingEnabled -and [int]$s.SharingType -eq $wantType)
+  } catch { return $false }
+}
+function Set-Share($m, $c, [bool]$wantEnabled, [int]$wantType, [string]$label) {
+  $last = ''
+  for ($i = 0; $i -lt 4; $i++) {
+    if (Test-Share $m $c $wantEnabled $wantType) { return $null }
+    try {
+      $s = $m.INetSharingConfigurationForINetConnection($c)
+      if ([bool]$s.SharingEnabled -and -not ($wantEnabled -and [int]$s.SharingType -eq $wantType)) {
+        $s.DisableSharing()
+        Start-Sleep -Milliseconds 500
+      }
+      $s2 = $m.INetSharingConfigurationForINetConnection($c)
+      if ($wantEnabled) { $s2.EnableSharing($wantType) } else { $s2.DisableSharing() }
+      $last = ''
+    } catch { $last = $_.Exception.Message }
+    Start-Sleep -Milliseconds 900
+  }
+  if (Test-Share $m $c $wantEnabled $wantType) { return $null }
+  if ($last -ne '') { return ($label + ': ' + $last) }
+  return ($label + ': 状态未达到目标')
+}
+`
 
 // PowerShellSharingCaptureCommand 枚举全部 HNetShare 连接的共享状态，
 // 输出 UTF-8 JSON 数组（中文网卡名依赖首行的编码设置）。
@@ -140,24 +206,31 @@ func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 //  2. 新 WDI 兜底：WinRT NetworkOperatorTetheringManager.TetheringState == On。
 const PowerShellHotspotDetectCommand = psHeader + `
 $ErrorActionPreference='SilentlyContinue'
-$active=$false; $alias=''; $ip=''; $tether=$false
+$active=$false; $alias=''; $ip=''; $tether=$false; $tunBound=$false; $phys=''
 $a = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq %s } | Select-Object -First 1
 if ($null -ne $a) { $active=$true; $alias=[string]$a.InterfaceAlias; $ip=[string]$a.IPAddress }
 try {
   $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
   $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
+  $tunName = %s
+  $states = @{}
   foreach ($p in $ni::GetConnectionProfiles()) {
-    try {
-      $mgr=$tm::CreateFromConnectionProfile($p)
-      if ([string]$mgr.TetheringState -eq 'On') { $tether=$true; $active=$true; break }
-    } catch {}
+    try { $states[[string]$p.ProfileName] = [string]($tm::CreateFromConnectionProfile($p)).TetheringState } catch {}
   }
+  foreach ($k in $states.Keys) { if ($states[$k] -eq 'On') { $tether=$true; $active=$true } }
+  # tunBound = TUN 报 On 且另有 profile 报 Off：全局语义下两者同步（恒 false，保守不误判），
+  # 按 profile 语义下准确反映“上游已绑在 TUN”。
+  if ($states[$tunName] -eq 'On') {
+    foreach ($k in $states.Keys) { if ($k -ne $tunName -and $states[$k] -eq 'Off') { $tunBound=$true; break } }
+  }
+  $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
+  if ($null -ne $wlan) { foreach ($p in $ni::GetConnectionProfiles()) { if ([string]$p.ProfileName -eq $wlan.Name) { $phys=[string]$p.ProfileName; break } } }
 } catch {}
-ConvertTo-Json -InputObject ([pscustomobject]@{active=$active; privateAlias=$alias; privateIP=$ip; tethering=$tether}) -Compress`
+ConvertTo-Json -InputObject ([pscustomobject]@{active=$active; privateAlias=$alias; privateIP=$ip; tethering=$tether; tunBound=$tunBound; physProfile=$phys}) -Compress`
 
-// BuildHotspotDetectCommand 返回带网关地址参数的探测脚本。
+// BuildHotspotDetectCommand 返回带网关地址与 TUN 名参数的探测脚本。
 func BuildHotspotDetectCommand() string {
-	return fmt.Sprintf(PowerShellHotspotDetectCommand, psQuote(DefaultHotspotGateway))
+	return fmt.Sprintf(PowerShellHotspotDetectCommand, psQuote(DefaultHotspotGateway), psQuote(TunDeviceName))
 }
 
 // ParseHotspotStatus 解析探测输出。
@@ -175,33 +248,39 @@ func ParseHotspotStatus(data []byte) (HotspotStatus, error) {
 
 // BuildICSSwitchScript 构造经典路径（HNetShare COM）的拓扑切换脚本：
 // FreeV6TUN → PUBLIC（上游，自动取消原 PUBLIC），热点私有侧网卡 → PRIVATE。
-// 任何一步失败都以非零退出码抛错，由调用方回滚。
+// 输出结构化 JSON {ok,tunPublic,privPrivate,error}：所有状态变化都经
+// Set-Share 重试核验（容忍 0x80040201 瞬态错误），脚本本身尽量不抛错，
+// 由调用方按 ok/error 决策。
 func BuildICSSwitchScript(privateAlias string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
-	b.WriteString("\n$ErrorActionPreference='Stop'\n")
+	b.WriteString("\n$ErrorActionPreference='SilentlyContinue'\n")
 	b.WriteString("$m = New-Object -ComObject HNetCfg.HNetShare\n")
+	b.WriteString(psSetShareFunc)
 	b.WriteString("function Find([string]$name) { foreach ($c in $m.EnumEveryConnection) { if ($m.NetConnectionProps($c).Name -eq $name) { return $c } }; return $null }\n")
 	fmt.Fprintf(&b, "$tun = Find %s\n", psQuote(TunDeviceName))
-	fmt.Fprintf(&b, "if ($null -eq $tun) { throw %s }\n", psQuote("TUN connection "+TunDeviceName+" not found"))
-	b.WriteString("$tc = $m.INetSharingConfigurationForINetConnection($tun)\n")
-	b.WriteString("if (-not $tc.SharingEnabled -or [int]$tc.SharingType -ne 0) { if ($tc.SharingEnabled) { $tc.DisableSharing() }; $tc.EnableSharing(0) }\n")
 	fmt.Fprintf(&b, "$priv = Find %s\n", psQuote(privateAlias))
-	fmt.Fprintf(&b, "if ($null -eq $priv) { throw %s }\n", psQuote("hotspot connection '"+privateAlias+"' not found"))
-	b.WriteString("$pc = $m.INetSharingConfigurationForINetConnection($priv)\n")
-	b.WriteString("if (-not $pc.SharingEnabled -or [int]$pc.SharingType -ne 1) { if ($pc.SharingEnabled) { $pc.DisableSharing() }; $pc.EnableSharing(1) }\n")
-	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{path='ics'}) -Compress\n")
+	b.WriteString("$errs = @()\n")
+	fmt.Fprintf(&b, "if ($null -eq $tun) { $errs += %s }\n", psQuote("TUN connection "+TunDeviceName+" not found"))
+	fmt.Fprintf(&b, "if ($null -eq $priv) { $errs += %s }\n", psQuote("hotspot connection '"+privateAlias+"' not found"))
+	b.WriteString("if ($null -ne $tun) { $e = Set-Share $m $tun $true 0 'TUN'; if ($e) { $errs += $e } }\n")
+	b.WriteString("if ($null -ne $priv) { $e = Set-Share $m $priv $true 1 'private'; if ($e) { $errs += $e } }\n")
+	b.WriteString("$tunOK = $false; $privOK = $false\n")
+	b.WriteString("if ($null -ne $tun) { $tunOK = Test-Share $m $tun $true 0 }\n")
+	b.WriteString("if ($null -ne $priv) { $privOK = Test-Share $m $priv $true 1 }\n")
+	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{ok=($tunOK -and $privOK); tunPublic=$tunOK; privPrivate=$privOK; error=($errs -join '; ')}) -Compress\n")
 	return b.String()
 }
 
-// BuildICSRestoreScript 构造还原脚本：按快照把每个连接恢复到原角色；
-// 快照里没有的连接只有 FreeV6TUN 会被禁用共享（会话中途新建的其他共享不碰）。
-// 单连接失败收集后以非零退出码退出，输出还原结果 JSON。
+// BuildICSRestoreScript 构造还原脚本：按快照把每个连接恢复到原角色（带
+// 重试核验）；快照里没有的连接只有 FreeV6TUN 会被禁用共享。
+// 输出 {errors:[...]}；调用方按 errors 是否为空判定成败。
 func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
-	b.WriteString("\n$ErrorActionPreference='Stop'\n")
+	b.WriteString("\n$ErrorActionPreference='SilentlyContinue'\n")
 	b.WriteString("$m = New-Object -ComObject HNetCfg.HNetShare\n")
+	b.WriteString(psSetShareFunc)
 	b.WriteString("$errors = @()\n")
 	b.WriteString("$want = @(\n")
 	for _, entry := range sharing {
@@ -212,69 +291,75 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	b.WriteString(")\n")
 	b.WriteString("foreach ($c in $m.EnumEveryConnection) {\n")
 	b.WriteString("  $p = $m.NetConnectionProps($c)\n")
-	b.WriteString("  $s = $m.INetSharingConfigurationForINetConnection($c)\n")
 	b.WriteString("  $match = $null\n")
 	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
-	b.WriteString("  try {\n")
-	b.WriteString("    if ($null -ne $match) {\n")
-	b.WriteString("      $cur = [bool]$s.SharingEnabled\n")
-	b.WriteString("      $curT = $(if ($cur) { [int]$s.SharingType } else { -1 })\n")
-	b.WriteString("      if ($match.e -and ((-not $cur) -or $curT -ne [int]$match.t)) {\n")
-	b.WriteString("        if ($cur) { $s.DisableSharing() }\n")
-	b.WriteString("        $s.EnableSharing([int]$match.t)\n")
-	b.WriteString("      } elseif ((-not $match.e) -and $cur) { $s.DisableSharing() }\n")
-	b.WriteString("    } elseif ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled) {\n")
-	b.WriteString("      $s.DisableSharing()\n")
-	b.WriteString("    }\n")
-	b.WriteString("  } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) }\n")
+	b.WriteString("  if ($null -ne $match) {\n")
+	b.WriteString("    $e = Set-Share $m $c ([bool]$match.e) ([int]$match.t) $p.Name\n")
+	b.WriteString("    if ($e) { $errors += $e }\n")
+	b.WriteString("  } elseif ($p.Name -eq " + psQuote(tunName) + ") {\n")
+	b.WriteString("    $e = Set-Share $m $c $false 0 $p.Name\n")
+	b.WriteString("    if ($e) { $errors += $e }\n")
+	b.WriteString("  }\n")
 	b.WriteString("}\n")
 	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{errors=$errors}) -Compress\n")
 	return b.String()
 }
 
 // BuildWinRTSwitchScript 构造新 WDI 兜底路径：停掉现有 tethering，
-// 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游（物理 WLAN），
-// 新上游启动失败时在脚本内回滚重启原上游后再抛错。
+// 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游。
+// 成功判定完全基于 TetheringState 状态轮询（不信任 async op.Status —— 实测
+// 曾出现 Status 为空串导致假失败，而 tethering 实际已启动）；启动失败时先
+// 核验真实状态再回滚重启原上游，避免误杀已成功的切换。
 func BuildWinRTSwitchScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
 $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
 $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
 $profiles=@($ni::GetConnectionProfiles())
-function Wait-Op($op) { $i=0; while ([string]$op.Status -eq 'Started' -and $i -lt 120) { Start-Sleep -Milliseconds 500; $i++ }; return $op }
+function Wait-State($mgr, [string]$want, [int]$seconds) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
+    if ([string]$mgr.TetheringState -eq $want) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return ([string]$mgr.TetheringState -eq $want)
+}
 $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
 $orig = ''
-if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.Name) { $orig = $p.ProfileName; break } } }
+if ($null -ne $wlan) { foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $wlan.Name) { $orig = [string]$p.ProfileName; break } } }
 $stopped = $false
 foreach ($p in $profiles) {
-  try {
-    $mgr = $tm::CreateFromConnectionProfile($p)
-    if ([string]$mgr.TetheringState -ne 'Off') { $null = Wait-Op $mgr.StopTetheringAsync(); $stopped = $true; break }
-  } catch {}
+  $mgr = $null
+  try { $mgr = $tm::CreateFromConnectionProfile($p) } catch { continue }
+  if ([string]$mgr.TetheringState -ne 'Off') {
+    $null = $mgr.StopTetheringAsync()
+    if (Wait-State $mgr 'Off' 30) { $stopped = $true }
+    break
+  }
 }
-if (-not $stopped) { throw '移动热点未处于运行状态（tethering 未启动）' }
+if (-not $stopped) { throw '移动热点未处于运行状态或停止超时' }
 $tunName = ` + psQuote(TunDeviceName) + `
 $tunP = $null
-foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
+foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $tunName) { $tunP = $p; break } }
 if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-try {
-  $mgr2 = $tm::CreateFromConnectionProfile($tunP)
-  $op2 = Wait-Op $mgr2.StartTetheringAsync()
-  if ([string]$op2.Status -ne 'Completed') { throw ('启动热点未完成: ' + [string]$op2.Status) }
-  $res = [string]$op2.GetResults()
-  if ($res -ne 'Success') { throw ('启动热点失败: ' + $res) }
-} catch {
-  if ($orig -ne '') {
-    foreach ($p in $profiles) {
-      if ($p.ProfileName -eq $orig) {
-        try { $mgr3 = $tm::CreateFromConnectionProfile($p); $null = Wait-Op $mgr3.StartTetheringAsync() } catch {}
-        break
-      }
-    }
+$mgr2 = $tm::CreateFromConnectionProfile($tunP)
+$startErr = ''
+try { $null = $mgr2.StartTetheringAsync() } catch { $startErr = $_.Exception.Message }
+if (-not (Wait-State $mgr2 'On' 60)) {
+  # 状态语义兜底：扫描所有 profile，任一报 On 即认为 tethering 已起来
+  $anyOn = $false
+  foreach ($p in $profiles) {
+    try { $mm = $tm::CreateFromConnectionProfile($p); if ([string]$mm.TetheringState -eq 'On') { $anyOn = $true; break } } catch {}
   }
-  throw
+  if (-not $anyOn) {
+    $state = [string]$mgr2.TetheringState
+    if ($orig -ne '') {
+      foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $orig) { try { $om = $tm::CreateFromConnectionProfile($p); $null = $om.StartTetheringAsync(); $null = Wait-State $om 'On' 30 } catch {}; break } }
+    }
+    throw ('启动热点失败: TetheringState=' + $state + ' ' + $startErr)
+  }
 }
-ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
+ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig; started=$true}) -Compress
 `
 }
 
@@ -289,30 +374,41 @@ $ErrorActionPreference='Stop'
 $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
 $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
 $profiles=@($ni::GetConnectionProfiles())
-function Wait-Op($op) { $i=0; while ([string]$op.Status -eq 'Started' -and $i -lt 120) { Start-Sleep -Milliseconds 500; $i++ }; return $op }
+function Wait-State($mgr, [string]$want, [int]$seconds) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
+    if ([string]$mgr.TetheringState -eq $want) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return ([string]$mgr.TetheringState -eq $want)
+}
 $running = $false
+$activeMgr = $null
 foreach ($p in $profiles) {
-  try { $mgr = $tm::CreateFromConnectionProfile($p); if ([string]$mgr.TetheringState -ne 'Off') { $running = $true; break } } catch {}
+  try {
+    $mgr = $tm::CreateFromConnectionProfile($p)
+    if ([string]$mgr.TetheringState -ne 'Off') { $running = $true; $activeMgr = $mgr; break }
+  } catch {}
 }
 $restarted = $false
 $reason = ''
 if (-not $running) { $reason = 'not-running' } else {
-  foreach ($p in $profiles) {
-    try { $mgr = $tm::CreateFromConnectionProfile($p); $null = Wait-Op $mgr.StopTetheringAsync(); break } catch {}
-  }
+  # 停止也按状态轮询核验；停不下来则如实报告，不能假装成功
+  $null = $activeMgr.StopTetheringAsync()
+  if (-not (Wait-State $activeMgr 'Off' 30)) { $reason = 'stop-timeout' } else {
   $orig = `)
 	b.WriteString(psQuote(originalProfile))
 	b.WriteString(`
   if ($orig -eq '') { $reason = 'no-original-profile' } else {
     $target = $null
-    foreach ($p in $profiles) { if ($p.ProfileName -eq $orig) { $target = $p; break } }
+    foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $orig) { $target = $p; break } }
     if ($null -eq $target) { $reason = 'original-profile-missing' } else {
-      try {
-        $mgr2 = $tm::CreateFromConnectionProfile($target)
-        $op2 = Wait-Op $mgr2.StartTetheringAsync()
-        if ([string]$op2.Status -eq 'Completed' -and [string]$op2.GetResults() -eq 'Success') { $restarted = $true } else { $reason = 'start-failed' }
-      } catch { $reason = 'start-error: ' + $_.Exception.Message }
+      $mgr2 = $tm::CreateFromConnectionProfile($target)
+      $startErr = ''
+      try { $null = $mgr2.StartTetheringAsync() } catch { $startErr = $_.Exception.Message }
+      if (Wait-State $mgr2 'On' 45) { $restarted = $true } else { $reason = 'start-failed: TetheringState=' + [string]$mgr2.TetheringState + ' ' + $startErr }
     }
+  }
   }
 }
 ConvertTo-Json -InputObject ([pscustomobject]@{restarted=$restarted; reason=$reason}) -Compress
