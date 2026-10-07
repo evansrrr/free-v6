@@ -482,6 +482,7 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 
 	// 路径 A：经典 ICS（脚本重试自报 + 独立抓取复核，任一为真即成功）。
 	var icsErr error
+	var rollbackErr error
 	if status.PrivateAlias != "" {
 		res, err := network.SwitchICS(switchCtx, status.PrivateAlias)
 		if err != nil {
@@ -501,14 +502,11 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 			}
 			return map[string]any{"applied": true, "path": "ics"}
 		}
-		// A 确认没生效（脚本失败且复核也失败/复核出错）→ 回滚到基线再走兜底，
-		// 避免半套 ICS 状态叠加到 WinRT 拓扑上。
+		// A 确认没生效 → 回滚到基线再走兜底。回滚失败只记录不阻断：
+		// WinRT 路径自带 tethering 管理，脏 ICS 状态仍可能成功，且停止时
+		// 会按基线再次还原；阻断只会让两路全灭。
 		if rbErr := network.RestoreICSSharing(switchCtx, snapshot); rbErr != nil {
-			msg := "回滚失败"
-			if icsErr != nil {
-				msg = fmt.Sprintf("%v；回滚失败: %v", icsErr, rbErr)
-			}
-			return map[string]any{"applied": false, "reason": "failed", "error": msg}
+			rollbackErr = rbErr
 		}
 	}
 
@@ -532,8 +530,8 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 		if icsErr != nil {
 			msg = fmt.Sprintf("ics: %v; %s", icsErr, msg)
 		}
-		if rbErr := network.RestoreICSSharing(switchCtx, snapshot); rbErr != nil {
-			msg = fmt.Sprintf("%s；回滚失败: %v", msg, rbErr)
+		if rollbackErr != nil {
+			msg = fmt.Sprintf("%s（ics 回滚未完全成功: %v）", msg, rollbackErr)
 		}
 		return map[string]any{"applied": false, "reason": "failed", "error": msg}
 	}

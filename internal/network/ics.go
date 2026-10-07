@@ -305,11 +305,14 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	return b.String()
 }
 
-// BuildWinRTSwitchScript 构造新 WDI 兜底路径：停掉现有 tethering，
-// 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游。
-// 成功判定完全基于 TetheringState 状态轮询（不信任 async op.Status —— 实测
-// 曾出现 Status 为空串导致假失败，而 tethering 实际已启动）；启动失败时先
-// 核验真实状态再回滚重启原上游，避免误杀已成功的切换。
+// BuildWinRTSwitchScript 构造新 WDI 兜底路径：改绑到 FreeV6TUN 重新启动热点。
+// 成功判定基于 TetheringState 状态轮询（不信任 async op.Status）。三条安全
+// 约束（真机回归教训）：
+//  1. 停止确认失败（30s 内没读到 Off）不中止——继续尝试启动，由启动判定
+//     决定成败，绝不停了不重启；
+//  2. 定位当前上游时跳过 TUN 连接，避免“停掉目标本身”；
+//  3. 任何启动失败且我们确实停过热点，必须先回滚重启原上游（activeName 优先，
+//     WLAN 兑底）再抛错，回滚结果写进错误消息——否则热点死掉不恢复。
 func BuildWinRTSwitchScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
@@ -319,47 +322,101 @@ $profiles=@($ni::GetConnectionProfiles())
 function Wait-State($mgr, [string]$want, [int]$seconds) {
   $deadline = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $deadline) {
-    if ([string]$mgr.TetheringState -eq $want) { return $true }
+    try { if ([string]$mgr.TetheringState -eq $want) { return $true } } catch {}
     Start-Sleep -Milliseconds 500
   }
-  return ([string]$mgr.TetheringState -eq $want)
+  try { return ([string]$mgr.TetheringState -eq $want) } catch { return $false }
+}
+function New-Mgr($tm, $p) { try { return $tm::CreateFromConnectionProfile($p) } catch { return $null } }
+function Test-AnyOn($tm, $profiles, [string]$exclude) {
+  foreach ($p in $profiles) {
+    if ($exclude -ne '' -and [string]$p.ProfileName -eq $exclude) { continue }
+    $mm = New-Mgr $tm $p
+    if ($null -ne $mm) { try { if ([string]$mm.TetheringState -eq 'On') { return $true } } catch {} }
+  }
+  return $false
+}
+function Test-OthersOff($tm, $profiles, [string]$tunName) {
+  foreach ($p in $profiles) {
+    if ([string]$p.ProfileName -eq $tunName) { continue }
+    $mm = New-Mgr $tm $p
+    if ($null -ne $mm) { try { if ([string]$mm.TetheringState -eq 'Off') { return $true } } catch {} }
+  }
+  return $false
 }
 $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
 $orig = ''
 if ($null -ne $wlan) { foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $wlan.Name) { $orig = [string]$p.ProfileName; break } } }
-$stopped = $false
-foreach ($p in $profiles) {
-  $mgr = $null
-  try { $mgr = $tm::CreateFromConnectionProfile($p) } catch { continue }
-  if ([string]$mgr.TetheringState -ne 'Off') {
-    $null = $mgr.StopTetheringAsync()
-    if (Wait-State $mgr 'Off' 30) { $stopped = $true }
-    break
-  }
-}
-if (-not $stopped) { throw '移动热点未处于运行状态或停止超时' }
 $tunName = ` + psQuote(TunDeviceName) + `
 $tunP = $null
 foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $tunName) { $tunP = $p; break } }
 if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-$mgr2 = $tm::CreateFromConnectionProfile($tunP)
-$startErr = ''
-try { $null = $mgr2.StartTetheringAsync() } catch { $startErr = $_.Exception.Message }
-if (-not (Wait-State $mgr2 'On' 60)) {
-  # 状态语义兜底：扫描所有 profile，任一报 On 即认为 tethering 已起来
-  $anyOn = $false
-  foreach ($p in $profiles) {
-    try { $mm = $tm::CreateFromConnectionProfile($p); if ([string]$mm.TetheringState -eq 'On') { $anyOn = $true; break } } catch {}
-  }
-  if (-not $anyOn) {
-    $state = [string]$mgr2.TetheringState
-    if ($orig -ne '') {
-      foreach ($p in $profiles) { if ([string]$p.ProfileName -eq $orig) { try { $om = $tm::CreateFromConnectionProfile($p); $null = $om.StartTetheringAsync(); $null = Wait-State $om 'On' 30 } catch {}; break } }
-    }
-    throw ('启动热点失败: TetheringState=' + $state + ' ' + $startErr)
+$tunMgr = New-Mgr $tm $tunP
+if ($null -eq $tunMgr) { throw ($tunName + ' tethering manager unavailable') }
+# 0) 已绑 TUN（且其余 Off，按 profile 语义的绑定确证）→ 无需断开，直接成功
+if ([string]$tunMgr.TetheringState -eq 'On' -and (Test-OthersOff $tm $profiles $tunName)) {
+  ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig; started=$true; note='already-on'}) -Compress
+  exit 0
+}
+# 1) 定位当前上游（跳过 TUN）并停止；停止确认失败只记录，不中止
+$mgrToStop = $null
+$activeName = ''
+foreach ($p in $profiles) {
+  if ([string]$p.ProfileName -eq $tunName) { continue }
+  $mm = New-Mgr $tm $p
+  if ($null -eq $mm) { continue }
+  try { if ([string]$mm.TetheringState -ne 'Off') { $mgrToStop = $mm; $activeName = [string]$p.ProfileName; break } } catch {}
+}
+$didStop = $false
+$stopOK = $false
+if ($null -ne $mgrToStop) {
+  try { $null = $mgrToStop.StopTetheringAsync(); $didStop = $true } catch {}
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    $s = ''
+    try { $s = [string]$mgrToStop.TetheringState } catch {}
+    if ($s -eq 'Off') { $stopOK = $true; break }
+    if (-not (Test-AnyOn $tm $profiles '')) { $stopOK = $true; break }
+    Start-Sleep -Milliseconds 500
   }
 }
-ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig; started=$true}) -Compress
+# 2) 启动 TUN 上游，给足时间再判定
+$tunOn = Wait-State $tunMgr 'On' 60
+$stateStr = ''
+try { $stateStr = [string]$tunMgr.TetheringState } catch {}
+$proof = (Test-OthersOff $tm $profiles $tunName) -or $stopOK -or (-not $didStop)
+$success = $tunOn -and $proof
+if (-not $success -and $stateStr -eq '' -and $stopOK -and (Test-AnyOn $tm $profiles '')) { $success = $true }
+if (-not $success) {
+  if ($didStop) {
+    $restored = $false
+    $rname = ''
+    foreach ($cand in @($activeName, $orig)) {
+      if ($cand -eq '' -or $cand -eq $tunName) { continue }
+      foreach ($p in $profiles) {
+        if ([string]$p.ProfileName -ne $cand) { continue }
+        $rm = New-Mgr $tm $p
+        if ($null -ne $rm) {
+          try {
+            # 停止可能本就没生效（原上游还开着）→ 无需重复 Start，直接算恢复
+            if ([string]$rm.TetheringState -eq 'On') { $restored = $true; $rname = $cand }
+            else { $null = $rm.StartTetheringAsync(); if (Wait-State $rm 'On' 30) { $restored = $true; $rname = $cand } }
+          } catch {}
+          break
+        }
+      }
+      if ($restored) { break }
+    }
+    if ($restored) {
+      throw ('启动热点失败: tunState=' + $stateStr + '（已恢复原上游 ' + $rname + '）')
+    }
+    throw ('启动热点失败: tunState=' + $stateStr + '（⚠️ 未能恢复原上游，热点可能已关闭，请手动重新开启）')
+  }
+  throw ('启动热点失败: tunState=' + $stateStr + '（未停过热点，原上游未受影响）')
+}
+$finalOrig = $orig
+if ($finalOrig -eq '') { $finalOrig = $activeName }
+ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$finalOrig; started=$true}) -Compress
 `
 }
 

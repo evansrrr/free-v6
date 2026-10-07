@@ -104,3 +104,34 @@ func TestWinRTRestoreUsesStatePolling(t *testing.T) {
 		}
 	}
 }
+
+// WinRT 切换脚本的三条安全约束（真机回归：停了热点没重启 → 断连不恢复）：
+//  1. 停止确认失败不中止（不得出现“停不了就 throw”的硬门槛）；
+//  2. 定位当前上游跳过 TUN，避免停掉目标本身；
+//  3. 启动失败且停过热点 → 必须先回滚重启原上游再抛错，且回滚结果入错误消息。
+func TestWinRTSwitchScriptSafetyInvariants(t *testing.T) {
+	script := BuildWinRTSwitchScript()
+	// 约束1：旧版回归点 —— 停止超时直接 throw，导致热点死掉
+	if strings.Contains(script, "移动热点未处于运行状态或停止超时") {
+		t.Fatal("stop-confirmation failure must not abort (it strands the hotspot off)")
+	}
+	// 约束2：定位上游时跳过 TUN 连接
+	if !strings.Contains(script, "if ([string]$p.ProfileName -eq $tunName) { continue }") {
+		t.Fatal("must skip TUN profile when locating the current upstream")
+	}
+	// 约束3：失败路径必须回滚，且回滚结果写进错误消息
+	for _, expected := range []string{
+		"已恢复原上游",                          // 回滚成功的错误消息
+		"未能恢复原上游",                          // 回滚失败的错误消息
+		"未停过热点，原上游未受影响",                  // didStop=false 的分支
+		"note='already-on'",                    // 已绑 TUN 的免断开快速路径
+	} {
+		if !strings.Contains(script, expected) {
+			t.Errorf("winrt switch missing safety branch %q", expected)
+		}
+	}
+	// 成功判定必须含 proof（stopOK/othersOff/未停过 三者之一），不允许无条件成功
+	if !strings.Contains(script, "$proof") {
+		t.Fatal("success must be gated on a proof condition")
+	}
+}
