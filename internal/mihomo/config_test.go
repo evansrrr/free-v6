@@ -37,6 +37,10 @@ func TestRenderMasqueConfig(t *testing.T) {
 	if !strings.Contains(config, "external-controller: 127.0.0.1:9090") {
 		t.Fatal("renderer must expose only the loopback mihomo controller")
 	}
+	// 地理数据下载地址必须走大陆可达镜像（新机器缺 GeoSite.dat 时的兜底）
+	if !strings.Contains(config, "geox-url:") || !strings.Contains(config, "api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat") {
+		t.Fatal("config must point geox-url at the reachable mirror")
+	}
 	if strings.Contains(config, "GEOIP,CN") || strings.Contains(config, "🎯 全球直连") {
 		t.Fatal("external traffic must not have a direct route")
 	}

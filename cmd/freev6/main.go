@@ -162,7 +162,16 @@ func startMihomo(args []string) error {
 		restoreSnapshot()
 		return err
 	}
-	pid, err := mihomo.Start(resolvedBinary, configPathValue, pidPathValue, logPathValue)
+	// GeoSite.dat 预置：与 helper 相同，避免缺文件时 mihomo 启动卡在
+	// github 直连下载导致 controller 就绪超时。home 固定为配置所在目录。
+	geoCtx, geoCancel := context.WithTimeout(context.Background(), mihomo.GeodataDownloadTimeout)
+	_, geoErr := mihomo.EnsureGeodata(geoCtx, filepath.Dir(configPathValue))
+	geoCancel()
+	if geoErr != nil {
+		restoreSnapshot()
+		return fmt.Errorf("准备地理数据失败: %w", geoErr)
+	}
+	pid, err := mihomo.Start(resolvedBinary, configPathValue, filepath.Dir(configPathValue), pidPathValue, logPathValue)
 	if err != nil {
 		restoreSnapshot()
 		return err

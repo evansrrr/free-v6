@@ -72,6 +72,14 @@ unified-delay: true
 tcp-concurrent: true
 find-process-mode: 'always'
 
+# 地理数据下载地址走大陆可达镜像（与 internal/mihomo/geodata.go 的
+# EnsureGeodata 镜像链一致）；正常情况下启动前文件已预置，这里只在
+# 文件被删除/geo-auto-update 开启时生效。
+geox-url:
+  geoip: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+  geosite: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
+
 profile:
   store-selected: true
   store-fake-ip: true

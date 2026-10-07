@@ -12,7 +12,11 @@ import (
 
 var ErrAlreadyRunning = errors.New("mihomo is already running")
 
-func Start(binaryPath, configPath, pidPath, logPath string) (int, error) {
+// Start 以 -d homeDir 显式固定 mihomo 的工作目录（GeoSite.dat、cache.db、
+// ruleset 缓存都落在这里）：不传时它取进程 cwd/可执行文件目录，不同机器
+// 上位置飘忽导致 geodata “明明有也找不到”。homeDir 由调用方统一传 state
+// 目录，与 EnsureGeodata 的写入位置保持一致。
+func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error) {
 	if strings.TrimSpace(binaryPath) == "" {
 		return 0, errors.New("mihomo binary path is empty")
 	}
@@ -29,7 +33,7 @@ func Start(binaryPath, configPath, pidPath, logPath string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open mihomo log: %w", err)
 	}
-	cmd := exec.Command(binaryPath, "-f", configPath)
+	cmd := exec.Command(binaryPath, "-d", homeDir, "-f", configPath)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
