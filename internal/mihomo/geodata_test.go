@@ -132,7 +132,7 @@ func TestEnsureGeodataRedownloadsCorruptFile(t *testing.T) {
 	if downloaded, err := EnsureGeodata(context.Background(), home); err != nil || !downloaded {
 		t.Fatalf("corrupt file must be replaced: downloaded=%v err=%v", downloaded, err)
 	}
-	if !geodataValid(path) {
+	if !GeodataValid(path) {
 		t.Fatal("file must be valid after re-download")
 	}
 }
@@ -181,5 +181,69 @@ func TestEnsureGeodataHonorsContext(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("must fail fast on expired context, took %v", elapsed)
+	}
+}
+
+// 挂死的镜像只烧掉自己的超时份额：后备镜像必须仍然拿到机会，总耗时接近
+// 单镜像超时而不是总预算 —— 回归线上故障「已尝试 1 个镜像: context
+// deadline exceeded」（gitproxy 挂死吃光共享预算，后备镜像没跑）。
+func TestEnsureGeodataHungMirrorDoesNotStarveFallback(t *testing.T) {
+	originalTimeout := geodataPerMirrorTimeout
+	geodataPerMirrorTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { geodataPerMirrorTimeout = originalTimeout })
+
+	home := t.TempDir()
+	hung := make(chan struct{})
+	hungServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hung // 模拟完全挂住：不写响应、不返回
+	}))
+	defer hungServer.Close()
+	defer close(hung)
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(append([]byte{0, 1}, make([]byte, minGeositeSize)...))
+	}))
+	defer good.Close()
+	withGeositeMirrors(t, hungServer.URL, good.URL)
+
+	start := time.Now()
+	created, err := EnsureGeodata(context.Background(), home)
+	elapsed := time.Since(start)
+	if err != nil || !created {
+		t.Fatalf("fallback mirror must win: created=%v err=%v", created, err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("hung mirror must be cut at per-mirror timeout, took %v", elapsed)
+	}
+	if !GeodataValid(filepath.Join(home, GeositeFileName)) {
+		t.Fatal("file from fallback mirror must be valid")
+	}
+}
+
+// 安装包内置副本（homeDir 的上级目录 = 安装根目录）必须零网络生效 ——
+// 新机器首启、所有镜像都不可达时的唯一依靠。
+func TestEnsureGeodataSeedsFromInstallRoot(t *testing.T) {
+	installRoot := t.TempDir()
+	home := filepath.Join(installRoot, "state")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeValidGeodata(t, filepath.Join(installRoot, GeositeFileName))
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer server.Close()
+	withGeositeMirrors(t, server.URL)
+
+	created, err := EnsureGeodata(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("seed copy must count as created")
+	}
+	if hits != 0 {
+		t.Fatalf("seed copy must not touch the network, got %d hits", hits)
+	}
+	if !GeodataValid(filepath.Join(home, GeositeFileName)) {
+		t.Fatal("state copy must be valid")
 	}
 }

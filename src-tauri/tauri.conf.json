@@ -4,8 +4,8 @@
   "version": "0.4.1",
   "identifier": "dev.freev6.desktop",
   "build": {
-    "beforeDevCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper",
-    "beforeBuildCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper",
+    "beforeDevCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper && go run ./cmd/ensure-geodata",
+    "beforeBuildCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper && go run ./cmd/ensure-geodata",
     "frontendDist": "../web"
   },
   "app": {
@@ -35,7 +35,8 @@
       "LICENSES": "LICENSES",
       "../README.md": "README.md",
       "../docs/agreement.md": "docs/agreement.md",
-      "../docs/privacy.md": "docs/privacy.md"
+      "../docs/privacy.md": "docs/privacy.md",
+      "../GeoSite.dat": "GeoSite.dat"
     },
     "icon": [
       "icons/32x32.png",

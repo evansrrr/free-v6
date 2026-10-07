@@ -11,6 +11,8 @@ src-tauri/gen/
 state/
 *.local.json
 mihomo.yaml
+# 构建期由 cmd/ensure-geodata 生成/下载，打进安装包用，不入库
+/GeoSite.dat
 
 .agents/
 docs/agent/

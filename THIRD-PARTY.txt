@@ -39,6 +39,14 @@ REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
    Source:    https://nsis.sourceforge.io/
    Note: the NSIS toolchain is downloaded by the Tauri bundler at build time.
 
+6. GeoSite.dat (geosite domain data, bundled at <install dir>\GeoSite.dat)
+   License:   Apache-2.0
+   Copyright: The v2fly and MetaCubeX authors
+   Source:    https://github.com/MetaCubeX/meta-rules-dat (compiled from
+              v2fly/domain-list-community source lists)
+   Note: refreshed from the source repository on each release build
+   (cmd/ensure-geodata) and only redistributed as the compiled .dat file.
+
 6. nsis_tauri_utils (NSIS plugin embedded in the produced setup.exe)
    License:   MIT OR Apache-2.0
    Copyright: Tauri Programme within The Commons Conservancy
