@@ -236,10 +236,11 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 // 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游（物理 WLAN），
 // 新上游启动失败时在脚本内回滚重启原上游，回滚结果写进错误消息。
 //
-// 成败判定只看 TetheringState 真实状态轮询，绝不读异步 op 的 .Status /
-// GetResults —— 部分机器上 PowerShell 投影读到的 .Status 为空，会把仍在
-// 进行中的 StartTetheringAsync 误判为“启动热点未完成”（假失败，实际
-// 随后完成，共享可用）。定位 tunP/原上游必须在任何停止动作之前完成。
+// 成败判定是双层的，任何一层可用即可：优先 TetheringState（读到非空值），
+// 投影读空的机器退回热点网关 IP 探测（与 DetectHotspot 同一信号，已在
+// 故障机验证可用）。绝不读异步 op 的 .Status/GetResults —— 部分机器上
+// 该属性为空，曾把进行中的启动误判为“未完成”的假失败。定位 tunP/原上游
+// 必须在任何停止动作之前完成。
 func BuildWinRTSwitchScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
@@ -247,18 +248,46 @@ $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Conne
 $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
 $profiles=@($ni::GetConnectionProfiles())
 $tunName = ` + psQuote(TunDeviceName) + `
-function Get-TetherState {
+$gateway = ` + psQuote(DefaultHotspotGateway) + `
+function Get-HeatState {
+  $found = ''
   foreach ($p in $profiles) {
-    try { return [string]$tm::CreateFromConnectionProfile($p).TetheringState } catch {}
+    try {
+      $st = [string]$tm::CreateFromConnectionProfile($p).TetheringState
+      if (-not [string]::IsNullOrWhiteSpace($st)) {
+        if ($st -eq 'On') { return 'On' }
+        if ($found -eq '') { $found = $st }
+      }
+    } catch {}
   }
-  return 'Unknown'
+  return $found
 }
-function Wait-TetherState([string]$want, [int]$ticks) {
+function Test-HeatUp {
+  $st = Get-HeatState
+  if ($st -ne '') { return ($st -eq 'On') }
+  $a = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $gateway } | Select-Object -First 1
+  return ($null -ne $a)
+}
+function Test-HeatDown {
+  $st = Get-HeatState
+  if ($st -ne '') { return ($st -eq 'Off') }
+  return (-not (Test-HeatUp))
+}
+function Wait-Heat([string]$want, [int]$ticks) {
   for ($i = 0; $i -lt $ticks; $i++) {
-    if ((Get-TetherState) -eq $want) { return $true }
+    $ok = $false
+    if ($want -eq 'Up') { $ok = Test-HeatUp } else { $ok = Test-HeatDown }
+    if ($ok) { return $true }
     Start-Sleep -Milliseconds 500
   }
   return $false
+}
+function Get-HeatLabel {
+  $st = Get-HeatState
+  if ($st -eq '') { $st = '状态不可读' }
+  $g = '热点网关不在线'
+  if (Test-HeatUp) { $g = '热点网关在线' }
+  return ($st + '，' + $g)
 }
 # 1) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
 $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
@@ -267,15 +296,14 @@ if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.
 $tunP = $null
 foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
 if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-$cur = Get-TetherState
-if ($cur -eq 'Off' -or $cur -eq 'Unknown') { throw '移动热点未处于运行状态（tethering 未启动）' }
-# 2) 重启热点：先停（状态轮询确认；超时确认不了也继续，绝不因此中止 ——
+if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
+# 2) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
 #    半途而废会把热点丢在关闭状态）。
 foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
-$null = Wait-TetherState 'Off' 16
-# 3) 绑定 TUN 重新启动：以状态轮询为准（最多 20s）。
+$null = Wait-Heat 'Down' 16
+# 3) 绑定 TUN 重新启动：双层判定（最多 20s）。
 try { $null = $tm::CreateFromConnectionProfile($tunP).StartTetheringAsync() } catch {}
-if (-not (Wait-TetherState 'On' 40)) {
+if (-not (Wait-Heat 'Up' 40)) {
   $recovered = $false
   if ($orig -ne '') {
     foreach ($p in $profiles) {
@@ -284,9 +312,9 @@ if (-not (Wait-TetherState 'On' 40)) {
         break
       }
     }
-    $recovered = Wait-TetherState 'On' 20
+    $recovered = Wait-Heat 'Up' 20
   }
-  $final = Get-TetherState
+  $final = Get-HeatLabel
   if ($recovered) { throw ('启动热点未成功（最终状态: ' + $final + '）；已恢复原上游') }
   throw ('启动热点未成功（最终状态: ' + $final + '）；未能恢复原上游，请手动重开热点')
 }
@@ -297,7 +325,8 @@ ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
 // BuildWinRTRestoreScript 构造 winrt 路径的还原：停掉绑在 TUN 上的
 // tethering，再用切换前记录的上游连接配置重新拉起热点。
 // 输出 {restarted, reason}；reason 为 not-running 表示热点本就关闭（不算警告）。
-// 与切换脚本同理：成败只看 TetheringState 轮询，不读异步 op 的 .Status。
+// 与切换脚本同理：双层判定（TetheringState 优先，读空退回网关 IP 探测），
+// 不读异步 op 的 .Status/GetResults。
 func BuildWinRTRestoreScript(originalProfile string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
@@ -306,25 +335,46 @@ $ErrorActionPreference='Stop'
 $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
 $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
 $profiles=@($ni::GetConnectionProfiles())
-function Get-TetherState {
+$gateway = ` + psQuote(DefaultHotspotGateway) + `
+function Get-HeatState {
+  $found = ''
   foreach ($p in $profiles) {
-    try { return [string]$tm::CreateFromConnectionProfile($p).TetheringState } catch {}
+    try {
+      $st = [string]$tm::CreateFromConnectionProfile($p).TetheringState
+      if (-not [string]::IsNullOrWhiteSpace($st)) {
+        if ($st -eq 'On') { return 'On' }
+        if ($found -eq '') { $found = $st }
+      }
+    } catch {}
   }
-  return 'Unknown'
+  return $found
 }
-function Wait-TetherState([string]$want, [int]$ticks) {
+function Test-HeatUp {
+  $st = Get-HeatState
+  if ($st -ne '') { return ($st -eq 'On') }
+  $a = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $gateway } | Select-Object -First 1
+  return ($null -ne $a)
+}
+function Test-HeatDown {
+  $st = Get-HeatState
+  if ($st -ne '') { return ($st -eq 'Off') }
+  return (-not (Test-HeatUp))
+}
+function Wait-Heat([string]$want, [int]$ticks) {
   for ($i = 0; $i -lt $ticks; $i++) {
-    if ((Get-TetherState) -eq $want) { return $true }
+    $ok = $false
+    if ($want -eq 'Up') { $ok = Test-HeatUp } else { $ok = Test-HeatDown }
+    if ($ok) { return $true }
     Start-Sleep -Milliseconds 500
   }
   return $false
 }
 $restarted = $false
 $reason = ''
-# Unknown 也按在跑处理：已经绑在 TUN 上的热点必须尝试解开，宁可多花几秒。
-if ((Get-TetherState) -eq 'Off') { $reason = 'not-running' } else {
+# 绑在 TUN 上的热点必须尝试解开：判定失败（两层都读不到）时也按在跑处理。
+if (-not (Test-HeatUp)) { $reason = 'not-running' } else {
   foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
-  $null = Wait-TetherState 'Off' 16
+  $null = Wait-Heat 'Down' 16
   $orig = `)
 	b.WriteString(psQuote(originalProfile))
 	b.WriteString(`
@@ -333,7 +383,7 @@ if ((Get-TetherState) -eq 'Off') { $reason = 'not-running' } else {
     foreach ($p in $profiles) { if ($p.ProfileName -eq $orig) { $target = $p; break } }
     if ($null -eq $target) { $reason = 'original-profile-missing' } else {
       try { $null = $tm::CreateFromConnectionProfile($target).StartTetheringAsync() } catch {}
-      if (Wait-TetherState 'On' 30) { $restarted = $true } else { $reason = 'start-failed (final: ' + (Get-TetherState) + ')' }
+      if (Wait-Heat 'Up' 30) { $restarted = $true } else { $reason = 'start-failed (final: ' + (Get-HeatState) + '/' + (Test-HeatUp) + ')' }
     }
   }
 }

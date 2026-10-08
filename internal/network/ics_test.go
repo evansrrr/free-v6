@@ -169,10 +169,15 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	if strings.Contains(script, "+ TunDeviceName +") || strings.Contains(script, "psQuote") {
 		t.Fatalf("Go expression leaked into PowerShell script:\n%s", script)
 	}
-	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile", "TetheringState"} {
+	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile", "TetheringState", "Wait-Heat", DefaultHotspotGateway, "IsNullOrWhiteSpace"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("winrt switch missing %q", expected)
 		}
+	}
+	// 双层判定：状态投影读空的机器必须能退回网关 IP 探测（Get-TetherState
+	// 时代第一个空读数就返回，三段轮询全部超时仍报假失败）。
+	if !strings.Contains(script, "Test-HeatUp") || !strings.Contains(script, "Get-NetIPAddress") {
+		t.Fatal("switch script must fall back to gateway IP probing when state reads are empty")
 	}
 	if strings.Contains(script, "Wait-Op") || strings.Contains(script, "op2.Status") || strings.Contains(script, ".GetResults") {
 		t.Fatal("switch script must judge by TetheringState polling, never by async op .Status/GetResults")
@@ -197,7 +202,7 @@ func TestBuildWinRTRestoreScript(t *testing.T) {
 	if !strings.Contains(script, "'WLAN'") {
 		t.Fatalf("restore must embed original profile:\n%s", script)
 	}
-	for _, expected := range []string{"not-running", "restarted", "StartTetheringAsync", "TetheringState"} {
+	for _, expected := range []string{"not-running", "restarted", "StartTetheringAsync", "TetheringState", "Wait-Heat", DefaultHotspotGateway, "IsNullOrWhiteSpace", "Get-NetIPAddress"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("winrt restore missing %q", expected)
 		}
