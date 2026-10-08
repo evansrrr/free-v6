@@ -158,7 +158,9 @@ func TestBuildICSRestoreScript(t *testing.T) {
 }
 
 // WinRT 切换脚本：改绑目标必须是 TunDeviceName 字面量（回归：字符串拼接
-// 曾把 Go 表达式原样写进 PowerShell）。
+// 曾把 Go 表达式原样写进 PowerShell）；成败以 TetheringState 轮询为准，
+// 绝不读异步 op 的 .Status/GetResults（部分机器上该属性为空，曾把进行中
+// 的启动误判为“启动热点未完成”的假失败）；定位失败必须发生在停止之前。
 func TestBuildWinRTSwitchScript(t *testing.T) {
 	script := BuildWinRTSwitchScript()
 	if !strings.Contains(script, "'"+TunDeviceName+"'") {
@@ -167,23 +169,41 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	if strings.Contains(script, "+ TunDeviceName +") || strings.Contains(script, "psQuote") {
 		t.Fatalf("Go expression leaked into PowerShell script:\n%s", script)
 	}
-	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile"} {
+	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile", "TetheringState"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("winrt switch missing %q", expected)
 		}
 	}
+	if strings.Contains(script, "Wait-Op") || strings.Contains(script, "op2.Status") || strings.Contains(script, ".GetResults") {
+		t.Fatal("switch script must judge by TetheringState polling, never by async op .Status/GetResults")
+	}
+	// 先定位 tunP（含 not-found 抛错），再发生任何停止动作：否则热点
+	// 停了之后才发现目标不存在，就没人把它拉起来。
+	locate := strings.Index(script, "connection profile not found")
+	stop := strings.Index(script, "StopTetheringAsync")
+	if locate < 0 || stop < 0 || locate > stop {
+		t.Fatalf("tunP lookup (idx %d) must precede any stop (idx %d)", locate, stop)
+	}
+	// 回滚失败必须把结果写进错误消息，便于区分“已恢复/未恢复”
+	if !strings.Contains(script, "已恢复原上游") || !strings.Contains(script, "未能恢复原上游") {
+		t.Fatal("switch failure must report rollback outcome in the message")
+	}
 }
 
-// WinRT 还原脚本：回绑到记录的原上游；输出 restarted/reason。
+// WinRT 还原脚本：回绑到记录的原上游；输出 restarted/reason；同样只看
+// 真实状态轮询，不读异步 op 属性。
 func TestBuildWinRTRestoreScript(t *testing.T) {
 	script := BuildWinRTRestoreScript("WLAN")
 	if !strings.Contains(script, "'WLAN'") {
 		t.Fatalf("restore must embed original profile:\n%s", script)
 	}
-	for _, expected := range []string{"not-running", "restarted", "StartTetheringAsync"} {
+	for _, expected := range []string{"not-running", "restarted", "StartTetheringAsync", "TetheringState"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("winrt restore missing %q", expected)
 		}
+	}
+	if strings.Contains(script, "Wait-Op") || strings.Contains(script, "op2.Status") || strings.Contains(script, ".GetResults") {
+		t.Fatal("restore script must judge by TetheringState polling, never by async op .Status/GetResults")
 	}
 	// 单引号注入防护
 	script = BuildWinRTRestoreScript("it's wlan")

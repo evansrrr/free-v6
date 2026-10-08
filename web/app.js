@@ -247,6 +247,9 @@ async function startProxyFlow(auto = false) {
 
     let started;
     try {
+      // 热点共享开启时，WinRT 切换会重启移动热点（热点短暂断开是预期行为），
+      // 在请求发出前先说明，用户看到热点掉线时不会误以为是故障。
+      if (state.hotspotShare) addLog('热点共享：正在切换，移动热点将短暂重启');
       started = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
     } catch (e) {
       return { ok: false, reason: 'api', message: e.message };
@@ -267,7 +270,8 @@ function reportHotspotResult(hs, auto = false) {
   if (!hs) return;
   if (hs.applied) {
     state.hotspotActive = true;
-    addLog(hs.path === 'winrt' ? '已将移动热点切换到代理出口（WinRT）' : '已将移动热点切换到代理出口');
+    // restarted（WinRT 路径）会重启热点，明确记入日志；经典路径只切共享角色。
+    addLog(hs.restarted ? '已重启移动热点，共享已生效' : '已将移动热点切换到代理出口');
     return;
   }
   if (hs.reason === 'not-running') {

@@ -497,7 +497,9 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 		_ = network.RestoreICSSharing(switchCtx, snapshot)
 		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
 	}
-	return map[string]any{"applied": true, "path": meta.Path}
+	// restarted=true 表示本路径重启过移动热点（WinRT 路径必然 stop→start），
+	// 前端据此把“热点短暂断开”作为预期事件记入日志而不是当成故障。
+	return map[string]any{"applied": true, "path": meta.Path, "restarted": meta.Path == "winrt"}
 }
 
 // switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
