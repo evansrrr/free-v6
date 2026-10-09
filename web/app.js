@@ -14,6 +14,8 @@ const state = {
   hotspotShare: false,
   // /status 下报的热点共享运行态（下降沿弹“下次生效”提示用）
   hotspotActive: false,
+  // FAB 忙碌指示：'starting'|'stopping' 期间 setRunning 不覆盖按钮文字
+  transition: null,
   // Update
   updateInfo: null,
   updatePhase: null,
@@ -175,7 +177,8 @@ function setRunning(running) {
   const icon = $('#toggleIcon');
 
   if (icon) icon.innerHTML = running ? ICON_STOP : ICON_PLAY;
-  if (fab) fab.label = running ? '停止免流' : '启动免流';
+  // 启停进行中（启动中…/停止中…）不让 3s 轮询抢回按钮文字
+  if (fab && !state.transition) fab.label = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
 }
 
@@ -224,7 +227,7 @@ async function startProxyFlow(auto = false) {
     // IPv6 gate: only works on campus IPv6. Developer mode skips it.
     if (!state.devMode) {
       if (!auto) {
-        $('#proxyToggle').label = '检测中…';
+        $('#proxyToggle').label = '启动中…';
         addLog('检测本机 IPv6…');
       }
       let ip = '';
@@ -1395,6 +1398,9 @@ function wireEvents() {
     const fab = $('#proxyToggle');
     fab.style.pointerEvents = 'none';
     fab.style.opacity = '0.6';
+    // 忙碌指示：进行中展示 启动中…/停止中…，结束（成功/失败）后按最终状态恢复
+    state.transition = state.proxyRunning ? 'stopping' : 'starting';
+    fab.label = state.transition === 'stopping' ? '停止中…' : '启动中…';
     try {
       if (state.proxyRunning) {
         await api('/proxy/stop', { method: 'POST' });
@@ -1413,9 +1419,11 @@ function wireEvents() {
     } catch (e) {
       addLog(`操作失败: ${e.message}`, true);
     } finally {
+      state.transition = null;
       fab.style.pointerEvents = '';
       fab.style.opacity = '';
-      if (!state.proxyRunning) fab.label = '启动免流';
+      // 启动失败→启动免流；停止失败→停止免流
+      fab.label = state.proxyRunning ? '停止免流' : '启动免流';
     }
   });
 
