@@ -180,6 +180,9 @@ function setRunning(running) {
   // 启停进行中（启动中…/停止中…）不让 3s 轮询抢回按钮文字
   if (fab && !state.transition) fab.label = running ? '停止免流' : '启动免流';
   fab?.classList.toggle('running', running);
+  // 停止后 mihomo 已退出，接入点列表再无数据来源 → 立即清空回空态
+  //（覆盖 FAB 停止、停止并退出、轮询检测到已停止、helper 断开四条路径）
+  if (!running) clearProxyList();
 }
 
 function updateConnectionChip(online) {
@@ -1556,8 +1559,21 @@ function wireEvents() {
 
 const AUTO_SELECT_GROUP = '♻️ 自动选择';
 
+// 免流停止后清空接入点列表与延迟测试结果，接入点页回到空态。
+// setRunning(false) 统一触发：FAB 停止 / 停止并退出 / 轮询检测到已停止 /
+// helper 断开。函数声明提升，setRunning 早于本节定义也可安全调用。
+function clearProxyList() {
+  state.proxyGroup = null;
+  state.proxyDelays = {};
+  state.delaysReady = false;
+  state.testingDelay = false;
+  resetFab(); // 测试 FAB 若正停在「测试中…」一并复位
+  renderNodeGrid();
+}
+
 async function fetchProxies() {
-  if (!state.helperOnline) return;
+  // 只在免流运行中拉取：停止后 :9090 已死，僵尸实例/时序竞态不得回填列表
+  if (!state.helperOnline || !state.proxyRunning) return;
   try {
     const resp = await fetch('http://127.0.0.1:9090/proxies');
     if (!resp.ok) return;
@@ -1651,7 +1667,13 @@ async function runDelayTest() {
   renderNodeGrid();
 
   const group = state.proxyGroup;
-  if (!group) { resetFab(); return; }
+  if (!group) {
+    // 停止后列表已清空：无节点可测，直接复位——testingDelay 必须拨回，
+    // 否则卡在 true 会让下次启动的自动延迟测试被 if (state.testingDelay) 跳过
+    state.testingDelay = false;
+    resetFab();
+    return;
+  }
 
   const nodes = group.all;
   let completed = 0;
@@ -1659,19 +1681,21 @@ async function runDelayTest() {
   const queue = [...nodes];
 
   async function testNext() {
-    while (queue.length) {
+    // 停止免流会置 testingDelay=false 清空列表：在飞测试立即退出，
+    // 不再往已清空的状态里写过期延迟值、也不再改 FAB 文案
+    while (queue.length && state.testingDelay) {
       const name = queue.shift();
+      let delay = 5000;
       try {
         const resp = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=http://www.gstatic.com/generate_204`);
         if (resp.ok) {
           const data = await resp.json();
-          state.proxyDelays[name] = data.delay || 5000;
-        } else {
-          state.proxyDelays[name] = 5000;
+          delay = data.delay || 5000;
         }
-      } catch (_) {
-        state.proxyDelays[name] = 5000;
-      }
+      } catch (_) { /* 保持 5000 */ }
+      // await 期间免流可能已停止 → 迟到结果整条丢弃，不写已清空的状态
+      if (!state.testingDelay) return;
+      state.proxyDelays[name] = delay;
       completed++;
       if (fab) fab.label = `测试中 ${completed}/${nodes.length}`;
       renderNodeGrid();
@@ -1683,6 +1707,8 @@ async function runDelayTest() {
     workers.push(testNext());
   }
   await Promise.all(workers);
+  // 免流已停止（clearProxyList 把 testingDelay 置 false）→ 收尾不再写入
+  if (!state.testingDelay) return;
 
   state.testingDelay = false;
   state.delaysReady = true;
