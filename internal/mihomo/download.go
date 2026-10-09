@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-const mihomoDownloadURL = "https://api.gitproxy.dev/github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v3-v1.19.31.zip"
+const mihomoDownloadURL = "https://gh-proxy.com/https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v3-v1.19.31.zip"
 const maxRuntimeDownload = 150 << 20
 
 type DownloadResult struct {

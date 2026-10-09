@@ -186,7 +186,7 @@ func TestEnsureGeodataHonorsContext(t *testing.T) {
 
 // 挂死的镜像只烧掉自己的超时份额：后备镜像必须仍然拿到机会，总耗时接近
 // 单镜像超时而不是总预算 —— 回归线上故障「已尝试 1 个镜像: context
-// deadline exceeded」（gitproxy 挂死吃光共享预算，后备镜像没跑）。
+// deadline exceeded」（首个镜像挂死吃光共享预算，后备镜像没跑）。
 func TestEnsureGeodataHungMirrorDoesNotStarveFallback(t *testing.T) {
 	originalTimeout := geodataPerMirrorTimeout
 	geodataPerMirrorTimeout = 300 * time.Millisecond

@@ -631,7 +631,7 @@ function guideForced() {
 
 const UPDATE_OWNER_REPO = 'evansrrr/free-v6';
 const SKIP_VERSION_KEY = 'freev6-skip-version';
-const GITHUB_PROXY = 'https://api.gitproxy.dev/';
+const GITHUB_PROXY = 'https://gh-proxy.com/';
 
 // 大陆访问加速：请求前部拼接代理前缀；已是代理地址则不重复拼接。
 function proxiedGitHub(url) {

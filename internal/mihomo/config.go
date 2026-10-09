@@ -76,9 +76,9 @@ find-process-mode: 'always'
 # EnsureGeodata 镜像链一致）；正常情况下启动前文件已预置，这里只在
 # 文件被删除/geo-auto-update 开启时生效。
 geox-url:
-  geoip: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-  geosite: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-  mmdb: "https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
+  geoip: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+  geosite: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
 
 profile:
   store-selected: true

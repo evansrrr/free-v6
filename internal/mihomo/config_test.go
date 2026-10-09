@@ -38,7 +38,7 @@ func TestRenderMasqueConfig(t *testing.T) {
 		t.Fatal("renderer must expose only the loopback mihomo controller")
 	}
 	// 地理数据下载地址必须走大陆可达镜像（新机器缺 GeoSite.dat 时的兜底）
-	if !strings.Contains(config, "geox-url:") || !strings.Contains(config, "api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat") {
+	if !strings.Contains(config, "geox-url:") || !strings.Contains(config, "gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat") {
 		t.Fatal("config must point geox-url at the reachable mirror")
 	}
 	if strings.Contains(config, "GEOIP,CN") || strings.Contains(config, "🎯 全球直连") {

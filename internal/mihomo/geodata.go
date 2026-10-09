@@ -20,12 +20,12 @@ import (
 // 报出可读错误，而不是让 15s 就绪超时把真相盖住。
 const GeositeFileName = "GeoSite.dat"
 
-// geositeDownloadURLs 按优先级排列：gitproxy 是本项目核心/更新下载
-// 已验证的大陆加速通道；testingcf.jsdelivr 是 mihomo 官方文档给出的
+// geositeDownloadURLs 按优先级排列：gh-proxy 是本项目核心/更新下载
+// 使用的大陆加速通道；testingcf.jsdelivr 是 mihomo 官方文档给出的
 // 镜像；github 直连兜底（校园网 IPv6 国际可达时可用）。
 // 变量形式便于测试注入。
 var geositeDownloadURLs = []string{
-	"https://api.gitproxy.dev/github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+	"https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
 	"https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
 	"https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
 }
@@ -40,7 +40,7 @@ const (
 )
 
 // geodataPerMirrorTimeout 是单个镜像的独立超时（变量便于测试压缩时长）。
-// 故障案例：gitproxy 在某机器上完全挂住，共享的 60s 预算被第一个镜像
+// 故障案例：某镜像在部分机器上完全挂住，共享的 60s 预算被第一个镜像
 // 吃光，jsdelivr/github 兑底根本没机会跑（"已尝试 1 个镜像"）。
 var geodataPerMirrorTimeout = 20 * time.Second
 

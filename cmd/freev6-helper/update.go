@@ -25,7 +25,7 @@ import (
 // the installer.
 //
 // The local API is CORS-open, so this endpoint must not become an
-// arbitrary-file fetcher: only https GitHub release hosts plus the gitproxy
+// arbitrary-file fetcher: only https GitHub release hosts plus the gh-proxy
 // acceleration mirror are accepted (loopback http is allowed for tests
 // only).
 
@@ -33,7 +33,7 @@ var updateAllowedHosts = []string{
 	"github.com",
 	"objects.githubusercontent.com",
 	"release-assets.githubusercontent.com",
-	"api.gitproxy.dev", // 大陆访问加速代理（直通 github release 资产）
+	"gh-proxy.com", // 大陆访问加速代理（直通 github release 资产）
 }
 
 // updateProgress is written by the download goroutine and read by the
@@ -96,8 +96,8 @@ func validateUpdateURL(rawURL string, allowed []string) error {
 
 // downloadUpdateFile streams rawURL into dest and verifies sha256Hex.
 // Redirects are followed by the client (github.com release assets redirect
-// to GitHub's own CDN — trusted once github.com was validated; the gitproxy
-// mirror redirects to its own CDN likewise).
+// to GitHub's own CDN — trusted once github.com was validated; the gh-proxy
+// mirror redirects to its upstream CDN likewise).
 func downloadUpdateFile(client *http.Client, rawURL, sha256Hex, dest string, allowed []string, prog *updateProgress) (int64, error) {
 	if err := validateUpdateURL(rawURL, allowed); err != nil {
 		return 0, err
@@ -219,12 +219,12 @@ func (h *helper) updateProgress(writer http.ResponseWriter, request *http.Reques
 // Every release publishes a version.json asset; the stable URL
 // releases/latest/download/version.json redirects to the newest STABLE
 // release only (prereleases excluded) and is a web/CDN endpoint, so no API
-// quota is involved. The helper fetches it proxy-first (gitproxy mirror)
+// quota is involved. The helper fetches it proxy-first (gh-proxy mirror)
 // with a direct fallback and a cache-buster, so the frontend never talks to
 // GitHub directly: no CORS exposure, no shared-pool403s.
 
 const updateRepoSlug = "evansrrr/free-v6"
-const updateProxyPrefix = "https://api.gitproxy.dev/"
+const updateProxyPrefix = "https://gh-proxy.com/"
 
 // updateLatestURLs is a var so tests can point it at a local server.
 var updateLatestURLs = func() []string {
