@@ -1,0 +1,41 @@
+name: Deploy docs
+
+# Rebuild + redeploy the VitePress docs site (its own repo, imported into
+# Vercel) whenever a release is published, so the download buttons always
+# point at the newest installer. The docs build fetches
+# releases/latest/download/version.json itself at build time.
+#
+# One-time setup:
+#   1. Vercel -> docs project -> Settings -> Git -> Deploy Hooks
+#      (branch: main) -> create the hook and copy its URL
+#   2. This repo -> Settings -> Secrets and variables -> Actions
+#      -> new secret `DOCS_DEPLOY_HOOK` containing that URL
+#
+# Events:
+#   * draft releases do not fire `published` - publishing the draft does
+#   * pre-releases are skipped: `releases/latest` (and its version.json)
+#     only moves on stable releases, so rebuilding would be a no-op
+#   * `workflow_dispatch` allows triggering a deploy manually for testing
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    steps:
+      - name: Trigger Vercel deploy hook
+        env:
+          DEPLOY_HOOK: ${{ secrets.DOCS_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "::error::DOCS_DEPLOY_HOOK is not set - create a Vercel Deploy Hook for the docs project and store it as a repository secret"
+            exit 1
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK"
