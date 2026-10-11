@@ -9,7 +9,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -80,20 +79,6 @@ fn window_show(app: tauri::AppHandle) {
 #[tauri::command]
 fn app_quit(app: tauri::AppHandle) {
     app.exit(0);
-}
-
-// 关于页「使用说明」：open README.md shipped next to the exe via
-// bundle.resources ("../README.md" -> "README.md" under resource_dir). 
-#[tauri::command]
-fn open_readme(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-    let file = dir.join("README.md");
-    if !file.is_file() {
-        return Err(format!("README.md 不存在: {}", file.display()));
-    }
-    app.opener()
-        .open_path(file.to_string_lossy().into_owned(), None::<&str>)
-        .map_err(|e| e.to_string())
 }
 
 // In-app update: spawn the downloaded NSIS package detached (/S = silent,
@@ -408,8 +393,7 @@ fn main() {
             window_show,
             app_quit,
             hotkey_set,
-            update_apply,
-            open_readme
+            update_apply
         ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")

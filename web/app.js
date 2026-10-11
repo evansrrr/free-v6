@@ -1848,12 +1848,9 @@ function wireSettingsEvents() {
   $('#feedbackItem')?.addEventListener('click', () => {
     openExternal('https://github.com/evansrrr/free-v6/issues');
   });
-  // 使用说明: README.md ships with the installer (bundle.resources maps
-  // ../README.md -> README.md under resource_dir); the host command resolves
-  // the install dir. A standalone browser falls back to the repository page.
-  $('#readmeItem')?.addEventListener('click', async () => {
-    if (await invokeHost('open_readme')) return;
-    window.open('https://github.com/evansrrr/free-v6#readme', '_blank', 'noopener,noreferrer');
+  // 使用说明: 直接在系统浏览器打开使用说明页面
+  $('#readmeItem')?.addEventListener('click', () => {
+    openExternal('https://freev6.cc.cd');
   });
 
   // 软件版本行：发现新版时显示“有新版本”角标，点击重新打开更新弹窗
