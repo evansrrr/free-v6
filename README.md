@@ -3,7 +3,7 @@
 <h2> FreeV6 </h2>
 <p> 教育网通用 IPv6 免流客户端 </p>
 
-[实现原理](https://ich.cc.cd/2026/05/11/mianliu/) | [Github](https://github.com/evansrrr/free-v6) | [用户协议](docs/agreement.md) | [隐私政策](docs/privacy.md)
+[官网](https://freev6.cc.cd) | [实现原理](https://ich.cc.cd/2026/05/11/mianliu/) | [Github](https://github.com/evansrrr/free-v6) | [用户协议](docs/agreement.md) | [隐私政策](docs/privacy.md)
 
 <br />
 
@@ -19,7 +19,7 @@
 
 <br />
 
-## 说明
+## 简要说明
 
 支持以下桌面平台：
 
@@ -37,32 +37,7 @@
 
 bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issues)，再点点star喵
 
-任何免流方式都是功能大于体验
-
-## FAQ
-
-1. **我的校园网可以实现免流吗？**
-
-   - 已接入教育网 IPv4 的单位，可按 IPv4 带宽 1:1 免费获得 IPv6 带宽，注意由于**高校校园网计费策略不同，务必确认您所在高校校园网可提供有效 IPv6 地址并支持 IPv6 流量免计费**。免流原理总结参考 [ich.cc.cd](https://ich.cc.cd/2026/05/11/mianliu/)
-
-2. 启动免流失败
-
-   - 确认已下载运行核心（`设置 → 核心状态`），未下载可遵循引导完成下载安装
-   - 确认本机 IPv6 正常（[testipv6](https://www.testipv6.cn/)），并退出其他代理工具
-   - 必要时可以点击“重新注册”重试
-   - 原则上本软件免流功能只对“第二代中国教育和科研计算机网”用户提供，请连接校园网使用
-
-3. 启动免流后某些网站和软件打不开（如校内资源）
-
-   - 请在 `设置 → 绕过校园网/白名单` 中添加校内网段或白名单域名，并重新启动免流
-
-4. 软件没有响应 / 无法启动
-
-   - 本地接口固定在端口 `13335`，若被其它软件或系统进程占用则会导致启动失败
-
-## 开发
-
-需要 Go 1.25+、Rust stable 和平台对应的 Tauri 系统依赖。Windows 还需要 Visual Studio C++ Build Tools。
+详细文档请访问 [FreeV6 官网](https://freev6.cc.cd)
 
 ## TODO
 
