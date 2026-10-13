@@ -1,5 +1,3 @@
-// Registers every @material/web component used by the freev6 UI.
-// Loaded as a module from index.html after the import map.
 import '@material/web/button/filled-button.js';
 import '@material/web/button/filled-tonal-button.js';
 import '@material/web/button/outlined-button.js';

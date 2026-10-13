@@ -1,18 +1,13 @@
 name: Release
 
-# Push a version tag (v*) → build the Windows setup.exe exactly like a local
-# `cargo tauri build` (Go helper via beforeBuildCommand, tauri-cli pinned to
-# the developer's version) and upload it to a **draft** GitHub Release.
+# Push a version tag → build the Windows setup.exe
 #
 # Transparency rules requested for releases:
-#   * only this workflow creates the release and uploads its assets — assets
-#     are never attached by hand;
-#   * the release body links to this exact workflow run (full build log) and
-#     carries the asset's SHA256, so anyone can correlate asset ↔ build;
+#   * only this workflow creates the release and uploads its assets;
+#   * the release body links to this exact workflow run and carries the asset's SHA256;
 #   * a build-provenance attestation is generated for every asset, so the
 #     asset can be cryptographically verified against this workflow
-#     (`gh attestation verify <file> -o evansrrr`). Requires a PUBLIC
-#     repository — attestations fail on private ones.
+#     (`gh attestation verify <file> -o evansrrr`). Requires a PUBLIC repository.
 #   * tags containing `-beta` or `-alpha` are marked pre-release; everything
 #     else is a normal release. Either way it starts as a **draft** for manual
 #     review before publishing.
@@ -21,10 +16,6 @@ name: Release
 # `## [x.y.z]` section for the tag (exact tag version first, e.g.
 # `0.3.0-beta.1`, then the base version `0.3.0`); a missing section fails the
 # build so the changelog can never lag behind a release.
-#
-# internal/mihomo/blacklist/blacklist.txt is tracked in git, so the embedded
-# default blacklist needs no secret — `go build` picks it straight from the
-# checkout.
 
 on:
   push:
@@ -33,7 +24,7 @@ on:
 
 permissions:
   contents: write        # create the draft release + upload assets
-  id-token: write        # provenance attestation (public repos)
+  id-token: write        # provenance attestation
   attestations: write
 
 concurrency:
@@ -41,7 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # keep in sync with the developer's `cargo tauri --version`
+  # keep in sync with the local env
   TAURI_CLI_VERSION: '2.11.4'
 
 jobs:
@@ -56,8 +47,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Caches registry + target + ~/.cargo/bin (so the pinned tauri-cli
-      # installed on the first run is restored afterwards).
+      # Caches registry + target + ~/.cargo/bin
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -128,9 +118,6 @@ jobs:
           $body | Out-File -FilePath release-notes.md -Encoding utf8
           Write-Host "release notes extracted for $version"
 
-          # version.json：更新检测读这个稳定地址
-          # （releases/latest/download/version.json，随 latest 重定向、只命中
-          # 正式版），完全绕开 api.github.com 的共享 API 配额。
           $relInfo = [ordered]@{
             version  = $version
             tag      = $tag

@@ -1,9 +1,7 @@
 name: Deploy docs
 
-# Rebuild + redeploy the VitePress docs site (its own repo, imported into
-# Vercel) whenever a release is published, so the download buttons always
-# point at the newest installer. The docs build fetches
-# releases/latest/download/version.json itself at build time.
+# Rebuild + redeploy the VitePress docs site whenever a release is published.
+# The docs build fetches releases/latest/download/version.json itself at build time.
 #
 # One-time setup:
 #   1. Vercel -> docs project -> Settings -> Git -> Deploy Hooks
@@ -13,8 +11,7 @@ name: Deploy docs
 #
 # Events:
 #   * draft releases do not fire `published` - publishing the draft does
-#   * pre-releases are skipped: `releases/latest` (and its version.json)
-#     only moves on stable releases, so rebuilding would be a no-op
+#   * pre-releases are skipped
 #   * `workflow_dispatch` allows triggering a deploy manually for testing
 
 on:

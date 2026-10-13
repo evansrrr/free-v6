@@ -1,11 +1,5 @@
-// Command ensure-geodata 在 tauri 构建前确保仓库根目录有有效的 GeoSite.dat，
-// 供 tauri.conf.json 的 bundle.resources 把它带进安装包 —— 用户首启时
-// EnsureGeodata 直接从安装根目录抄副本，零网络、零镜像依赖。
-//
-// 顺序：已有有效文件 → 抄 state/GeoSite.dat（开发机自带）→ 走镜像下载。
-// 任一步成功即可；全失败则以非零退出码中止构建（错误信息可读）。
-//
-// 挂接：beforeBuildCommand / beforeDevCommand 的 `go run ./cmd/ensure-geodata`。
+// 在 tauri 构建前确保仓库根目录有 GeoSite.dat，它会被打包进安装包，首次启动直接使用
+// fallback 从镜像下载，全失败则以非零 exit code 中止构建
 package main
 
 import (
@@ -32,9 +26,9 @@ func run() error {
 	}
 	target := filepath.Join(dir, mihomo.GeositeFileName)
 	if mihomo.GeodataValid(target) {
-		return nil // 已有有效文件（含上一次构建留下的），不动
+		return nil // 已有文件
 	}
-	// 开发机：仓库里 state/ 有现成的有效副本，直接抄，不走网络。
+	// 开发机 state/ 有现成副本
 	stateCopy := filepath.Join(dir, "state", mihomo.GeositeFileName)
 	if mihomo.GeodataValid(stateCopy) {
 		if err := copyFile(stateCopy, target); err != nil {

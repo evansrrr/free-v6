@@ -1,9 +1,9 @@
-﻿/* freev6 — Modern Tool SaaS theme (dark default, light + system) */
+﻿/* freev6 — Modern Tool SaaS theme */
 
-/* ── Design Tokens ────────────────────────────────────────────── */
+/* ── Design Tokens ── */
 
 :root {
-  /* Dark theme (default) */
+  /* Dark theme */
   --md-primary: #7eaaff;
   --md-on-primary: #001d3a;
   --md-primary-container: #1a3a6b;
@@ -99,7 +99,7 @@
   --md-ref-typeface-brand: 'Manrope', system-ui, sans-serif;
 }
 
-/* ── Light theme tokens ───────────────────────────────────────── */
+/* ── Light theme tokens ── */
 
 [data-theme="light"] {
   color-scheme: light;
@@ -138,7 +138,7 @@
   --shadow-hint: 0 8px 24px rgba(0,0,0,.12);
 }
 
-/* ── System preference auto-switch ────────────────────────────── */
+/* ── System preference auto-switch ── */
 
 @media (prefers-color-scheme: light) {
   [data-theme="system"] {
@@ -179,7 +179,7 @@
   }
 }
 
-/* ── Reset ────────────────────────────────────────────────────── */
+/* ── Reset ── */
 
 *, *::before, *::after { box-sizing: border-box; }
 /* Zero margin/padding everywhere EXCEPT md-* hosts: declarations from the
@@ -213,11 +213,11 @@ a { color: var(--md-primary); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: var(--md-outline-variant); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--md-outline); }
 
-/* ── App Shell ────────────────────────────────────────────────── */
+/* ── App Shell ── */
 
 .app-shell { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
-/* ── Navigation Rail ──────────────────────────────────────────── */
+/* ── Navigation Rail ── */
 
 .rail {
   width: var(--nav-width);
@@ -276,7 +276,7 @@ a { color: var(--md-primary); text-decoration: none; }
 /* stretch + 8px insets so the log pill matches .nav-list item width exactly */
 .bottom-item { margin: auto 8px 0; align-self: stretch; }
 
-/* ── Main Content ─────────────────────────────────────────────── */
+/* ── Main Content ── */
 
 .main-content {
   flex: 1;
@@ -285,7 +285,7 @@ a { color: var(--md-primary); text-decoration: none; }
   padding: 20px 24px 48px;
 }
 
-/* ── Custom Title Bar ─────────────────────────────────────── */
+/* ── Custom Title Bar ── */
 
 .titlebar {
   display: flex;
@@ -359,7 +359,7 @@ md-icon-button > md-icon {
   color: inherit;
 }
 
-/* ── View Transitions ─────────────────────────────────────────── */
+/* ── View Transitions ── */
 
 .view {
   display: none;
@@ -371,7 +371,7 @@ md-icon-button > md-icon {
 @keyframes view-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes view-exit { from { opacity: 1; } to { opacity: 0; } }
 
-/* ── Card ─────────────────────────────────────────────────────── */
+/* ── Card ── */
 
 .card {
   background: var(--md-surface-container);
@@ -420,7 +420,7 @@ md-icon-button > md-icon {
 }
 .card-stats.open .stats-expand { transform: rotate(180deg); }
 
-/* ── Traffic Chart ────────────────────────────────────────────── */
+/* ── Traffic Chart ── */
 
 .traffic-chart-wrap {
   position: relative;
@@ -440,7 +440,7 @@ md-icon-button > md-icon {
 .speed-arrow { --md-icon-size: 14px; }
 .speed-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; color: var(--md-on-surface); min-width: 60px; }
 
-/* ── Stats Ring ───────────────────────────────────────────────── */
+/* ── Stats Ring ── */
 
 .stats-ring-wrap { display: flex; align-items: center; gap: 16px; margin-top: 4px; }
 .stats-ring { width: 72px; height: 72px; flex-shrink: 0; }
@@ -451,7 +451,7 @@ md-icon-button > md-icon {
 .stats-legend-text { font-size: 11px; color: var(--md-on-surface-variant); }
 .stats-legend-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; color: var(--md-on-surface); margin-left: auto; }
 
-/* ── Traffic Hint Card (点击统计卡弹出的详情提示) ─────────────── */
+/* ── Traffic Hint Card ── */
 
 .traffic-hint {
   position: absolute;
@@ -509,7 +509,7 @@ md-icon-button > md-icon {
 .traffic-hint-sum b { font-weight: 700; }
 .traffic-hint md-divider { margin: 10px 0; }
 
-/* ── Toast (轻提醒，自动消失) ─────────────────────────────────── */
+/* ── Toast ── */
 
 .toast {
   position: fixed;
@@ -537,7 +537,7 @@ md-icon-button > md-icon {
 .toast-icon { --md-icon-size: 16px; color: var(--green); }
 .toast-text { line-height: 1.5; }
 
-/* ── Log Drawer ───────────────────────────────────────────────── */
+/* ── Log Drawer ── */
 
 .scrim {
   position: fixed; inset: 32px 0 0; z-index: 90;
@@ -560,7 +560,7 @@ md-icon-button > md-icon {
 }
 .log-drawer.open { transform: translateX(0); }
 
-/* ── Network gate dialog (IPv6 校园网段检测) ────────────────────── */
+/* ── Network gate dialog ── */
 
 .net-dialog-scrim {
   position: fixed; inset: 0; z-index: 120;
@@ -635,7 +635,7 @@ md-icon-button > md-icon {
   --md-circular-progress-active-indicator-color: var(--md-primary);
 }
 
-/* ── First-run guide (欢迎引导) ──────────────────────────────── */
+/* ── First-run guide ── */
 
 .guide-scrim {
   position: fixed; inset: 0; z-index: 140;
@@ -768,7 +768,7 @@ md-icon-button > md-icon {
 .log-msg { color: var(--md-on-surface-variant); word-break: break-all; }
 .log-entry.error .log-msg { color: var(--red); }
 
-/* ── Empty State ──────────────────────────────────────────────── */
+/* ── Empty State ── */
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -779,7 +779,7 @@ md-icon-button > md-icon {
    wrap the message into many lines — span every column instead. */
 .node-grid > .empty-state { grid-column: 1 / -1; }
 
-/* ── Node Grid ────────────────────────────────────────────────── */
+/* ── Node Grid ── */
 
 .node-grid {
   display: grid;
@@ -819,7 +819,7 @@ md-icon-button > md-icon {
   vertical-align: -3px;
 }
 
-/* ── FABs (md-fab, window-anchored) ───────────────────────────── */
+/* ── FABs (md-fab, window-anchored) ── */
 
 [hidden] { display: none !important; }
 
@@ -847,7 +847,7 @@ md-icon-button > md-icon {
   --md-circular-progress-active-indicator-color: currentColor;
 }
 
-/* ── Settings ─────────────────────────────────────────────────── */
+/* ── Settings ── */
 
 .settings-groups { display: flex; flex-direction: column; gap: 12px; }
 .settings-group { background: var(--md-surface-container); border-radius: var(--radius-md); overflow: hidden; }
@@ -913,7 +913,7 @@ md-icon-button > md-icon {
 #runtimePill[hidden], #downloadCore[hidden] { display: none !important; }
 .setting-arrow { --md-icon-size: 18px; color: var(--md-on-surface-variant); }
 
-/* ── CIDR Sub-page ────────────────────────────────────────────── */
+/* ── CIDR Sub-page ── */
 
 .cidr-page { animation: view-enter 250ms var(--ease-decelerate) both; }
 .cidr-page-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
@@ -925,7 +925,7 @@ md-icon-button > md-icon {
 .cidr-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 14px; border-radius: var(--radius-xs); background: var(--md-surface-container-high); font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 500; }
 .cidr-remove { color: var(--red); }
 
-/* ── Responsive ───────────────────────────────────────────────── */
+/* ── Responsive ── */
 
 /* Nav labels stay visible down to 620px, where the rail becomes a bottom
    bar and switches to icon-only (the old 1024px collapse was too eager). */
@@ -952,7 +952,7 @@ md-icon-button > md-icon {
   .setting-item { padding: 10px 12px; }
 }
 
-/* ── OLED 纯黑背景（纯黑背景开关，仅深色主题生效）──────────── */
+/* ── OLED 纯黑背景（纯黑背景开关，仅深色主题生效）── */
 
 [data-theme="dark"][data-oled="1"] {
   --md-surface: #000000;
@@ -992,7 +992,7 @@ md-icon-button > md-icon {
   }
 }
 
-/* ── 色彩切换渐变（主题 / 动态取色 / 纯黑背景） ──────────────── */
+/* ── 色彩切换渐变（主题 / 动态取色 / 纯黑背景） ── */
 /* app.js 的 withColorTransition() 在切换时启动 View Transition：
    新快照在旧快照上方淡入（Chromium 对 root 用 plus-lighter 叠加混合）。
 
