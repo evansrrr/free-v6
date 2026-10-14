@@ -19,6 +19,11 @@ struct HelperState {
     stopping: Arc<AtomicBool>,
 }
 
+// Per-launch bearer token for the helper's loopback API (127.0.0.1:13335).
+// Minted once per app launch, handed to the sidecar via FREEV6_API_TOKEN and
+// to the web UI through the get_api_token command; never persisted to disk.
+struct ApiToken(String);
+
 // Set when the app is exiting for real (tray 退出 → app.exit). Close requests
 // arriving during teardown must not be swallowed by the close-to-tray handler.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -79,6 +84,31 @@ fn window_show(app: tauri::AppHandle) {
 #[tauri::command]
 fn app_quit(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/* ── Local API auth (per-launch bearer token) ────────────────────── */
+
+// RtlGenRandom: one Advapi32 syscall for OS-grade randomness. Raw Win32 FFI
+// per the hotkey block's rationale — no extra crate, Cargo.lock untouched.
+#[link(name = "advapi32")]
+extern "system" {
+    fn SystemFunction036(buffer: *mut u8, length: u32) -> u8;
+}
+
+// 32 random bytes as a 64-char hex string; the value the helper checks on
+// every /api/v1 request. Panics only if the OS RNG itself fails.
+fn generate_api_token() -> String {
+    let mut bytes = [0u8; 32];
+    let ok = unsafe { SystemFunction036(bytes.as_mut_ptr(), bytes.len() as u32) };
+    if ok == 0 {
+        panic!("SystemFunction036 (RtlGenRandom) failed");
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[tauri::command]
+fn get_api_token(state: tauri::State<ApiToken>) -> String {
+    state.0.clone()
 }
 
 // In-app update: spawn the downloaded NSIS package detached (/S = silent,
@@ -322,7 +352,11 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            start_helper(app)?;
+            // Mint the API token BEFORE spawning the sidecar so the helper
+            // and the webview always share the same value from first boot.
+            let api_token = generate_api_token();
+            app.manage(ApiToken(api_token.clone()));
+            start_helper(app, &api_token)?;
             // F6 hotkey must work even when the window never shows (tray-only /
             // 静默启动), so it lives outside the webview: register per the
             // persisted setting before any UI exists.
@@ -392,6 +426,7 @@ fn main() {
             window_start_dragging,
             window_show,
             app_quit,
+            get_api_token,
             hotkey_set,
             update_apply
         ])
@@ -421,7 +456,7 @@ fn main() {
         });
 }
 
-fn start_helper(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::current_exe()?
         .parent()
         .ok_or("freev6 executable has no parent directory")?
@@ -430,6 +465,7 @@ fn start_helper(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> 
         .shell()
         .sidecar("freev6-helper")?
         .env("FREEV6_ROOT", root)
+        .env("FREEV6_API_TOKEN", api_token)
         .spawn()?;
     let stopping = Arc::new(AtomicBool::new(false));
     app.manage(HelperState {
@@ -472,6 +508,17 @@ fn stop_helper(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    // The API token must be 64 hex chars (32 random bytes) and differ across
+    // launches — a fixed or truncated value would defeat per-launch rotation.
+    #[test]
+    fn api_token_is_64_hex_and_unique() {
+        let first = generate_api_token();
+        let second = generate_api_token();
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second, "consecutive tokens must differ");
+    }
 
     // End-to-end over the real Win32 thread: enable → register, WM_HOTKEY →
     // callback, disable → unregister. Uses VK_F24 (0x87) instead of F6 so a
