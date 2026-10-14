@@ -16,6 +16,7 @@ mihomo.yaml
 .agents/
 docs/agent/
 skills-lock.json
+.mimocode
 
 .vscode/
 .idea/
