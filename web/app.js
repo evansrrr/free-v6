@@ -76,7 +76,7 @@ function formatSpeed(bytesPerSec) {
 
 // Per-launch bearer token for the helper API, obtained from the Tauri shell
 // (get_api_token). Outside the webview there is no way to obtain it — the UI
-// then401s and falls back to the existing "helper offline" handling.
+// then 401s and falls back to the existing "helper offline" handling.
 let apiToken = null;
 
 async function loadApiToken() {
