@@ -1,14 +1,23 @@
 ---
 feature: local-api-auth
-status: in-progress
+status: delivered
 updated: 2026-10-15
 branch: feat/local-api-auth
-commits:
+commits: 9a562d3..141ee6e
 ---
 
 # 本地 API 鉴权（per-launch bearer token）
 
 ## Report
+
+**What was built** — freev6-helper 的全部 `/api/v1` 端点现在要求 per-launch bearer token：Tauri 壳在每次启动时用 RtlGenRandom 铸造 32 字节随机 token（十六进制 64 字符），经 `FREEV6_API_TOKEN` 环境变量传给 sidecar，前端通过新增的 `get_api_token` command 获取并随 `Authorization: Bearer` 头携带。helper 以 `withCORS(requireAuth(token, mux))` 包装：缺失/错误 token → 401，恒定时间比较，环境变量为空时拒绝所有请求（fail-closed）；CORS 预检仍在鉴权前放行，`Allow-Headers` 补上 `Authorization`、`Allow-Methods` 补上 `POST`。前端 `api()` 缓存 token，遇 401 自动重取并重试一次；脱离 Tauri 的浏览器场景拿不到 token，走既有「helper 离线」路径。token 每次启动轮换、不落盘、不写日志。
+
+**Verification** — `go build ./...` 与 `go test ./... -count=1` 全绿（含新增 auth 中间件用例：无/错 token→401、正确→放行、OPTIONS 预检无 token→204、空服务端 token→全拒）；`cargo check` 通过；`node --check web/app.js` 通过。真实 helper 进程 + curl 冒烟：无 token 401、错 token 401、正确 token 200、预检 204 且 CORS 头含 Authorization/POST、无 `FREEV6_API_TOKEN` 时全部 401 并输出 stderr 警告。`cargo test` 因二进制带 requireAdministrator 清单在非提升会话无法执行（PRE-EXISTING），token 生成器以等价独立 rustc 程序验证（64 hex、两次调用不同）。独立 reviewer 审查 9a562d3..141ee6e：spec 合规、无 critical 缺陷。前端 Tauri invoke 路径未能端到端实跑（需启动提权桌面应用），仅静态走查。
+
+**Journey log**:
+- 会话环境禁止 `git worktree add`（隔离策略），按 spec 覆盖项改为在主检出就地建 `feat/local-api-auth` 分支实施。
+- 首次 E2E 冒烟因本机已有 helper 占用 13335 失败；用户关闭占用程序后复测通过——验证真实部署路径时先确认端口占用者。
+- `cargo test` 对带 requireAdministrator 清单的二进制在非提升 shell 必然 740；「独立 rustc 镜像程序」是本机验证 Rust 单测逻辑的可行替代。
 
 ## [S1] Problem
 
@@ -59,7 +68,7 @@ freev6-helper 的本地 API（`127.0.0.1:13335/api/v1`）当前完全无鉴权�
 
 ## Tasks
 
-- [ ] T1: helper 鉴权中间件 + CORS 头修正 + 单元测试 — acceptance: `go test ./cmd/freev6-helper/` 全绿；测试覆盖无 token/错 token → 401、正确 token → 放行、OPTIONS 预检无 token → 204、服务端 token 为空 → 全部 401 (covers: S2)
-- [ ] T2: Tauri 侧 token 生成与下发（FFI 生成器 + managed state + `get_api_token` command + sidecar 注入 env）— acceptance: `cargo check` 通过；生成器单元测试通过（hex 64 字符、两次不同）(covers: S2)
-- [ ] T3: 前端 `api()` 注入 `Authorization` 并处理 401 重取重试一次 — acceptance: 代码走查确认所有 helper 请求经 `api()` 携带 token；无 Tauri 环境下行为与现有离线路径一致 (covers: S2; depends: T2)
-- [ ] T4: 文档同步：README TODO 勾选、src-tauri/README 中「still need per-launch authentication」表述更新 — acceptance: 两处文档与实际行为一致 (covers: S1)
+- [x] T1: helper 鉴权中间件 + CORS 头修正 + 单元测试 — acceptance: `go test ./cmd/freev6-helper/` 全绿；测试覆盖无 token/错 token → 401、正确 token → 放行、OPTIONS 预检无 token → 204、服务端 token 为空 → 全部 401 (covers: S2)
+- [x] T2: Tauri 侧 token 生成与下发（FFI 生成器 + managed state + `get_api_token` command + sidecar 注入 env）— acceptance: `cargo check` 通过；生成器单元测试通过（hex 64 字符、两次不同）(covers: S2)
+- [x] T3: 前端 `api()` 注入 `Authorization` 并处理 401 重取重试一次 — acceptance: 代码走查确认所有 helper 请求经 `api()` 携带 token；无 Tauri 环境下行为与现有离线路径一致 (covers: S2; depends: T2)
+- [x] T4: 文档同步：README TODO 勾选、src-tauri/README 中「still need per-launch authentication」表述更新 — acceptance: 两处文档与实际行为一致 (covers: S1)
