@@ -74,11 +74,43 @@ function formatSpeed(bytesPerSec) {
 
 /* ── API ── */
 
+// Per-launch bearer token for the helper API, obtained from the Tauri shell
+// (get_api_token). Outside the webview there is no way to obtain it — the UI
+// then401s and falls back to the existing "helper offline" handling.
+let apiToken = null;
+
+async function loadApiToken() {
+  const tauri = window.__TAURI_INTERNALS__;
+  if (!tauri || typeof tauri.invoke !== 'function') return null;
+  try {
+    const token = await tauri.invoke('get_api_token');
+    return typeof token === 'string' && token ? token : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-  });
+  if (apiToken === null) apiToken = await loadApiToken();
+  const doFetch = (token) =>
+    fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  let response = await doFetch(apiToken);
+  // 401 → the token may be stale (shell reloaded) or was never fetched
+  // (invoke raced startup): re-load once and retry once, never loop.
+  if (response.status === 401) {
+    const fresh = await loadApiToken();
+    if (fresh && fresh !== apiToken) {
+      apiToken = fresh;
+      response = await doFetch(apiToken);
+    }
+  }
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
   return payload;
