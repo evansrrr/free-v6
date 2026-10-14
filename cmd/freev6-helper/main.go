@@ -101,7 +101,14 @@ func main() {
 	mux.HandleFunc("/api/v1/update/download", h.updateDownload)
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
-	server := &http.Server{Addr: listenAddress, Handler: withCORS(mux), ReadHeaderTimeout: 5 * time.Second}
+	// Per-launch bearer token minted by the desktop shell: without it the
+	// helper must not serve an unauthenticated loopback API (any browser
+	// page could drive proxy start/stop and settings otherwise).
+	apiToken := os.Getenv("FREEV6_API_TOKEN")
+	if apiToken == "" {
+		fmt.Fprintln(os.Stderr, "helper: FREEV6_API_TOKEN is not set; all API requests will be rejected")
+	}
+	server := &http.Server{Addr: listenAddress, Handler: withCORS(requireAuth(apiToken, mux)), ReadHeaderTimeout: 5 * time.Second}
 	// Bind with orphan takeover: killing the desktop via Task Manager leaves
 	// its helper child alive (Windows doesn't cascade-kill), and that orphan
 	// otherwise holds :13335 forever — every relaunch died on the bind error.
@@ -681,8 +688,12 @@ func executableRoot() string {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Access-Control-Allow-Origin", "*")
-		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		writer.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
+		// Authorization must be allow-listed or the browser preflight rejects
+		// the bearer token before the request ever reaches requireAuth. POST
+		// was always missing from this list even though the action endpoints
+		// use it (latent bug for any cross-origin client).
+		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		writer.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
 		if request.Method == http.MethodOptions {
 			writer.WriteHeader(http.StatusNoContent)
 			return
