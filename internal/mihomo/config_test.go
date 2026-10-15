@@ -125,3 +125,21 @@ func TestRenderBlacklist(t *testing.T) {
 		t.Fatal("expected CIDR blacklist entry to be rejected (domains only)")
 	}
 }
+
+func TestRenderControllerSecret(t *testing.T) {
+	device := warp.Device{PrivateKey: "private", PeerPublicKey: "peer", IPv4: "172.16.0.2", IPv6: "2606:4700::2"}
+	without, err := RenderWithOptions(device, RenderOptions{Mode: ModeRule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without, "secret:") {
+		t.Fatal("empty ControllerSecret must leave the config without a secret key")
+	}
+	with, err := RenderWithOptions(device, RenderOptions{Mode: ModeRule, ControllerSecret: "abcdef0123456789"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(with, `secret: "abcdef0123456789"`) {
+		t.Fatalf("config missing injected controller secret, got:\n%.300s", with)
+	}
+}

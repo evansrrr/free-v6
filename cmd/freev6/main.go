@@ -84,7 +84,11 @@ func renderConfig(args []string) error {
 	if err := json.Unmarshal(data, &device); err != nil {
 		return err
 	}
-	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: *mode, CampusCIDRs: splitCommaList(*campusCIDRs)})
+	controllerSecret, err := mihomo.LoadOrCreateSecret(filepath.Dir(*statePath))
+	if err != nil {
+		return err
+	}
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: *mode, CampusCIDRs: splitCommaList(*campusCIDRs), ControllerSecret: controllerSecret})
 	if err != nil {
 		return err
 	}
@@ -133,7 +137,11 @@ func startMihomo(args []string) error {
 	if err != nil {
 		return err
 	}
-	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: *mode, CampusCIDRs: splitCommaList(*campusCIDRs)})
+	controllerSecret, err := mihomo.LoadOrCreateSecret(filepath.Dir(statePathValue))
+	if err != nil {
+		return err
+	}
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: *mode, CampusCIDRs: splitCommaList(*campusCIDRs), ControllerSecret: controllerSecret})
 	if err != nil {
 		return err
 	}
@@ -183,7 +191,7 @@ func startMihomo(args []string) error {
 		restoreSnapshot()
 		return err
 	}
-	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090"); err != nil {
+	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); err != nil {
 		_ = mihomo.Stop(pidPathValue)
 		restoreSnapshot()
 		return err

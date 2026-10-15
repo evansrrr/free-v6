@@ -49,7 +49,11 @@ func WaitReady(ctx context.Context, address string, interval time.Duration) erro
 	}
 }
 
-func CheckController(ctx context.Context, address string) (ControllerStatus, error) {
+// CheckController reads version and proxy groups from the mihomo API.
+// secret is the external-controller secret from the rendered config; when
+// non-empty every request carries it as a Bearer token (mihomo ignores the
+// header on instances configured without a secret).
+func CheckController(ctx context.Context, address, secret string) (ControllerStatus, error) {
 	var status ControllerStatus
 	if address == "" {
 		return status, fmt.Errorf("mihomo controller address is empty")
@@ -59,13 +63,13 @@ func CheckController(ctx context.Context, address string) (ControllerStatus, err
 		baseURL = "http://" + baseURL
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
-	if err := getControllerJSON(ctx, client, baseURL+"/version", &status); err != nil {
+	if err := getControllerJSON(ctx, client, baseURL+"/version", secret, &status); err != nil {
 		return ControllerStatus{}, fmt.Errorf("read mihomo version: %w", err)
 	}
 	var proxyResponse struct {
 		Proxies map[string]ProxyStatus `json:"proxies"`
 	}
-	if err := getControllerJSON(ctx, client, baseURL+"/proxies", &proxyResponse); err != nil {
+	if err := getControllerJSON(ctx, client, baseURL+"/proxies", secret, &proxyResponse); err != nil {
 		return ControllerStatus{}, fmt.Errorf("read mihomo proxies: %w", err)
 	}
 	status.Proxies = proxyResponse.Proxies
@@ -75,13 +79,13 @@ func CheckController(ctx context.Context, address string) (ControllerStatus, err
 	return status, nil
 }
 
-func WaitHealthy(ctx context.Context, address string, interval time.Duration) (ControllerStatus, error) {
+func WaitHealthy(ctx context.Context, address, secret string, interval time.Duration) (ControllerStatus, error) {
 	if interval <= 0 {
 		interval = 100 * time.Millisecond
 	}
 	var lastErr error
 	for {
-		status, err := CheckController(ctx, address)
+		status, err := CheckController(ctx, address, secret)
 		if err == nil {
 			return status, nil
 		}
@@ -159,10 +163,13 @@ func probeIPv6EgressOnce(ctx context.Context, client *http.Client, url string) (
 	return EgressStatus{Address: address.String()}, nil
 }
 
-func getControllerJSON(ctx context.Context, client *http.Client, url string, target any) error {
+func getControllerJSON(ctx context.Context, client *http.Client, url, secret string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
+	}
+	if secret != "" {
+		request.Header.Set("Authorization", "Bearer "+secret)
 	}
 	response, err := client.Do(request)
 	if err != nil {

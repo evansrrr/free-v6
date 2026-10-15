@@ -46,12 +46,49 @@ func TestCheckController(t *testing.T) {
 	}))
 	defer server.Close()
 
-	status, err := CheckController(context.Background(), strings.TrimPrefix(server.URL, "http://"))
+	status, err := CheckController(context.Background(), strings.TrimPrefix(server.URL, "http://"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if status.Version != "alpha-test" || status.Proxies[NodeSelectionGroup].Now != "♻️ 自动选择" {
 		t.Fatalf("unexpected controller status: %+v", status)
+	}
+}
+
+func TestCheckControllerSendsBearerSecret(t *testing.T) {
+	const secret = "controller-secret-abc"
+	var gotAuthHeader []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotAuthHeader = append(gotAuthHeader, request.Header.Get("Authorization"))
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/version":
+			_, _ = writer.Write([]byte(`{"version":"alpha-test"}`))
+		case "/proxies":
+			_, _ = writer.Write([]byte(`{"proxies":{"🚀 节点选择":{"type":"Selector","now":"♻️ 自动选择"}}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	// Secret set → both requests must carry it; empty secret → no header at
+	// all (a header would only confuse secret-less instances).
+	if _, err := CheckController(context.Background(), server.URL, secret); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAuthHeader) != 2 || gotAuthHeader[0] != "Bearer "+secret || gotAuthHeader[1] != "Bearer "+secret {
+		t.Fatalf("expected Bearer secret on both requests, got %v", gotAuthHeader)
+	}
+
+	gotAuthHeader = nil
+	if _, err := CheckController(context.Background(), server.URL, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, header := range gotAuthHeader {
+		if header != "" {
+			t.Fatalf("empty secret must not send Authorization, got %q", header)
+		}
 	}
 }
 
@@ -66,7 +103,7 @@ func TestCheckControllerRequiresNodeSelectionGroup(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := CheckController(context.Background(), server.URL)
+	_, err := CheckController(context.Background(), server.URL, "")
 	if err == nil || !strings.Contains(err.Error(), "proxy group") {
 		t.Fatalf("expected missing proxy group error, got %v", err)
 	}

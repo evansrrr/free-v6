@@ -359,12 +359,26 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if stored, storeErr := h.loadSettings(); storeErr == nil && len(stored.Blacklist) > 0 {
 		blacklist = stored.Blacklist
 	}
-	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{Mode: input.Mode, CampusCIDRs: input.CampusCIDRs, Blacklist: blacklist, DevMode: input.DevMode})
+	stateDir := filepath.Join(h.root, "state")
+	// Controller secret: load-or-create BEFORE any network change so a disk
+	// failure aborts cleanly, and so the render below and the readiness check
+	// after mihomo starts both use the same value.
+	controllerSecret, secretErr := mihomo.LoadOrCreateSecret(stateDir)
+	if secretErr != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": secretErr.Error()})
+		return
+	}
+	config, err := mihomo.RenderWithOptions(device, mihomo.RenderOptions{
+		Mode:             input.Mode,
+		CampusCIDRs:      input.CampusCIDRs,
+		Blacklist:        blacklist,
+		DevMode:          input.DevMode,
+		ControllerSecret: controllerSecret,
+	})
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	stateDir := filepath.Join(h.root, "state")
 	configPath := filepath.Join(stateDir, "mihomo.yaml")
 	pidPath := filepath.Join(stateDir, "mihomo.pid")
 	logPath := filepath.Join(stateDir, "mihomo.log")
@@ -429,7 +443,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
 		return
 	}
-	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090"); err != nil {
+	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); err != nil {
 		_ = mihomo.Stop(pidPath)
 		restore()
 		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})

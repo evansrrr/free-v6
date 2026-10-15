@@ -55,6 +55,10 @@ type RenderOptions struct {
 	CampusCIDRs []string
 	Blacklist   []string
 	DevMode     bool
+	// ControllerSecret, when non-empty, becomes mihomo's external-controller
+	// `secret` so only callers that know it can drive the API on 9090.
+	// Empty leaves the rendered config byte-identical to pre-secret builds.
+	ControllerSecret string
 }
 
 const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
@@ -168,6 +172,12 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(configHeader)
+	if options.ControllerSecret != "" {
+		// Top-level YAML key: placement is irrelevant to mihomo, keeping it
+		// next to external-controller in the header would require splitting
+		// the const template for no functional gain.
+		fmt.Fprintf(&b, "secret: %q\n\n", options.ControllerSecret)
+	}
 	// device: 固定 TUN 适配器显示名，供 ICS 热点共享（internal/network/ics）
 	// 按名识别 FreeV6 的虚拟网卡，不依赖 mihomo 默认名。
 	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  device: FreeV6TUN\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
