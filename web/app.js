@@ -37,6 +37,9 @@ const state = {
   proxyDelays: {},
   testingDelay: false,
   delaysReady: false,
+  // mihomo external-controller secret（helper /status 下发）：9090 直连
+  // 携带的 Bearer；为空（尚无 secret 文件）时不加头。
+  controllerSecret: '',
 
   // Runtime
   runtimePresent: false,
@@ -73,6 +76,14 @@ function formatSpeed(bytesPerSec) {
 }
 
 /* ── API ── */
+
+// Headers for direct mihomo controller (:9090) calls. Empty secret → no
+// header, which pre-secret mihomo instances accept as-is.
+function controllerHeaders(extra = {}) {
+  return state.controllerSecret
+    ? { Authorization: `Bearer ${state.controllerSecret}`, ...extra }
+    : extra;
+}
 
 // Per-launch bearer token for the helper API, obtained from the Tauri shell
 // (get_api_token). Outside the webview there is no way to obtain it — the UI
@@ -303,6 +314,9 @@ async function startProxyFlow(auto = false) {
       return { ok: false, reason: 'api', message: e.message };
     }
     setRunning(true);
+    // 启动响应携带本轮渲染所用的 controller secret，先于下一次 /status
+    // 轮询就位，紧随其后的流量/节点请求即可带上 Bearer
+    if (typeof started.controllerSecret === 'string') state.controllerSecret = started.controllerSecret;
     reportHotspotResult(started?.hotspot, auto);
     addLog(auto ? '自动启动免流成功' : '免流模式已启动');
     autoDelayTestAfterStart();
@@ -1253,6 +1267,8 @@ async function refreshBackendState() {
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
+    // 9090 直连凭据：以 helper 的权威值为准（含文件被删后的空串降级）
+    state.controllerSecret = typeof status.controllerSecret === 'string' ? status.controllerSecret : '';
 
     // Runtime info — must complete before updating chip/settings UI
     try {
@@ -1293,7 +1309,7 @@ async function pollTraffic() {
 
   try {
     // mihomo controller connections API
-    const resp = await fetch('http://127.0.0.1:9090/connections');
+    const resp = await fetch('http://127.0.0.1:9090/connections', { headers: controllerHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
 
@@ -1617,7 +1633,7 @@ async function fetchProxies() {
   // 只在免流运行中拉取：停止后 :9090 已死，僵尸实例/时序竞态不得回填列表
   if (!state.helperOnline || !state.proxyRunning) return;
   try {
-    const resp = await fetch('http://127.0.0.1:9090/proxies');
+    const resp = await fetch('http://127.0.0.1:9090/proxies', { headers: controllerHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
     const info = data.proxies?.[AUTO_SELECT_GROUP];
@@ -1682,7 +1698,7 @@ async function switchProxy(name) {
   try {
     await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(AUTO_SELECT_GROUP)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: controllerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name }),
     });
     if (state.proxyGroup) state.proxyGroup.now = name;
@@ -1729,7 +1745,7 @@ async function runDelayTest() {
       const name = queue.shift();
       let delay = 5000;
       try {
-        const resp = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=http://www.gstatic.com/generate_204`);
+        const resp = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=http://www.gstatic.com/generate_204`, { headers: controllerHeaders() });
         if (resp.ok) {
           const data = await resp.json();
           delay = data.delay || 5000;
