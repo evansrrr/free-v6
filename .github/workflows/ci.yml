@@ -14,3 +14,19 @@ jobs:
           go-version: '1.25.x'
       - run: go test ./...
       - run: go vet ./...
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # windows-latest images ship rustup/stable; print the resolved version
+      # so a runner-image drift is visible in the log instead of silent.
+      - name: Show Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # --locked: Cargo.lock is tracked; never re-resolve upstream crates in CI.
+      # cargo test stays out on purpose: the test binary carries a
+      # requireAdministrator manifest (os error 740 when not elevated).
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
