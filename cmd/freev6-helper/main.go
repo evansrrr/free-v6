@@ -108,7 +108,7 @@ func main() {
 	if apiToken == "" {
 		fmt.Fprintln(os.Stderr, "helper: FREEV6_API_TOKEN is not set; all API requests will be rejected")
 	}
-	server := &http.Server{Addr: listenAddress, Handler: withCORS(requireAuth(apiToken, mux)), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: listenAddress, Handler: withCORS(guardLocalOnly(requireAuth(apiToken, mux))), ReadHeaderTimeout: 5 * time.Second}
 	// Bind with orphan takeover: killing the desktop via Task Manager leaves
 	// its helper child alive (Windows doesn't cascade-kill), and that orphan
 	// otherwise holds :13335 forever — every relaunch died on the bind error.
@@ -144,6 +144,12 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		currentSettings = defaultSettings()
 	}
 	_, warpErr := os.Stat(filepath.Join(h.root, "state", "warp.json"))
+	// 外部控制器 secret（只读探测）：存在即回传给前端用于 9090 直连；
+	// 读失败按空串降级——运行中的面板只是暂时取不到数据，不影响免流。
+	controllerSecret, secretErr := mihomo.ReadControllerSecret(filepath.Join(h.root, "state"))
+	if secretErr != nil {
+		controllerSecret = ""
+	}
 	// 热点共享状态：仅免流运行中且本会话已切换时有意义。active 用本机
 	// 地址探测（无子进程，3s 轮询无压力）；前端观察 shared→断开 的下降沿
 	// 弹“下次启动生效”提示。
@@ -154,14 +160,15 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok":         true,
-		"root":       h.root,
-		"admin":      admin,
-		"adminError": adminErr,
-		"proxy":      map[string]any{"running": running, "pid": pid, "error": errorText(statusErr)},
-		"warp":       map[string]any{"registered": warpErr == nil},
-		"settings":   currentSettings,
-		"hotspot":    hotspot,
+		"ok":               true,
+		"root":             h.root,
+		"admin":            admin,
+		"adminError":       adminErr,
+		"proxy":            map[string]any{"running": running, "pid": pid, "error": errorText(statusErr)},
+		"warp":             map[string]any{"registered": warpErr == nil},
+		"settings":         currentSettings,
+		"hotspot":          hotspot,
+		"controllerSecret": controllerSecret,
 	})
 }
 
@@ -460,7 +467,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
 	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
-	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult})
+	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret})
 }
 
 // healLeftoverSnapshot 先按上次会话残留的快照还原，再让 startProxy 重新
