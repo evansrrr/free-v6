@@ -2,10 +2,18 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// ErrCorruptSnapshot marks a snapshot file that exists but cannot be decoded
+// (0 bytes, truncated, hand-edited garbage). Callers must treat it as "no
+// usable baseline": delete/self-heal instead of failing every proxy start
+// forever — an unreadable snapshot file once pinned start AND stop on user
+// machines until the file was removed by hand.
+var ErrCorruptSnapshot = errors.New("network snapshot corrupt")
 
 type RestoreCommand struct {
 	Executable string
@@ -23,8 +31,33 @@ func SaveSnapshot(path string, snapshot Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode network snapshot: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	// Atomic replace: a plain os.WriteFile truncates first, so a kill mid-write
+	// (update child.kill, orphan taskkill, power loss) or a full disk leaves a
+	// 0-byte/partial network-snapshot.json behind. Write a temp file, flush it
+	// to disk, then rename over the target — the visible file is either the
+	// old snapshot or the new one, never a half-written one.
+	tmpPath := path + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return fmt.Errorf("write network snapshot: %w", err)
+	}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write network snapshot: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync network snapshot: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close network snapshot: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("replace network snapshot: %w", err)
 	}
 	return nil
 }
@@ -36,7 +69,7 @@ func LoadSnapshot(path string) (Snapshot, error) {
 	}
 	var snapshot Snapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return Snapshot{}, fmt.Errorf("decode network snapshot: %w", err)
+		return Snapshot{}, fmt.Errorf("%w: %w", ErrCorruptSnapshot, err)
 	}
 	return snapshot, nil
 }

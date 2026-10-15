@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/yourname/freev6/internal/network"
 )
 
 // A proxy start must not drop settings fields the start request never carries.
@@ -181,4 +184,46 @@ func TestSettingsPutOmittedAutoRunProxyKeepsStored(t *testing.T) {
 	if !bytes.Contains(thirdRec.Body.Bytes(), []byte(`"autoRunProxy":false`)) {
 		t.Fatalf("explicit false must persist, got: %s", thirdRec.Body.String())
 	}
+}
+
+// 残留快照自愈必须永不阻断启动：缺失→无操作；损坏（0 字节/截断/被外部
+// 写坏）→ 删除自愈；可读→按基线还原后删除。回归：一个空的
+// network-snapshot.json 曾让每次启动都500（decode network snapshot:
+// unexpected end of JSON input），用户只能手动删文件自救。
+func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
+		healLeftoverSnapshot(path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("missing snapshot must stay absent, stat err = %v", err)
+		}
+	})
+
+	t.Run("corrupt is deleted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		healLeftoverSnapshot(path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("corrupt snapshot must be removed, stat err = %v", err)
+		}
+	})
+
+	t.Run("valid is restored and removed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
+		// 空接口列表：RestoreSnapshot 无命令可执行、无 ICS 元数据，各平台
+		// 上都是快速 no-op，测试仍然走真实的还原→删除路径。
+		want := network.Snapshot{CapturedAt: time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)}
+		if err := network.SaveSnapshot(path, want); err != nil {
+			t.Fatal(err)
+		}
+		healLeftoverSnapshot(path)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("healed snapshot must be removed, stat err = %v", err)
+		}
+	})
 }

@@ -116,6 +116,16 @@ async function api(path, options = {}) {
   return payload;
 }
 
+// 停止免流。快照损坏/读不出来时 helper 仍会成功停止、只跳过网络状态还原
+// （restoreSkipped）——记进日志提示用户，不能静默吞掉。
+async function stopProxyApi() {
+  const payload = await stopProxyApi();
+  if (payload.restoreSkipped) {
+    addLog(`网络状态还原已跳过（快照不可用）: ${payload.restoreSkipped}`, true);
+  }
+  return payload;
+}
+
 // Invoke a Tauri host command through __TAURI_INTERNALS__ (the same channel
 // the custom window controls use). Returns false outside the Tauri webview
 // so callers can fall back to plain browser navigation.
@@ -564,7 +574,7 @@ async function applyDevMode(next) {
 async function stopAndQuit() {
   closeQuitDialog();
   try {
-    await api('/proxy/stop', { method: 'POST' });
+    await stopProxyApi();
     setRunning(false);
     addLog('免流模式已停止');
   } catch (e) {
@@ -843,7 +853,7 @@ async function startUpdate() {
     setUpdatePhase('stopping');
     setUpdateStatus('正在停止免流…');
     try {
-      await api('/proxy/stop', { method: 'POST' });
+      await stopProxyApi();
       setRunning(false);
     } catch (e) {
       updateFailed(`停止免流失败: ${e.message}，更新已中止`);
@@ -1438,7 +1448,7 @@ function wireEvents() {
     fab.label = state.transition === 'stopping' ? '停止中…' : '启动中…';
     try {
       if (state.proxyRunning) {
-        await api('/proxy/stop', { method: 'POST' });
+        await stopProxyApi();
         setRunning(false);
         addLog('免流模式已停止');
         // 手动接管：本会话不再自动启动

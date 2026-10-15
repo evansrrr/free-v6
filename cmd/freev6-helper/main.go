@@ -392,22 +392,8 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})
 		return
 	}
-	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。上次会话
-	// 异常退出可能留下旧快照（ICS 仍处于切换态）——先按它还原再重新抓取，
-	// 否则新基线会把“已切换状态”记成原状，停止时永远还原不回去。
-	if old, healErr := network.LoadSnapshot(snapshotPath); healErr == nil {
-		healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		err := network.RestoreSnapshot(healCtx, old)
-		healCancel()
-		if err != nil {
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("restore leftover network snapshot: %v", err)})
-			return
-		}
-		_ = os.Remove(snapshotPath)
-	} else if !errors.Is(healErr, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": healErr.Error()})
-		return
-	}
+	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
+	healLeftoverSnapshot(snapshotPath)
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
 	snapshot, err := network.CaptureSnapshot(snapshotCtx)
 	snapshotCancel()
@@ -461,6 +447,33 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
 	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
 	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult})
+}
+
+// healLeftoverSnapshot 先按上次会话残留的快照还原，再让 startProxy 重新
+// 抓取基线——否则新基线会把“已切换状态”记成原状，停止时永远还原不回去。
+// 但任何读不出来的快照（0 字节/截断/被外部清空改坏、权限异常）都只告警不
+// 阻断：曾有线上问题是一个损坏的 network-snapshot.json 把启动和停止同时
+// 永久卡死。还原失败（外部改掉热点/共享配置时是永久性的）同样继续启动，
+// 残留文件保留，供瞬时失败下次重试或被新基线覆盖。
+func healLeftoverSnapshot(snapshotPath string) {
+	old, healErr := network.LoadSnapshot(snapshotPath)
+	switch {
+	case healErr == nil:
+		healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
+		err := network.RestoreSnapshot(healCtx, old)
+		healCancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "helper: leftover network snapshot restore failed (continuing): %v\n", err)
+			return
+		}
+		_ = os.Remove(snapshotPath)
+	case errors.Is(healErr, network.ErrCorruptSnapshot):
+		fmt.Fprintf(os.Stderr, "helper: removing corrupt network snapshot: %v\n", healErr)
+		_ = os.Remove(snapshotPath)
+	case errors.Is(healErr, os.ErrNotExist):
+	default:
+		fmt.Fprintf(os.Stderr, "helper: unreadable network snapshot (continuing): %v\n", healErr)
+	}
 }
 
 // applyHotspotShare 执行移动热点上游切换（ICS 拓扑方案）。开关关 → disabled；
@@ -547,14 +560,20 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	// 连接存在才能显式禁用其共享角色）。还原失败时快照保留、mihomo 照常
 	// 停止，下次启动免流前会先按它自愈还原。
 	var restoreErr error
+	var restoreSkipped string
 	snapshot, err := network.LoadSnapshot(snapshotPath)
-	if err == nil {
+	switch {
+	case err == nil:
 		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
 		restoreErr = network.RestoreSnapshot(ctx, snapshot)
 		cancel()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	case errors.Is(err, network.ErrCorruptSnapshot):
+		// 坏文件没有可还原基线：跳过还原，但停止 mihomo 优先——快照问题
+		// 随响应回报，绝不再前置 500 把停止卡住。
+		restoreSkipped = err.Error()
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		restoreSkipped = err.Error()
 	}
 	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)
@@ -567,7 +586,11 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"running": false})
+	response := map[string]any{"running": false}
+	if restoreSkipped != "" {
+		response["restoreSkipped"] = restoreSkipped
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (h *helper) registerWarp(writer http.ResponseWriter, request *http.Request) {
