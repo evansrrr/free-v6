@@ -23,6 +23,18 @@ jobs:
       # so a runner-image drift is visible in the log instead of silent.
       - name: Show Rust toolchain
         run: rustup show
+      # tauri_build validates bundle inputs even for cargo check: the
+      # externalBin sidecar AND the GeoSite.dat resource. Both are gitignored
+      # and normally produced by beforeBuildCommand, which only runs under
+      # `tauri build/dev` — plain cargo check skips it, so CI reproduces the
+      # two steps here (same commands as tauri.conf.json).
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Build helper sidecar
+        run: go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper
+      - name: Ensure GeoSite.dat resource
+        run: go run ./cmd/ensure-geodata
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
