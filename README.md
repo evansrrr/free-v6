@@ -71,4 +71,4 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 
 **鸣谢**：
 
-还没有人投喂喵
+仍需妙手
