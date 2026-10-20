@@ -1992,13 +1992,15 @@ function updateChainUI() {
   // 单按钮复用：已有订阅快照时“导入”变“刷新”（点击刷新已存来源；
   // 输入框里填了新地址则按新地址导入）。导入进行中统一显示「导入中…」
   // 并禁用相关控件，覆盖订阅拉取的最长 30s 等待。
+  // 注意：md-filled-button 没有 label 属性（那是 md-fab 的 API），可见
+  // 文本来自 light DOM —— 必须走 textContent，与下载/注册按钮一致。
   const importBtn = $('#chainImportUrl');
   if (importBtn) {
     if (state.chainImporting) {
-      importBtn.label = '导入中…';
+      importBtn.textContent = '导入中…';
       importBtn.disabled = true;
     } else {
-      importBtn.label = state.chain.count > 0 && state.chain.sourceType === 'url' ? '刷新' : '导入';
+      importBtn.textContent = state.chain.count > 0 && state.chain.sourceType === 'url' ? '刷新' : '导入';
       importBtn.disabled = false;
     }
   }
