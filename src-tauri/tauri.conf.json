@@ -4,8 +4,8 @@
   "version": "0.4.8",
   "identifier": "dev.freev6.desktop",
   "build": {
-    "beforeDevCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper && go run ./cmd/ensure-geodata",
-    "beforeBuildCommand": "go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.exe ./cmd/freev6-helper && go run ./cmd/ensure-geodata",
+    "beforeDevCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe && go run ./cmd/ensure-geodata",
+    "beforeBuildCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe && go run ./cmd/ensure-geodata",
     "frontendDist": "../web"
   },
   "app": {
