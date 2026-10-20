@@ -40,26 +40,40 @@ REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
    Source:    https://nsis.sourceforge.io/
    Note: the NSIS toolchain is downloaded by the Tauri bundler at build time.
 
+6. GeoSite.dat (geosite domain data, bundled at <install dir>\GeoSite.dat)
+   License:   Apache-2.0
+   Copyright: The v2fly and MetaCubeX authors
+   Source:    https://github.com/MetaCubeX/meta-rules-dat (compiled from
+              v2fly/domain-list-community source lists)
+   Note: refreshed from the source repository on each release build
+   (cmd/ensure-geodata) and only redistributed as the compiled .dat file.
+
 6. nsis_tauri_utils (NSIS plugin embedded in the produced setup.exe)
    License:   MIT OR Apache-2.0
    Copyright: Tauri Programme within The Commons Conservancy
    Source:    https://github.com/tauri-apps/nsis-tauri-utils
 
+7. gopkg.in/yaml.v3 (Go YAML parser linked into freev6-helper)
+   License:   MIT OR Apache-2.0
+   Copyright: Kirill Simonov (MIT portion); Canonical Ltd (Apache portion)
+   Source:    https://github.com/go-yaml/yaml
+   Full text: yaml.v3-LICENSE.txt in this folder
+
 --------------------------------------------------------------------------
 LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
 --------------------------------------------------------------------------
 
-7. Material Symbols Outlined icon font
+8. Material Symbols Outlined icon font
    License:   Apache-2.0
    Copyright: Google LLC
    Loaded on demand from fonts.googleapis.com; not bundled.
 
-8. DM Sans, Manrope, JetBrains Mono fonts
+9. DM Sans, Manrope, JetBrains Mono fonts
    License:   SIL Open Font License 1.1
    Copyright: the respective font authors (see each font's OFL.txt)
    Loaded on demand from fonts.googleapis.com; not bundled.
 
-9. mihomo (Clash.Meta core)
+10. mihomo (Clash.Meta core)
    License:   GPL-3.0-only
    Copyright: MetaCubeX contributors
    Source:    https://github.com/MetaCubeX/mihomo

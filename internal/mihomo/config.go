@@ -59,6 +59,10 @@ type RenderOptions struct {
 	// `secret` so only callers that know it can drive the API on 9090.
 	// Empty leaves the rendered config byte-identical to pre-secret builds.
 	ControllerSecret string
+	// ChainProxies: imported user-owned outbounds appended to the config,
+	// dialed through the selected MASQUE node and targeted by MATCH.
+	// Empty keeps the rendered config byte-identical to non-chain builds.
+	ChainProxies []ChainProxy
 }
 
 const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
@@ -187,6 +191,10 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		names = append(names, name)
 		fmt.Fprintf(&b, "  - name: %s\n    type: masque\n    server: \"%s\"\n    port: %d\n    private-key: %s\n    public-key: %s\n    ip: %s\n    ipv6: %s\n    mtu: 1280\n    udp: true\n    remote-dns-resolve: true\n    dns: [1.1.1.1, 2606:4700:4700::1111]\n", name, endpoint.Server, endpoint.Port, w.PrivateKey, w.PeerPublicKey, w.IPv4, w.IPv6)
 	}
+	// 链式代理：自带 dialer-proxy 的重发射块直接追加进同一 proxies 列表
+	for _, chain := range options.ChainProxies {
+		b.WriteString(chain.YAML)
+	}
 
 	b.WriteString("\nproxy-groups:\n")
 	b.WriteString("  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n\n")
@@ -194,6 +202,9 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	writeProxyGroup(&b, "☑️ 手动切换", "select", "", names)
 	writeProxyGroup(&b, "♻️ 自动选择", "url-test", "    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    lazy: false\n", names)
 	writeProxyGroup(&b, "🔄 故障转移", "fallback", "    url: http://www.gstatic.com/generate_204\n    interval: 180\n", names)
+	if len(options.ChainProxies) > 0 {
+		writeChainGroup(&b, options.ChainProxies)
+	}
 	b.WriteString("  - name: 🛑 全球拦截\n    type: select\n    proxies:\n      - REJECT\n\n")
 	b.WriteString("  - name: 🐟 漏网之鱼\n    type: select\n    proxies:\n      - 🚀 节点选择\n      - ♻️ 自动选择\n\n")
 
@@ -223,7 +234,14 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	for i, ruleSet := range ruleSets {
 		fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
 	}
-	b.WriteString("  - GEOIP,LAN,DIRECT,no-resolve\n  - MATCH,🚀 节点选择\n")
+	b.WriteString("  - GEOIP,LAN,DIRECT,no-resolve\n")
+	// 链式启用时全部流量（白名单/黑名单除外）先过自有代理；
+	// 未启用保持原状。
+	matchTarget := "🚀 节点选择"
+	if len(options.ChainProxies) > 0 {
+		matchTarget = ChainGroup
+	}
+	fmt.Fprintf(&b, "  - MATCH,%s\n", matchTarget)
 	return b.String(), nil
 }
 
