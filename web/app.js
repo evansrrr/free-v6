@@ -42,6 +42,9 @@ const state = {
   controllerSecret: '',
   // 链式代理（设置 → 核心）：/chain-proxy 权威状态 + 接入点页当前分组页签
   chain: { enabled: false, count: 0, sourceType: '', sourceUrl: '', names: [], error: '' },
+  // 导入进行中（订阅拉取最长 30s）——独立字段，refreshChainStatus 整体
+  // 重建 state.chain 时不能把它冲掉
+  chainImporting: false,
   activeProxyTab: 'access',
 
   // Runtime
@@ -1987,13 +1990,27 @@ function updateChainUI() {
   const sw = $('#chainEnabledSwitch');
   if (sw) sw.selected = state.chain.enabled;
   // 单按钮复用：已有订阅快照时“导入”变“刷新”（点击刷新已存来源；
-  // 输入框里填了新地址则按新地址导入）。
+  // 输入框里填了新地址则按新地址导入）。导入进行中统一显示「导入中…」
+  // 并禁用相关控件，覆盖订阅拉取的最长 30s 等待。
   const importBtn = $('#chainImportUrl');
   if (importBtn) {
-    importBtn.label = state.chain.count > 0 && state.chain.sourceType === 'url' ? '刷新' : '导入';
+    if (state.chainImporting) {
+      importBtn.label = '导入中…';
+      importBtn.disabled = true;
+    } else {
+      importBtn.label = state.chain.count > 0 && state.chain.sourceType === 'url' ? '刷新' : '导入';
+      importBtn.disabled = false;
+    }
   }
+  const pickBtn = $('#chainPickFile');
+  if (pickBtn) pickBtn.disabled = state.chainImporting;
+  const urlField = $('#chainUrlInput');
+  if (urlField) urlField.disabled = state.chainImporting;
   const clearBtn = $('#chainClear');
-  if (clearBtn) clearBtn.hidden = state.chain.count === 0 && !state.chain.sourceType;
+  if (clearBtn) {
+    clearBtn.hidden = state.chain.count === 0 && !state.chain.sourceType;
+    clearBtn.disabled = state.chainImporting;
+  }
   const statusLine = $('#chainStatusLine');
   if (statusLine) {
     if (state.chain.error) {
@@ -2014,6 +2031,9 @@ function updateChainUI() {
 }
 
 async function importChain(body, label) {
+  if (state.chainImporting) return false; // 双击/回车撞车时不发第二个请求
+  state.chainImporting = true;
+  updateChainUI(); // 按钮切「导入中…」并禁用，覆盖订阅拉取的最长 30s
   try {
     const result = await api('/chain-proxy', { method: 'PUT', body: JSON.stringify(body) });
     addLog(`链式代理${label}成功：${result.count} 个节点`);
@@ -2024,9 +2044,20 @@ async function importChain(body, label) {
     fetchProxies();
     return true;
   } catch (e) {
-    addLog(`链式代理${label}失败: ${e.message}`, true);
+    chainImportFailed(`${label}失败: ${e.message}`, `${label}失败`, e.message);
     return false;
+  } finally {
+    state.chainImporting = false;
+    updateChainUI();
   }
+}
+
+// 导入类失败统一提示：日志留完整错误（yaml 定位信息可能很长），
+// toast 只给一眼能读完的短句。
+function chainImportFailed(logMessage, toastPrefix, detail = '') {
+  addLog(logMessage, true);
+  const text = detail ? `${toastPrefix}：${detail}` : toastPrefix;
+  showToast(text.length > 48 ? `${text.slice(0, 47)}…` : text);
 }
 
 function submitChainUrl() {
@@ -2034,7 +2065,7 @@ function submitChainUrl() {
   // 输入框有地址 → 按新地址导入；空 → 复用已存订阅来源（按钮此时文案是“刷新”）
   const url = typed || (state.chain.sourceType === 'url' ? state.chain.sourceUrl : '');
   if (!url) {
-    addLog('请填写订阅链接', true);
+    chainImportFailed('请填写订阅链接', '导入失败', '请先填写订阅链接');
     return;
   }
   importChain({ url }, typed ? '订阅导入' : '订阅刷新');
@@ -2045,7 +2076,7 @@ async function importChainFromFile(event) {
   const file = input.files?.[0];
   if (!file) return;
   if (file.size > 2 * 1024 * 1024) {
-    addLog('链式代理文件超过 2MB 上限', true);
+    chainImportFailed('链式代理文件超过 2MB 上限', '导入失败', '文件超过 2MB 上限');
     input.value = '';
     return;
   }
@@ -2053,7 +2084,7 @@ async function importChainFromFile(event) {
     const content = await file.text();
     await importChain({ content }, '文件导入');
   } catch (e) {
-    addLog(`读取文件失败: ${e.message}`, true);
+    chainImportFailed(`读取文件失败: ${e.message}`, '导入失败', '读取文件失败');
   }
   input.value = ''; // 同一文件允许再次选择
 }
