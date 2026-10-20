@@ -283,8 +283,9 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if !jsonKeyPresent(body, "hotspotShare") {
 			current.HotspotShare = persisted.HotspotShare
 		}
-		// 同上：链式代理三键由 chain-proxy 端点独占维护，settings PUT 永远
-		// 省略它们 —— 保留存储值，避免保存设置时清掉导入状态。
+		// 同上：sourceType/sourceUrl 只由 chain-proxy 端点维护、主 PUT 永远
+		// 省略；chainEnabled 由主 PUT 携带当前值。三者「省略即保留」，防
+		// 外部部分 PUT 把导入状态清掉、悄悄把出口切回裸 WARP。
 		if !jsonKeyPresent(body, "chainEnabled") {
 			current.ChainEnabled = persisted.ChainEnabled
 		}

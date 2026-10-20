@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/yourname/freev6/internal/warp"
+	"gopkg.in/yaml.v3"
 )
 
 const sampleSubscription = `
@@ -137,6 +138,36 @@ func TestRenderWithChainProxy(t *testing.T) {
 	}
 	if strings.Contains(config, "MATCH,🚀 节点选择") {
 		t.Fatal("chain build must not route MATCH straight to the MASQUE group")
+	}
+}
+
+// 回读解析：子串断言证明不了 YAML 合法（链式块曾因混用顶格/缩进序列而
+// 让真实 mihomo -t 直接解析失败）。渲染产物必须能被严格解析回结构。
+func TestRenderWithChainProxyParsesBack(t *testing.T) {
+	chains, err := ParseChainProxies([]byte(sampleSubscription))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := RenderWithOptions(chainTestDevice(), RenderOptions{
+		Mode:         ModeRule,
+		CampusCIDRs:  []string{"edu.cn"},
+		ChainProxies: chains,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(config), &document); err != nil {
+		t.Fatalf("rendered chain config is not valid YAML: %v", err)
+	}
+	proxies, ok := document["proxies"].([]any)
+	if !ok || len(proxies) != len(endpoints)+len(chains) {
+		t.Fatalf("proxies section must hold %d masque + %d chain entries, got %d",
+			len(endpoints), len(chains), len(proxies))
+	}
+	last := proxies[len(proxies)-1].(map[string]any)
+	if last["name"] != "机场B : 东京" || last["dialer-proxy"] != "🚀 节点选择" {
+		t.Fatalf("chain entry not parsed back correctly: %+v", last)
 	}
 }
 

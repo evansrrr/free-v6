@@ -100,3 +100,18 @@ func writeChainGroup(b *strings.Builder, chains []ChainProxy) {
 	}
 	b.WriteString("\n")
 }
+
+// writeChainProxyBlock emits a re-emitted ("- ...") entry into our
+// `proxies:` section, whose list items are indented by 2 spaces. yaml.v3
+// marshals a top-level list flush left; mixing indents under one key is a
+// YAML error (caught by the real `mihomo -t` E2E). Every line shifts
+// equally so nested block scalars keep their relative indent.
+func writeChainProxyBlock(b *strings.Builder, block string) {
+	for _, line := range strings.Split(strings.TrimRight(block, "\n"), "\n") {
+		if line != "" {
+			b.WriteString("  ")
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+}

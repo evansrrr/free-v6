@@ -191,9 +191,10 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		names = append(names, name)
 		fmt.Fprintf(&b, "  - name: %s\n    type: masque\n    server: \"%s\"\n    port: %d\n    private-key: %s\n    public-key: %s\n    ip: %s\n    ipv6: %s\n    mtu: 1280\n    udp: true\n    remote-dns-resolve: true\n    dns: [1.1.1.1, 2606:4700:4700::1111]\n", name, endpoint.Server, endpoint.Port, w.PrivateKey, w.PeerPublicKey, w.IPv4, w.IPv6)
 	}
-	// 链式代理：自带 dialer-proxy 的重发射块直接追加进同一 proxies 列表
+	// 链式代理：自带 dialer-proxy 的重发射块追加进同一 proxies 列表
+	// （缩进对齐既有 2 空格项，混缩进是 YAML 解析错误）
 	for _, chain := range options.ChainProxies {
-		b.WriteString(chain.YAML)
+		writeChainProxyBlock(&b, chain.YAML)
 	}
 
 	b.WriteString("\nproxy-groups:\n")
