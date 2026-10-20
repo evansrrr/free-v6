@@ -788,10 +788,11 @@ func withCORS(next http.Handler) http.Handler {
 		writer.Header().Set("Access-Control-Allow-Origin", "*")
 		// Authorization must be allow-listed or the browser preflight rejects
 		// the bearer token before the request ever reaches requireAuth. POST
-		// was always missing from this list even though the action endpoints
-		// use it (latent bug for any cross-origin client).
+		// and DELETE were both missing from this list even though action
+		// endpoints use them — a rejected preflight surfaces in the UI as an
+		// opaque "Failed to fetch" (chain-clear's DELETE hit exactly this).
 		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		writer.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+		writer.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		if request.Method == http.MethodOptions {
 			writer.WriteHeader(http.StatusNoContent)
 			return

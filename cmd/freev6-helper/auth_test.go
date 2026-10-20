@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,18 @@ func TestRequireAuthAllowsPreflightWithoutToken(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, want 204", recorder.Code)
+	}
+	// DELETE is a non-simple method: without it in Allow-Methods the browser
+	// preflight fails and the UI sees an opaque "Failed to fetch" — the exact
+	// bug chain-clear hit.
+	methods := recorder.Header().Get("Access-Control-Allow-Methods")
+	for _, method := range []string{"GET", "PUT", "POST", "DELETE"} {
+		if !strings.Contains(methods, method) {
+			t.Fatalf("Allow-Methods %q missing %s", methods, method)
+		}
+	}
+	if !strings.Contains(recorder.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
+		t.Fatal("Allow-Headers must include Authorization")
 	}
 }
 

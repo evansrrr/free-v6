@@ -328,7 +328,6 @@
                 <div class="setting-label">链式代理</div>
                 <div class="setting-desc">本机 → 接入点 → 自有代理 → 目标网站</div>
               </div>
-              <span class="setting-pill" id="chainPill">未导入</span>
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
             <md-divider></md-divider>
@@ -445,7 +444,6 @@
           <div class="cidr-input-row">
             <md-outlined-text-field id="chainUrlInput" label="订阅链接 https://…" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="chainImportUrl">导入</md-filled-button>
-            <md-filled-button id="chainRefreshUrl" hidden>刷新</md-filled-button>
           </div>
           <div class="cidr-input-row">
             <md-filled-button id="chainPickFile">选择 yaml 文件</md-filled-button>
@@ -537,6 +535,19 @@
       <div class="net-dialog-actions">
         <md-text-button id="coreDialogCancel">取消</md-text-button>
         <md-filled-button id="coreDialogDownload">下载</md-filled-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chain proxy clear confirmation -->
+  <div class="net-dialog-scrim" id="chainClearDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="chainClearDialogTitle">
+      <md-icon class="net-dialog-icon">delete_sweep</md-icon>
+      <h3 id="chainClearDialogTitle">清除链式代理？</h3>
+      <p>将删除已导入的节点与订阅来源，下次启动免流恢复为普通链路</p>
+      <div class="net-dialog-actions">
+        <md-text-button id="chainClearDialogCancel">取消</md-text-button>
+        <md-filled-button id="chainClearDialogConfirm">清除</md-filled-button>
       </div>
     </div>
   </div>

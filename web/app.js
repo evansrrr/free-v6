@@ -584,6 +584,15 @@ function closeDevModeDialog() {
   $('#devModeDialogScrim')?.classList.remove('open');
 }
 
+// 清除链式代理的确认弹窗（复用 net-dialog 提示样式，替代原生 confirm）
+function openChainClearDialog() {
+  $('#chainClearDialogScrim')?.classList.add('open');
+}
+
+function closeChainClearDialog() {
+  $('#chainClearDialogScrim')?.classList.remove('open');
+}
+
 async function applyDevMode(next) {
   const sw = $('#devModeSwitch');
   const previous = state.devMode;
@@ -1562,6 +1571,19 @@ function wireEvents() {
     if (e.key === 'Escape') closeDevModeDialog();
   });
 
+  // Chain-clear confirm dialog: act via buttons, dismiss via backdrop or Escape
+  $('#chainClearDialogCancel')?.addEventListener('click', closeChainClearDialog);
+  $('#chainClearDialogConfirm')?.addEventListener('click', () => {
+    closeChainClearDialog();
+    clearChain();
+  });
+  $('#chainClearDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'chainClearDialogScrim') closeChainClearDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeChainClearDialog();
+  });
+
   // First-run guide: 翻页按钮 / 页码点；只能点「开始使用」关闭
   // （不响应 Escape 与遮罩点击 —— 继续使用即代表同意条款）
   $('#guideNext')?.addEventListener('click', advanceGuide);
@@ -1960,17 +1982,16 @@ async function refreshChainStatus() {
   updateChainUI();
 }
 
-// 同步链式状态到设置页 pill/开关/来源行与接入点页分组页签。
+// 同步链式状态到设置页开关/来源行/按钮文案与接入点页分组页签。
 function updateChainUI() {
-  const pill = $('#chainPill');
-  if (pill) {
-    pill.textContent = state.chain.count > 0 ? `${state.chain.count} 个节点` : '未导入';
-    pill.className = state.chain.count > 0 ? 'setting-pill ready' : 'setting-pill';
-  }
   const sw = $('#chainEnabledSwitch');
   if (sw) sw.selected = state.chain.enabled;
-  const refreshBtn = $('#chainRefreshUrl');
-  if (refreshBtn) refreshBtn.hidden = state.chain.sourceType !== 'url';
+  // 单按钮复用：已有订阅快照时“导入”变“刷新”（点击刷新已存来源；
+  // 输入框里填了新地址则按新地址导入）。
+  const importBtn = $('#chainImportUrl');
+  if (importBtn) {
+    importBtn.label = state.chain.count > 0 && state.chain.sourceType === 'url' ? '刷新' : '导入';
+  }
   const clearBtn = $('#chainClear');
   if (clearBtn) clearBtn.hidden = state.chain.count === 0 && !state.chain.sourceType;
   const statusLine = $('#chainStatusLine');
@@ -1985,10 +2006,11 @@ function updateChainUI() {
       statusLine.textContent = `本地文件（${state.chain.count} 个节点）`;
     }
   }
+  // 页签仅在「已导入且开关开启」时可见；停用/清除/损坏时归位接入点分组
+  const chainActive = state.chain.enabled && state.chain.count > 0;
   const tabs = $('#proxiesTabs');
-  if (tabs) tabs.hidden = state.chain.count === 0;
-  // 链式被清除时页签必须归位，否则停在空分组上
-  if (state.chain.count === 0 && state.activeProxyTab !== 'access') setProxyTab('access');
+  if (tabs) tabs.hidden = !chainActive;
+  if (!chainActive && state.activeProxyTab !== 'access') setProxyTab('access');
 }
 
 async function importChain(body, label) {
@@ -2007,13 +2029,15 @@ async function importChain(body, label) {
   }
 }
 
-function importChainFromUrl() {
-  const url = $('#chainUrlInput')?.value?.trim();
+function submitChainUrl() {
+  const typed = $('#chainUrlInput')?.value?.trim() || '';
+  // 输入框有地址 → 按新地址导入；空 → 复用已存订阅来源（按钮此时文案是“刷新”）
+  const url = typed || (state.chain.sourceType === 'url' ? state.chain.sourceUrl : '');
   if (!url) {
     addLog('请填写订阅链接', true);
     return;
   }
-  importChain({ url }, '订阅导入');
+  importChain({ url }, typed ? '订阅导入' : '订阅刷新');
 }
 
 async function importChainFromFile(event) {
@@ -2034,16 +2058,8 @@ async function importChainFromFile(event) {
   input.value = ''; // 同一文件允许再次选择
 }
 
-function refreshChainFromUrl() {
-  if (!state.chain.sourceUrl) {
-    addLog('没有可刷新的订阅来源', true);
-    return;
-  }
-  importChain({ url: state.chain.sourceUrl }, '订阅刷新');
-}
-
 async function clearChain() {
-  if (!confirm('清除已导入的链式代理？')) return;
+  // 确认已由 chain-clear 弹窗完成（net-dialog 样式），这里只执行。
   try {
     await api('/chain-proxy', { method: 'DELETE' });
     addLog('链式代理已清除');
@@ -2118,13 +2134,12 @@ function wireSettingsEvents() {
   $('#addCidr')?.addEventListener('click', addCidr);
   $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
 
-  // 链式代理子页：订阅导入/刷新、文件导入、清除、开关
-  $('#chainImportUrl')?.addEventListener('click', importChainFromUrl);
-  $('#chainUrlInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') importChainFromUrl(); });
-  $('#chainRefreshUrl')?.addEventListener('click', refreshChainFromUrl);
+  // 链式代理子页：订阅导入/刷新（单按钮复用）、文件导入、清除、开关
+  $('#chainImportUrl')?.addEventListener('click', submitChainUrl);
+  $('#chainUrlInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitChainUrl(); });
   $('#chainPickFile')?.addEventListener('click', () => $('#chainFileInput')?.click());
   $('#chainFileInput')?.addEventListener('change', importChainFromFile);
-  $('#chainClear')?.addEventListener('click', clearChain);
+  $('#chainClear')?.addEventListener('click', openChainClearDialog);
   $('#chainEnabledSwitch')?.addEventListener('change', (e) => {
     const next = Boolean(e.target.selected);
     if (next && state.chain.count === 0) {
