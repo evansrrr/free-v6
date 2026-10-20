@@ -64,6 +64,20 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 /* ── Utility ── */
 
+// 所有不可信字符串进入 innerHTML 前必须过这里：链式代理节点名来自第三方
+// 订阅（可携带 `<img onerror=…>` 之类载荷），日志又会回显解析错误里的
+// 节点名——不转义的话 webview 里执行任意脚本 = 窃取 helper token 打穿
+// 鉴权。属性上下文（title/data-*）同样覆盖（引号转义）。dataset 读回时
+// 浏览器会解码实体，switchProxy 拿到的仍是原始名字。
+function escapeHTML(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -181,7 +195,7 @@ function renderLogs() {
   const el = $('#logList');
   if (!el) return;
   el.innerHTML = state.logs.map(l =>
-    `<div class="log-entry${l.error ? ' error' : ''}"><span class="log-time">${l.time}</span><span class="log-msg">${l.msg}</span></div>`
+    `<div class="log-entry${l.error ? ' error' : ''}"><span class="log-time">${escapeHTML(l.time)}</span><span class="log-msg">${escapeHTML(l.msg)}</span></div>`
   ).join('');
 }
 
@@ -1712,8 +1726,8 @@ function renderNodeGrid() {
       else { latencyClass = 'bad'; latencyText = delay >= 5000 ? 'Timeout' : delay + ' ms'; }
     }
 
-    return `<div class="node-card${selected ? ' selected' : ''}${testing ? ' testing' : ''}" data-name="${name}">
-      <div class="node-name" title="${name}">${name}</div>
+    return `<div class="node-card${selected ? ' selected' : ''}${testing ? ' testing' : ''}" data-name="${escapeHTML(name)}">
+      <div class="node-name" title="${escapeHTML(name)}">${escapeHTML(name)}</div>
       <div class="node-latency ${latencyClass}">${latencyText}</div>
     </div>`;
   }).join('');
@@ -1859,7 +1873,7 @@ function renderCidrs() {
     return;
   }
   list.innerHTML = state.cidrs.map((cidr, i) =>
-    `<div class="cidr-item"><span>${cidr}</span><md-icon-button class="cidr-remove" data-idx="${i}" aria-label="删除"><md-icon>close</md-icon></md-icon-button></div>`
+    `<div class="cidr-item"><span>${escapeHTML(cidr)}</span><md-icon-button class="cidr-remove" data-idx="${i}" aria-label="删除"><md-icon>close</md-icon></md-icon-button></div>`
   ).join('');
 
   list.querySelectorAll('.cidr-remove').forEach(btn => {
