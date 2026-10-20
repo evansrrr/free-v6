@@ -40,6 +40,9 @@ const state = {
   // mihomo external-controller secret（helper /status 下发）：9090 直连
   // 携带的 Bearer；为空（尚无 secret 文件）时不加头。
   controllerSecret: '',
+  // 链式代理（设置 → 核心）：/chain-proxy 权威状态 + 接入点页当前分组页签
+  chain: { enabled: false, count: 0, sourceType: '', sourceUrl: '', names: [], error: '' },
+  activeProxyTab: 'access',
 
   // Runtime
   runtimePresent: false,
@@ -910,7 +913,7 @@ function persistSettings() {
     addLog('helper 未连接，设置未保存', true);
     return Promise.resolve(false);
   }
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, chainEnabled: state.chain.enabled }) })
     .then(() => { addLog('设置已保存'); return true; })
     .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
 }
@@ -1276,6 +1279,8 @@ async function refreshBackendState() {
       state.runtimePresent = Boolean(runtime.present);
       state.runtimeChecked = true;
     } catch (_) { /* ignore */ }
+    // 链式代理状态：拿不到不影响主流程（helper 刚回过 /status，这里基本必成）
+    await refreshChainStatus();
     if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
 
     updateConnectionChip(true);
@@ -1613,9 +1618,26 @@ function wireEvents() {
   });
 }
 
-/* ── Proxy Page (simplified: auto-select group only) ──────────── */
+/* ── Proxy Page (接入点 / 链式代理两个分组) ─────────────────────── */
 
 const AUTO_SELECT_GROUP = '♻️ 自动选择';
+// 必须与 internal/mihomo 的 ChainGroup 逐字符一致（分组名进 mihomo API 路径）
+const CHAIN_GROUP = '🔗 链式代理';
+
+// 当前页签对应读/写的 mihomo 分组：接入点沿用自动选择组，链式用导入分组。
+function activeProxyGroupKey() {
+  return state.activeProxyTab === 'chain' ? CHAIN_GROUP : AUTO_SELECT_GROUP;
+}
+
+// 页签切换：清掉上一分组的列表/延迟数据再拉当前分组，避免串数据。
+function setProxyTab(tab) {
+  state.activeProxyTab = tab === 'chain' ? 'chain' : 'access';
+  $$('#proxiesTabs .setting-seg').forEach(chip => {
+    chip.selected = chip.dataset.proxyTab === state.activeProxyTab;
+  });
+  clearProxyList();
+  fetchProxies();
+}
 
 // 免流停止后清空接入点列表与延迟测试结果，接入点页回到空态。
 // setRunning(false) 统一触发：FAB 停止 / 停止并退出 / 轮询检测到已停止 /
@@ -1636,7 +1658,7 @@ async function fetchProxies() {
     const resp = await fetch('http://127.0.0.1:9090/proxies', { headers: controllerHeaders() });
     if (!resp.ok) return;
     const data = await resp.json();
-    const info = data.proxies?.[AUTO_SELECT_GROUP];
+    const info = data.proxies?.[activeProxyGroupKey()];
     if (!info) return;
     state.proxyGroup = {
       now: info.now || '',
@@ -1652,7 +1674,15 @@ function renderNodeGrid() {
 
   const group = state.proxyGroup;
   if (!group || !group.all.length) {
-    el.innerHTML = '<div class="empty-state"><md-icon class="empty-state-icon">cloud_off</md-icon><span>请先启动免流模式以加载节点列表</span></div>';
+    // 链式分组在「运行中却无链」（导入发生在启动之后）时给出重启提示，
+    // 而不是笼统的“请先启动”。
+    let message = '请先启动免流模式以加载节点列表';
+    if (state.activeProxyTab === 'chain') {
+      message = state.proxyRunning
+        ? '当前免流未启用链式代理，重启免流后生效'
+        : '启动免流模式以加载链式代理节点';
+    }
+    el.innerHTML = `<div class="empty-state"><md-icon class="empty-state-icon">cloud_off</md-icon><span>${message}</span></div>`;
     return;
   }
 
@@ -1696,7 +1726,7 @@ function renderNodeGrid() {
 async function switchProxy(name) {
   if (!state.proxyRunning || !AUTO_SELECT_GROUP) return;
   try {
-    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(AUTO_SELECT_GROUP)}`, {
+    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(activeProxyGroupKey())}`, {
       method: 'PUT',
       headers: controllerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name }),
@@ -1789,6 +1819,12 @@ function resetFab() {
 
 function wireProxyEvents() {
   $('#delayTestFab')?.addEventListener('click', runDelayTest);
+  // 接入点/链式代理分组页签（md-filter-chip 自身切换 selected，这里只换数据）
+  $$('#proxiesTabs .setting-seg').forEach(chip => {
+    chip.addEventListener('click', () => {
+      if (chip.dataset.proxyTab) setProxyTab(chip.dataset.proxyTab);
+    });
+  });
 }
 
 /* Auto-run one delay test after 免流模式 starts */
@@ -1891,6 +1927,121 @@ function updateSettingsUI() {
   if (warpBtn) warpBtn.textContent = state.warpRegistered ? '重新注册' : '注册';
 }
 
+/* ── Chain proxy (设置 → 核心 → 链式代理) ─────────────────────── */
+
+// 以 helper 的 GET /chain-proxy 为准刷新本地状态；helper 离线时保留上次
+// 已知状态（设置页不至于把 pill 闪回未导入）。
+async function refreshChainStatus() {
+  try {
+    const chain = await api('/chain-proxy');
+    state.chain = {
+      enabled: Boolean(chain.enabled),
+      count: chain.count || 0,
+      sourceType: chain.sourceType || '',
+      sourceUrl: chain.sourceUrl || '',
+      names: chain.names || [],
+      error: chain.error || '',
+    };
+  } catch (_) { /* helper offline: keep previous */ }
+  updateChainUI();
+}
+
+// 同步链式状态到设置页 pill/开关/来源行与接入点页分组页签。
+function updateChainUI() {
+  const pill = $('#chainPill');
+  if (pill) {
+    pill.textContent = state.chain.count > 0 ? `${state.chain.count} 个节点` : '未导入';
+    pill.className = state.chain.count > 0 ? 'setting-pill ready' : 'setting-pill';
+  }
+  const sw = $('#chainEnabledSwitch');
+  if (sw) sw.selected = state.chain.enabled;
+  const refreshBtn = $('#chainRefreshUrl');
+  if (refreshBtn) refreshBtn.hidden = state.chain.sourceType !== 'url';
+  const clearBtn = $('#chainClear');
+  if (clearBtn) clearBtn.hidden = state.chain.count === 0 && !state.chain.sourceType;
+  const statusLine = $('#chainStatusLine');
+  if (statusLine) {
+    if (state.chain.error) {
+      statusLine.textContent = `内容异常: ${state.chain.error}`;
+    } else if (state.chain.count === 0) {
+      statusLine.textContent = '尚未导入';
+    } else if (state.chain.sourceType === 'url') {
+      statusLine.textContent = `订阅：${state.chain.sourceUrl}（${state.chain.count} 个节点）`;
+    } else {
+      statusLine.textContent = `本地文件（${state.chain.count} 个节点）`;
+    }
+  }
+  const tabs = $('#proxiesTabs');
+  if (tabs) tabs.hidden = state.chain.count === 0;
+  // 链式被清除时页签必须归位，否则停在空分组上
+  if (state.chain.count === 0 && state.activeProxyTab !== 'access') setProxyTab('access');
+}
+
+async function importChain(body, label) {
+  try {
+    const result = await api('/chain-proxy', { method: 'PUT', body: JSON.stringify(body) });
+    addLog(`链式代理${label}成功：${result.count} 个节点`);
+    showToast(`已导入 ${result.count} 个链式节点`);
+    await refreshChainStatus();
+    // 运行中的 mihomo 是启动时的配置——此刻只让页签/状态就位，节点本身
+    // 要重启免流才进链（分组空态文案会提示）。
+    fetchProxies();
+    return true;
+  } catch (e) {
+    addLog(`链式代理${label}失败: ${e.message}`, true);
+    return false;
+  }
+}
+
+function importChainFromUrl() {
+  const url = $('#chainUrlInput')?.value?.trim();
+  if (!url) {
+    addLog('请填写订阅链接', true);
+    return;
+  }
+  importChain({ url }, '订阅导入');
+}
+
+async function importChainFromFile(event) {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    addLog('链式代理文件超过 2MB 上限', true);
+    input.value = '';
+    return;
+  }
+  try {
+    const content = await file.text();
+    await importChain({ content }, '文件导入');
+  } catch (e) {
+    addLog(`读取文件失败: ${e.message}`, true);
+  }
+  input.value = ''; // 同一文件允许再次选择
+}
+
+function refreshChainFromUrl() {
+  if (!state.chain.sourceUrl) {
+    addLog('没有可刷新的订阅来源', true);
+    return;
+  }
+  importChain({ url: state.chain.sourceUrl }, '订阅刷新');
+}
+
+async function clearChain() {
+  if (!confirm('清除已导入的链式代理？')) return;
+  try {
+    await api('/chain-proxy', { method: 'DELETE' });
+    addLog('链式代理已清除');
+    showToast('链式代理已清除');
+    await refreshChainStatus();
+    clearProxyList();
+    fetchProxies();
+  } catch (e) {
+    addLog(`清除链式代理失败: ${e.message}`, true);
+  }
+}
+
 function wireSettingsEvents() {
   // Theme select（切换走色彩渐变过渡）
   $('#themeSelect')?.addEventListener('change', (e) => {
@@ -1947,10 +2098,30 @@ function wireSettingsEvents() {
     });
   };
   wireSubPage('#cidrSettingItem', '#cidrPage', '#cidrBack');
+  wireSubPage('#chainSettingItem', '#chainPage', '#chainBack');
 
   // Add whitelist entries
   $('#addCidr')?.addEventListener('click', addCidr);
   $('#cidrInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCidr(); });
+
+  // 链式代理子页：订阅导入/刷新、文件导入、清除、开关
+  $('#chainImportUrl')?.addEventListener('click', importChainFromUrl);
+  $('#chainUrlInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') importChainFromUrl(); });
+  $('#chainRefreshUrl')?.addEventListener('click', refreshChainFromUrl);
+  $('#chainPickFile')?.addEventListener('click', () => $('#chainFileInput')?.click());
+  $('#chainFileInput')?.addEventListener('change', importChainFromFile);
+  $('#chainClear')?.addEventListener('click', clearChain);
+  $('#chainEnabledSwitch')?.addEventListener('change', (e) => {
+    const next = Boolean(e.target.selected);
+    if (next && state.chain.count === 0) {
+      e.target.selected = false; // 程序化复位会再次触发 change，下面的 guard 拦住
+      addLog('尚未导入链式代理内容，无法开启', true);
+      return;
+    }
+    if (next === state.chain.enabled) return;
+    state.chain.enabled = next;
+    persistSettings(); // 主 PUT 携带 chainEnabled 当前值；成功日志由它统一打
+  });
 
   // Developer mode — 打开前必须弹窗确认（取消/遮罩/Esc → 保持关闭）；
   // 关闭直接生效。落库与失败拨回统一走 applyDevMode。

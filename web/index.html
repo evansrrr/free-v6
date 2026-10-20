@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN" data-theme="system">
 <head>
   <meta charset="UTF-8" />
@@ -184,6 +184,10 @@
 
       <!-- Proxies -->
       <section class="view" id="proxiesView">
+        <div class="setting-segmented" id="proxiesTabs" style="margin-bottom: 14px;" hidden>
+          <md-filter-chip class="setting-seg" id="proxyTabAccess" data-proxy-tab="access" label="接入点" selected></md-filter-chip>
+          <md-filter-chip class="setting-seg" id="proxyTabChain" data-proxy-tab="chain" label="链式代理"></md-filter-chip>
+        </div>
         <div class="node-grid" id="nodeGrid">
           <div class="empty-state">
             <md-icon class="empty-state-icon">cloud_off</md-icon>
@@ -316,6 +320,18 @@
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
             <md-divider></md-divider>
+            <div class="setting-item clickable" id="chainSettingItem">
+              <div class="setting-icon">
+                <md-icon>link</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">链式代理</div>
+                <div class="setting-desc">本机 → 接入点 → 自有代理 → 目标网站</div>
+              </div>
+              <span class="setting-pill" id="chainPill">未导入</span>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
+            </div>
+            <md-divider></md-divider>
             <div class="setting-item">
               <div class="setting-icon">
                 <md-icon>memory</md-icon>
@@ -416,6 +432,43 @@
             <md-filled-button id="addCidr">添加</md-filled-button>
           </div>
           <div class="cidr-list" id="cidrList"></div>
+        </div>
+
+        <div class="cidr-page" id="chainPage" style="display:none">
+          <div class="cidr-page-header">
+            <md-icon-button id="chainBack" aria-label="返回">
+              <md-icon>arrow_back</md-icon>
+            </md-icon-button>
+            <h2>链式代理</h2>
+          </div>
+          <p class="cidr-hint">导入 Clash/mihomo 格式的 yaml 文件或订阅链接。启动免流后链路：本机 → 接入点(masque) → 自有代理 → 目标网站，出口 IP 为自有代理。白名单/黑名单规则优先生效。</p>
+          <div class="cidr-input-row">
+            <md-outlined-text-field id="chainUrlInput" label="订阅链接 https://…" autocomplete="off"></md-outlined-text-field>
+            <md-filled-button id="chainImportUrl">导入</md-filled-button>
+            <md-filled-button id="chainRefreshUrl" hidden>刷新</md-filled-button>
+          </div>
+          <div class="cidr-input-row">
+            <md-filled-button id="chainPickFile">选择 yaml 文件</md-filled-button>
+            <input type="file" id="chainFileInput" accept=".yaml,.yml,application/x-yaml" hidden>
+          </div>
+          <div class="setting-item">
+            <div class="setting-icon">
+              <md-icon>toggle_on</md-icon>
+            </div>
+            <div class="setting-text">
+              <div class="setting-label">启用链式代理</div>
+              <div class="setting-desc">关闭后立即恢复直连 WARP 出口，已导入内容保留</div>
+            </div>
+            <md-switch id="chainEnabledSwitch" aria-label="启用链式代理"></md-switch>
+          </div>
+          <md-divider></md-divider>
+          <div class="setting-item">
+            <div class="setting-text">
+              <div class="setting-label">当前来源</div>
+              <div class="setting-desc" id="chainStatusLine">尚未导入</div>
+            </div>
+            <md-filled-button id="chainClear" hidden>清除</md-filled-button>
+          </div>
         </div>
       </section>
 
