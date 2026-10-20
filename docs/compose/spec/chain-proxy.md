@@ -1,14 +1,25 @@
 ---
 feature: chain-proxy
-status: in-progress
+status: delivered
 updated: 2026-10-20
 branch: feat/chain-proxy
-commits:
+commits: 9650916..802b41d
 ---
 
 # 链式代理（本机 → masque → 自有代理 → 目标）
 
 ## Report
+
+**What was built** — 设置页新增「链式代理」子页：Clash/mihomo 格式 yaml 文件（HTML file input）或订阅链接（helper 服务端拉取，仅导入时快照 + 手动刷新按钮）导入自有代理，含 2MB 上限、开关（导入自动开启）、清除。启动免流时若启用且已导入：解析注入 `dialer-proxy → 🚀 节点选择`（统一覆盖自带值，保证链路必经接入点）、追加 `🔗 链式代理` 分组、`MATCH` 改道该分组；随后用真实 `mihomo -t` 预校验，失败在网络快照前 400 拦下，启用却缺内容同样明确报错（绝不静默降级裸 WARP 出口）。接入点页出现「接入点 / 链式代理」双分组页签，各自读写对应 mihomo 分组。解析引入本仓库首个 Go 依赖 gopkg.in/yaml.v3（THIRD-PARTY 双清单 + 许可证文本随安装包分发）。审查发现的 CRITICAL——订阅节点名未转义进 `innerHTML` 的 XSS（可窃取 helper token）——已用共享 `escapeHTML` 封堵节点网格/日志/白名单全部非可信汇入点并复审通过。
+
+**Verification** — `go build`/`go vet`/`go test ./... -count=1`/`node --check`/`cargo check` 全绿。E2E-A：真实代码路径渲染 + 真实 `mihomo -t` → successful。E2E-B：渲染产物（仅实验室补丁：关 TUN/底层 DIRECT/移除 LAN 与规则集/DNS 关——masque 无法送达实验室内环回内层、github 拉取会绕链死循环）跑通数据面并三轮连过：链路 200 → 切死节点 204 且请求被阻断 → 切回 204 恢复，全程 controller secret 生效。E2E-C：真实 helper 进程矩阵（导入/坏内容/GET 只回名称/DELETE/无 token 401/恶意 Host 403/预检 204/响应无凭证字段）全 PASS。独立审查报 1 critical（XSS）→ 修复 → 聚焦复审 APPROVE。前端 Tauri 实机路径未跑（需提权桌面应用），静态走查 + 双端 E2E 覆盖。
+
+**Journey log**:
+- 动手前用真实 mihomo 验证 `dialer-proxy` 指向分组（-t + 双实例数据面），承重设计先证后写。
+- 渲染缩进 bug（链式块顶格 vs `proxies:` 2 空格项）被真实 -t 当场抓出——子串断言全过但没回读解析；已补 `yaml.Unmarshal` 回读单测防复发。
+- 实验室 E2E 两大假警报源：PowerShell→curl 传参引号被破坏（body 带空格即 000/Body invalid，改 `--data-binary @file` 根治）；规则集后台拉 github 超时会推迟 controller 就绪且其自身流量绕链形成死循环（实验室特有）。
+- yaml.v3 对 emoji 用 `\U` 转义、键按字母序重排——断言要对语义不对字节（`节点选择` 而非完整 emoji 行）。
+- 校园网墙 proxy.golang.org，`GOPROXY=https://goproxy.cn,direct` 才能取依赖。
 
 ## [S1] Problem
 
@@ -48,7 +59,7 @@ commits:
 ### 启动流程（helper startProxy）
 
 - `chainEnabled && 文件存在` 时：读文件 → 解析注入 → 合并渲染；随后（仅链式启用时）执行 **`mihomo.exe -t` 预校验**（新 `mihomo.TestConfig`，5s 超时），失败 → 400 返回 mihomo 原文，**发生在快照/网络改动之前**（当前顺序：渲染→geodata→写配置→自愈→快照，插在写配置后）。
-- 链式未启用：流程与现状完全一致（不跑 `-t`，零回归面）。
+- 链式未启用：流程与现状完全一致（不跑 `-t`，零回归面）。实施时 `-t` 超时取 15s（spec 初稿 5s，为 geodata 较慢机器留余量）。
 - 校验失败**不启动**并明确报错——不做静默降级（否则用户以为出口是自有代理、实际是 WARP）。
 
 ### 前端（web）
@@ -70,6 +81,8 @@ commits:
 ## [S3] Out of Scope
 
 - 按域名/规则选择性走链（v1 全量 MATCH 走链式，白名单除外）。
+- `mode: global/direct` 下 MATCH 不参与路由，链式不生效（链式语义绑定规则模式）。
+- `RULE-SET` 命中的国内流量仍路由到接入点组（WARP 出口），仅 MATCH 兜底流量走自有代理出口——如需国内流量也走自有代理需后续改规则目标，待产品确认。
 - 启动时自动刷新订阅、链式节点健康度/延迟的后台探测。
 - 订阅协议除 Clash/mihomo yaml 以外的格式（ssr/clash 明文转换等）。
 - 出口 IP 可视化校验、双出口统计。
@@ -77,8 +90,10 @@ commits:
 
 ## Tasks
 
-- [ ] T1: 引入 yaml.v3；`ParseChainProxies`（解析/校验/注入 dialer-proxy/名称冲突检测）+ 渲染集成 + 单测 — acceptance: `go test ./internal/mihomo` 全绿；链式关闭时渲染输出与旧版逐字节一致；开启时含 dialer-proxy、链式分组、MATCH 改道；冲突名/坏条目报错 (covers: S2 数据面)
-- [ ] T2: helper 端点 GET/PUT/DELETE `/api/v1/chain-proxy` + settings 三字段（省略即保留）+ 单测 — acceptance: `go test ./cmd/freev6-helper` 全绿；文件/URL 两路径、2MB 上限、只回名称计数、DELETE 清干净 (covers: S2 存储; depends: T1)
-- [ ] T3: startProxy 链式合并渲染 + `mihomo.TestConfig`(-t) 预校验 + 单测/E2E — acceptance: 链式启用时坏配置在快照前被 400 拦下；未启用时零变化；E2E 渲染产物 `-t` 通过 (covers: S2 启动; depends: T1)
-- [ ] T4: 前端设置子页（导入/刷新/清除/开关）+ 接入点双分组 + `GET /chain-proxy` 状态接入 — acceptance: `node --check` 通过；走查覆盖导入/刷新/切换/清除路径；**先解决 R1**（对齐现网切换请求形态，链式 PUT 实测可用） (covers: S2 前端; depends: T2)
-- [ ] T5: 端到端验证 + 回归 — acceptance: 真实 mihomo 对合并渲染配置 `-t` 通过；双实例数据面用**本功能渲染产物**复跑 PASS；helper 端点矩阵（token/guard 下）全 PASS；`go test ./...`/`vet`/`node --check` 全绿；无链式回归冒烟与上轮一致 (covers: S2 全部; depends: T3, T4)
+- [x] T1: 引入 yaml.v3；`ParseChainProxies`（解析/校验/注入 dialer-proxy/名称冲突检测）+ 渲染集成 + 单测 — acceptance: `go test ./internal/mihomo` 全绿；链式关闭时渲染输出与旧版逐字节一致；开启时含 dialer-proxy、链式分组、MATCH 改道；冲突名/坏条目报错 (covers: S2 数据面)
+- [x] T2: helper 端点 GET/PUT/DELETE `/api/v1/chain-proxy` + settings 三字段（省略即保留）+ 单测 — acceptance: `go test ./cmd/freev6-helper` 全绿；文件/URL 两路径、2MB 上限、只回名称计数、DELETE 清干净 (covers: S2 存储; depends: T1)
+- [x] T3: startProxy 链式合并渲染 + `mihomo.TestConfig`(-t) 预校验 + 单测/E2E — acceptance: 链式启用时坏配置在快照前被 400 拦下；未启用时零变化；E2E 渲染产物 `-t` 通过 (covers: S2 启动; depends: T1)
+- [x] T4: 前端设置子页（导入/刷新/清除/开关）+ 接入点双分组 + `GET /chain-proxy` 状态接入 — acceptance: `node --check` 通过；走查覆盖导入/刷新/切换/清除路径；**先解决 R1**（对齐现网切换请求形态，链式 PUT 实测可用） (covers: S2 前端; depends: T2)
+- [x] T5: 端到端验证 + 回归 — acceptance: 真实 mihomo 对合并渲染配置 `-t` 通过；双实例数据面用**本功能渲染产物**复跑 PASS；helper 端点矩阵（token/guard 下）全 PASS；`go test ./...`/`vet`/`node --check` 全绿；无链式回归冒烟与上轮一致 (covers: S2 全部; depends: T3, T4)
+
+> 审查后补丁（计入交付范围）：CRITICAL XSS 修复——`escapeHTML` 覆盖节点网格/日志/白名单 innerHTML 汇入点（commit 802b41d，聚焦复审 APPROVE）；THIRD-PARTY 双清单重编号去重。
