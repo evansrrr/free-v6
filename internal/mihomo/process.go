@@ -1,6 +1,7 @@
 package mihomo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,9 +9,30 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var ErrAlreadyRunning = errors.New("mihomo is already running")
+
+// TestConfig 跑真实 `mihomo -t` 校验渲染产物：链式合并可能引入 mihomo 自己
+// 才能发现的问题（未知 type、非法字段值…），必须在网络快照之前暴露。
+// 仅链式路径调用，经典路径不承担这份耗时与失败面。
+func TestConfig(binaryPath, configPath, homeDir string) error {
+	if strings.TrimSpace(binaryPath) == "" {
+		return errors.New("mihomo binary path is empty")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binaryPath, "-t", "-d", homeDir, "-f", configPath).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	details := strings.TrimSpace(string(output))
+	if details == "" {
+		details = err.Error()
+	}
+	return fmt.Errorf("mihomo -t: %s", details)
+}
 
 // Start 以 -d homeDir 显式固定 mihomo 的工作目录（GeoSite.dat、cache.db、
 // ruleset 缓存都落在这里）：不传时它取进程 cwd/可执行文件目录，不同机器

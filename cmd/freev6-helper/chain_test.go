@@ -215,3 +215,74 @@ func jsonEscape(value string) string {
 	encoded, _ := json.Marshal(value)
 	return strings.TrimSuffix(strings.TrimPrefix(string(encoded), `"`), `"`)
 }
+
+// startProxy 的链式闸门放在端口/权限检查之前（纯读输入校验），所以非提权
+// 环境也能直接单测三条契约：启用却缺内容 → 400 明确报错；内容损坏 → 400；
+// 未启用 → 根本不读链式文件。
+func TestStartProxyChainGates(t *testing.T) {
+	startBody := `{"mode":"rule","campusCidrs":["edu.cn"],"devMode":false}`
+	runStart := func(h *helper) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/start", strings.NewReader(startBody))
+		recorder := httptest.NewRecorder()
+		h.startProxy(recorder, request)
+		return recorder
+	}
+	chainErrMarkers := []string{"链式代理已启用但导入内容缺失", "解析链式代理失败"}
+
+	t.Run("enabled but snapshot missing", func(t *testing.T) {
+		h := &helper{root: t.TempDir()}
+		if rec := chainRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(chainTestYAML)+`"}`); rec.Code != http.StatusOK {
+			t.Fatalf("setup import failed: %s", rec.Body.String())
+		}
+		if err := os.Remove(h.chainPath()); err != nil {
+			t.Fatal(err)
+		}
+		rec := runStart(h)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "重新导入") {
+			t.Fatalf("status = %d body = %s, want 400 about re-import", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("enabled with corrupt snapshot", func(t *testing.T) {
+		h := &helper{root: t.TempDir()}
+		if rec := chainRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(chainTestYAML)+`"}`); rec.Code != http.StatusOK {
+			t.Fatalf("setup import failed: %s", rec.Body.String())
+		}
+		if err := os.WriteFile(h.chainPath(), []byte("proxies: [definitely not yaml"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rec := runStart(h)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "解析链式代理失败") {
+			t.Fatalf("status = %d body = %s, want 400 parse failure", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("disabled ignores chain file", func(t *testing.T) {
+		h := &helper{root: t.TempDir()}
+		if err := os.MkdirAll(filepath.Dir(h.chainPath()), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(h.chainPath(), []byte("garbage: ["), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rec := runStart(h)
+		for _, marker := range chainErrMarkers {
+			if strings.Contains(rec.Body.String(), marker) {
+				t.Fatalf("disabled chain must skip parsing, got: %s", rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("enabled valid passes the gate", func(t *testing.T) {
+		h := &helper{root: t.TempDir()}
+		if rec := chainRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(chainTestYAML)+`"}`); rec.Code != http.StatusOK {
+			t.Fatalf("setup import failed: %s", rec.Body.String())
+		}
+		rec := runStart(h)
+		for _, marker := range chainErrMarkers {
+			if strings.Contains(rec.Body.String(), marker) {
+				t.Fatalf("valid chain must pass the gate, got: %s", rec.Body.String())
+			}
+		}
+	})
+}

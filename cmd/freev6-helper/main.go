@@ -352,6 +352,27 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if input.CampusCIDRs == nil {
 		input.CampusCIDRs = defaultCampusCIDRs()
 	}
+	// 链式代理：启用时先解析导入内容——纯读、无副作用，放在端口/权限检查
+	// 之前让坏输入最快失败。启用却缺内容必须明确报错，绝不静默降级成裸
+	// WARP 出口（用户以为出口是自有代理，实际不是，是语义欺诈）。
+	storedForChain, chainSettingsErr := h.loadSettings()
+	if chainSettingsErr != nil {
+		storedForChain = defaultSettings()
+	}
+	var chainProxies []mihomo.ChainProxy
+	if storedForChain.ChainEnabled {
+		chainData, readErr := os.ReadFile(h.chainPath())
+		if readErr != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "链式代理已启用但导入内容缺失，请在设置中重新导入"})
+			return
+		}
+		parsed, parseErr := mihomo.ParseChainProxies(chainData)
+		if parseErr != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "解析链式代理失败: " + parseErr.Error()})
+			return
+		}
+		chainProxies = parsed
+	}
 	if err := mihomo.CheckListenPorts(); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first"})
 		return
@@ -399,6 +420,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		Blacklist:        blacklist,
 		DevMode:          input.DevMode,
 		ControllerSecret: controllerSecret,
+		ChainProxies:     chainProxies,
 	})
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -430,6 +452,19 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})
 		return
+	}
+	// 链式启用时用真实 -t 校验合并产物：未知 type/非法字段等只有 mihomo 能
+	// 发现的问题，必须在残留自愈与网络快照（接下来的副作用）之前暴露。
+	if len(chainProxies) > 0 {
+		chainBinary, discoverErr := mihomo.DiscoverBinary(h.root)
+		if discoverErr != nil {
+			writeJSON(writer, http.StatusNotFound, map[string]string{"error": discoverErr.Error()})
+			return
+		}
+		if testErr := mihomo.TestConfig(chainBinary, configPath, stateDir); testErr != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": testErr.Error()})
+			return
+		}
 	}
 	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
 	healLeftoverSnapshot(snapshotPath)
