@@ -50,6 +50,12 @@ type settings struct {
 	// 切到 FreeV6 TUN（ICS 拓扑切换），热点设备走电脑的代理出口，
 	// 停止免流自动还原；默认关闭。
 	HotspotShare bool `json:"hotspotShare"`
+	// 链式代理（设置 → 核心）：来源与开关由 /api/v1/chain-proxy 端点维护。
+	// GUI 的 settings PUT 不携带这些键 —— 必须「省略即保留」，否则每次
+	// 保存设置都会悄悄关掉链式、把出口切回裸 WARP。
+	ChainEnabled    bool   `json:"chainEnabled"`
+	ChainSourceType string `json:"chainSourceType"`
+	ChainSourceURL  string `json:"chainSourceUrl"`
 }
 
 type proxyRequest struct {
@@ -101,6 +107,7 @@ func main() {
 	mux.HandleFunc("/api/v1/update/download", h.updateDownload)
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
+	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
 	// Per-launch bearer token minted by the desktop shell: without it the
 	// helper must not serve an unauthenticated loopback API (any browser
 	// page could drive proxy start/stop and settings otherwise).
@@ -275,6 +282,17 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		// 同上：省略 hotspotShare 时保留存储值，否则 bool 零值会悄悄关掉热点共享
 		if !jsonKeyPresent(body, "hotspotShare") {
 			current.HotspotShare = persisted.HotspotShare
+		}
+		// 同上：链式代理三键由 chain-proxy 端点独占维护，settings PUT 永远
+		// 省略它们 —— 保留存储值，避免保存设置时清掉导入状态。
+		if !jsonKeyPresent(body, "chainEnabled") {
+			current.ChainEnabled = persisted.ChainEnabled
+		}
+		if !jsonKeyPresent(body, "chainSourceType") {
+			current.ChainSourceType = persisted.ChainSourceType
+		}
+		if !jsonKeyPresent(body, "chainSourceUrl") {
+			current.ChainSourceURL = persisted.ChainSourceURL
 		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
