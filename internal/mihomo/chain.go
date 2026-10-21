@@ -43,12 +43,20 @@ func ParseChainProxies(content []byte) ([]ChainProxy, error) {
 	reserved := reservedChainNames()
 	seen := make(map[string]bool, len(document.Proxies))
 	result := make([]ChainProxy, 0, len(document.Proxies))
+	// direct 类型 = 把流量原样从本机真实网卡送出去：混进链式分组后
+	// “看起来在链上、实际真实 IP 直通”，是明确的泄露向量，直接拒绝。
+	// dns 类型与代理无关，同样拒绝。
+	forbiddenTypes := map[string]bool{"direct": true, "dns": true}
 	for index, entry := range document.Proxies {
 		name, _ := entry["name"].(string)
 		name = strings.TrimSpace(name)
 		kind, _ := entry["type"].(string)
-		if name == "" || strings.TrimSpace(kind) == "" {
+		kind = strings.ToLower(strings.TrimSpace(kind))
+		if name == "" || kind == "" {
 			return nil, fmt.Errorf("第 %d 个代理缺少 name 或 type 字段", index+1)
+		}
+		if forbiddenTypes[kind] {
+			return nil, fmt.Errorf("第 %d 个代理类型 %q 不允许导入（%s 类型会绕过接入点直连，泄露真实出口 IP）", index+1, kind, kind)
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("代理名称重复: %q", name)

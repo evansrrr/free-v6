@@ -209,9 +209,15 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	b.WriteString("  - name: 🛑 全球拦截\n    type: select\n    proxies:\n      - REJECT\n\n")
 	b.WriteString("  - name: 🐟 漏网之鱼\n    type: select\n    proxies:\n      - 🚀 节点选择\n      - ♻️ 自动选择\n\n")
 
-	b.WriteString("rule-providers:\n")
-	for i, ruleSet := range ruleSets {
-		fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
+	// 链式模式 = 全流量经自有代理：国内规则集原来只通向接入点（WARP
+	// 出口），与 MATCH→链式 形成“国内走 WARP、其他走自有代理”的出口
+	// 分裂，且规则集后台拉取还会绕链外联。链式启用时整体不渲染
+	// providers 与 RULE-SET 规则，非豁免流量统一 MATCH→🔗。
+	if len(options.ChainProxies) == 0 {
+		b.WriteString("rule-providers:\n")
+		for i, ruleSet := range ruleSets {
+			fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
+		}
 	}
 	b.WriteString("\nrules:\n")
 	if !options.DevMode {
@@ -232,8 +238,10 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		}
 		fmt.Fprintf(&b, "  - %s,%s,DIRECT,no-resolve\n", kind, target)
 	}
-	for i, ruleSet := range ruleSets {
-		fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
+	if len(options.ChainProxies) == 0 {
+		for i, ruleSet := range ruleSets {
+			fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
+		}
 	}
 	b.WriteString("  - GEOIP,LAN,DIRECT,no-resolve\n")
 	// 链式启用时全部流量（白名单/黑名单除外）先过自有代理；

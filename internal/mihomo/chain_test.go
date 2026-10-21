@@ -185,3 +185,52 @@ func TestRenderWithoutChainUnchanged(t *testing.T) {
 		t.Fatal("non-chain MATCH target changed")
 	}
 }
+
+func TestParseChainProxiesRejectsLeakyTypes(t *testing.T) {
+	cases := map[string]string{
+		"direct": "proxies:\n  - {name: leaky, type: direct}\n",
+		"dns":    "proxies:\n  - {name: weird, type: dns}\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseChainProxies([]byte(content))
+			if err == nil || !strings.Contains(err.Error(), "不允许导入") {
+				t.Fatalf("err = %v, want rejection for type %s", err, name)
+			}
+		})
+	}
+}
+
+// 链式启用 = 全流量经自有代理：不得再出现指向接入点的 RULE-SET 分流
+// 与 rule-providers（它们造成“国内域名走 WARP 出口”的分裂，并在后台
+// 拉取时绕链外联）。未启用时两者必须原样保留。
+func TestRenderChainDropsRuleSetSplitEgress(t *testing.T) {
+	chains, err := ParseChainProxies([]byte(sampleSubscription))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withChain, err := RenderWithOptions(chainTestDevice(), RenderOptions{
+		Mode:         ModeRule,
+		CampusCIDRs:  []string{"edu.cn"},
+		ChainProxies: chains,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"rule-providers:", "RULE-SET,"} {
+		if strings.Contains(withChain, unwanted) {
+			t.Errorf("chain config must not contain %q (split-egress path)", unwanted)
+		}
+	}
+	if !strings.Contains(withChain, "MATCH,🔗 链式代理") || !strings.Contains(withChain, "DOMAIN-SUFFIX,edu.cn,DIRECT") {
+		t.Fatal("chain config must keep whitelist rules and chain MATCH target")
+	}
+
+	withoutChain, err := RenderWithOptions(chainTestDevice(), RenderOptions{Mode: ModeRule, CampusCIDRs: []string{"edu.cn"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(withoutChain, "rule-providers:") || !strings.Contains(withoutChain, "RULE-SET,rule00") {
+		t.Fatal("non-chain config must keep rule-providers and RULE-SET lines unchanged")
+	}
+}
