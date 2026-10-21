@@ -1,4 +1,4 @@
-﻿/* freev6 — Modern Tool SaaS theme */
+/* freev6 — Modern Tool SaaS theme */
 
 /* ── Design Tokens ── */
 
@@ -535,6 +535,8 @@ md-icon-button > md-icon {
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast-icon { --md-icon-size: 16px; color: var(--green); }
+/* 失败提示：图标换红叉（app.js 切换 .toast-error 与图标字符） */
+.toast-error .toast-icon { color: var(--red); }
 .toast-text { line-height: 1.5; }
 
 /* ── Log Drawer ── */

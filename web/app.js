@@ -948,11 +948,16 @@ function persistSettings() {
 
 let toastTimer = null;
 
-function showToast(message) {
+function showToast(message, type = 'success') {
   const el = $('#toast');
   const text = $('#toastText');
+  const icon = el?.querySelector('.toast-icon');
   if (!el || !text) return;
   text.textContent = message;
+  // 失败提示用红叉（Material Symbols 的 close 字形），成功保持绿勾；
+  // md-icon 的字形来自 light DOM 文本，textContent 直接换字形即可。
+  if (icon) icon.textContent = type === 'error' ? 'close' : 'check_circle';
+  el.classList.toggle('toast-error', type === 'error');
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
@@ -2055,11 +2060,11 @@ async function importChain(body, label) {
 }
 
 // 导入类失败统一提示：日志留完整错误（yaml 定位信息可能很长），
-// toast 只给一眼能读完的短句。
+// toast 只给一眼能读完的短句，图标用红叉。
 function chainImportFailed(logMessage, toastPrefix, detail = '') {
   addLog(logMessage, true);
   const text = detail ? `${toastPrefix}：${detail}` : toastPrefix;
-  showToast(text.length > 48 ? `${text.slice(0, 47)}…` : text);
+  showToast(text.length > 48 ? `${text.slice(0, 47)}…` : text, 'error');
 }
 
 function submitChainUrl() {
