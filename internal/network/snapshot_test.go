@@ -73,3 +73,18 @@ func TestParsePowerShellSnapshotRejectsInvalidJSON(t *testing.T) {
 		t.Fatal("expected invalid JSON error")
 	}
 }
+
+// 空快照（PowerShell 零输出或全被逐项过滤）必须报错而不是落盘空基线——
+// 空基线会让停止/还原变成无操作，把改过的网络状态永久留在切换态。
+func TestParsePowerShellSnapshotRejectsEmpty(t *testing.T) {
+	for name, data := range map[string]string{
+		"whitespace only": "   \n\t",
+		"empty array":     "[]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParsePowerShellSnapshot([]byte(data)); err == nil {
+				t.Fatal("expected error for empty snapshot input")
+			}
+		})
+	}
+}

@@ -34,9 +34,16 @@ type InterfaceSnapshot struct {
 // json.Unmarshal 会把无效字节替换成 U+FFFD，快照里的中文网卡名
 // （如 以太网）就烂掉，netsh 还原时找不到网卡 → 自愈卡死启动。
 // 与 internal/network/ics.go 的 psHeader 同一机制。
-const PowerShellSnapshotCommand = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + `Get-NetIPConfiguration | Select-Object InterfaceAlias,InterfaceIndex,IPv4DefaultGateway,IPv6DefaultGateway,DNSServer | ConvertTo-Json -Depth 6 -Compress`
+// 逐网卡 try：Get-NetIPConfiguration 对半移除/状态抖动的网卡会抛终止性
+// 错误（重启免流时 FreeV6TUN 正在消失、虚拟网卡热插拔），整条管道直接
+// exit 1 —— 跳过坏网卡、保住其余基线。foreach 是语句不能直接做管道左值，
+// 必须包成 $(...) 子表达式。
+const PowerShellSnapshotCommand = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + `$(foreach ($cfg in Get-NetIPConfiguration -ErrorAction SilentlyContinue) { try { $cfg | Select-Object InterfaceAlias,InterfaceIndex,IPv4DefaultGateway,IPv6DefaultGateway,DNSServer -ErrorAction Stop } catch { } }) | ConvertTo-Json -Depth 6 -Compress`
 
 func ParsePowerShellSnapshot(data []byte) (Snapshot, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return Snapshot{}, fmt.Errorf("empty network snapshot (PowerShell produced no output)")
+	}
 	var raw any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&raw); err != nil {
@@ -69,6 +76,11 @@ func ParsePowerShellSnapshot(data []byte) (Snapshot, error) {
 			continue
 		}
 		snapshot.Interfaces = append(snapshot.Interfaces, interfaceSnapshot)
+	}
+	// 空快照绝不能落盘：后续恢复会变成无操作，等于把改过的网络状态
+	// 永久留在切换态。空结果视为本次抓取失败（可重试）。
+	if len(snapshot.Interfaces) == 0 {
+		return Snapshot{}, fmt.Errorf("network snapshot is empty")
 	}
 	return snapshot, nil
 }
