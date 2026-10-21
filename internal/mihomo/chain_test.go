@@ -234,3 +234,35 @@ func TestRenderChainDropsRuleSetSplitEgress(t *testing.T) {
 		t.Fatal("non-chain config must keep rule-providers and RULE-SET lines unchanged")
 	}
 }
+
+// UDP 泄露兜底：REJECT 规则必须在 MATCH 之后（依赖 mihomo match() 的
+// skip-continue——节点不支持 UDP 时 MATCH 被跳过才会落到它）；
+// 未启用链式时不得出现该规则。
+func TestRenderChainAppendsUdpCatchAfterMatch(t *testing.T) {
+	chains, err := ParseChainProxies([]byte(sampleSubscription))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withChain, err := RenderWithOptions(chainTestDevice(), RenderOptions{
+		Mode: ModeRule, CampusCIDRs: []string{"edu.cn"}, ChainProxies: chains,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchIdx := strings.Index(withChain, "MATCH,🔗 链式代理")
+	catchIdx := strings.Index(withChain, "NETWORK,UDP,REJECT")
+	if matchIdx < 0 || catchIdx < 0 {
+		t.Fatalf("chain config missing MATCH or UDP catch rule (match=%d catch=%d)", matchIdx, catchIdx)
+	}
+	if catchIdx < matchIdx {
+		t.Fatal("UDP REJECT catch must come AFTER MATCH so capable nodes still chain UDP")
+	}
+
+	withoutChain, err := RenderWithOptions(chainTestDevice(), RenderOptions{Mode: ModeRule, CampusCIDRs: []string{"edu.cn"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withoutChain, "NETWORK,UDP,REJECT") {
+		t.Fatal("non-chain config must not contain the UDP catch rule")
+	}
+}
