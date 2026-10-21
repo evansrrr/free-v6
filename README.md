@@ -43,8 +43,7 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 
 - [ ] 更换字体
 - [ ] 重置设置
-- [ ] 崩溃清理与残留进程恢复
-- [x] 本地 API 鉴权
+- [ ] 崩溃清理与残留进程
 
 ## 免责声明
 
