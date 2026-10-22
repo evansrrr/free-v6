@@ -143,7 +143,12 @@ async function api(path, options = {}) {
     }
   }
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    // 机器可读错误码（如 port-conflict）随错误对象上抛，上层据此给精准提示
+    error.code = payload.code;
+    throw error;
+  }
   return payload;
 }
 
@@ -331,7 +336,7 @@ async function startProxyFlow(auto = false) {
       if (state.hotspotShare) addLog('热点共享：正在切换，移动热点将短暂重启');
       started = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
     } catch (e) {
-      return { ok: false, reason: 'api', message: e.message };
+      return { ok: false, reason: 'api', message: e.message, code: e.code };
     }
     setRunning(true);
     // 启动响应携带本轮渲染所用的 controller secret，先于下一次 /status
@@ -379,6 +384,8 @@ function reportStartFailure(res) {
     addLog(`启动已取消：当前网络不支持免流${res.detail || ''}`, true);
   } else {
     addLog(`操作失败: ${res.message}`, true);
+    // 端口被占（其他/残留的代理软件或上次的 mihomo）：toast 给可执行的指引
+    if (res.code === 'port-conflict') showToast('请关闭并退出其他代理软件', 'error');
   }
 }
 
@@ -391,8 +398,8 @@ function reportStartFailure(res) {
 // 每个会话只走一轮：启动成功、失败或用户手动接管（FAB 启动/停止）后不再自动尝试。
 const autoRun = { armed: false, done: false, startupHandled: false, tries: 0, offlineTries: 0, regTries: 0, timer: null, lastWhy: '' };
 const AUTO_RUN_RETRY_MS = 5000;
-const AUTO_RUN_MAX_TRIES = 60;       // 联网但未就绪的重试上限（≈5 分钟，覆盖开机后 IPv6 缓慢获取）
-const AUTO_RUN_MAX_OFFLINE = 120;    // 离线等待上限（≈10 分钟，开机自启等网络恢复）
+const AUTO_RUN_MAX_TRIES = 60;       // 短预算：已联网但接口/凭据类瞬态未就绪（≈5 分钟）
+const AUTO_RUN_MAX_OFFLINE = 120;    // 长预算：开机冷启动「时机未到」类（≈10 分钟）
 const AUTO_RUN_MAX_REG_TRIES = 3;    // WARP 凭据自动补注册次数
 
 function disarmAutoRun() {
@@ -408,7 +415,7 @@ function scheduleAutoRun(delay) {
   if (autoRun.timer) clearTimeout(autoRun.timer);
   autoRun.timer = setTimeout(() => {
     autoRun.timer = null;
-    runAutoStart().catch((e) => autoRunFail({ reason: 'api', message: e.message }));
+    runAutoStart().catch((e) => autoRunFail({ reason: 'api', message: e.message, code: e.code }));
   }, delay);
 }
 
@@ -431,24 +438,29 @@ function maybeArmAutoRun() {
   scheduleAutoRun(1200);
 }
 
-function autoRunRetry(why) {
-  if (navigator.onLine) {
+function autoRunRetry(why, long = false) {
+  // long = 开机冷启动「时机未到」类（完全离线 / 无校园 IPv6）：走 10 分钟
+  // 长预算。不能只看 navigator.onLine——L2 一连上它就是 true，而校园 v6
+  // 前缀往往还要再等几分钟，5 分钟短预算会在网络真正就绪前把自动启动判死。
+  if (navigator.onLine && !long) {
     autoRun.tries += 1;
     if (autoRun.tries > AUTO_RUN_MAX_TRIES) {
       autoRunFail({ reason: 'timeout', message: `自动启动免流超时：${why}` });
       return;
     }
   } else {
-    // 离线等待单独计数（开机自启动常要等网络就绪），online 事件会立即重试
+    // 长预算计数，online 事件仍会立即触发重试
     autoRun.tries = 0;
     autoRun.offlineTries += 1;
     if (autoRun.offlineTries > AUTO_RUN_MAX_OFFLINE) {
-      autoRunFail({ reason: 'timeout', message: '自动启动免流超时：网络长时间未恢复' });
+      autoRunFail({ reason: 'timeout', message: `自动启动免流超时：${why}` });
       return;
     }
   }
   // 只在原因变化或每 6 次（≈30 秒）记一条，避免刷屏
-  if (why !== autoRun.lastWhy || (autoRun.tries > 0 && autoRun.tries % 6 === 0)) {
+  if (why !== autoRun.lastWhy ||
+      (autoRun.tries > 0 && autoRun.tries % 6 === 0) ||
+      (autoRun.offlineTries > 0 && autoRun.offlineTries % 6 === 0)) {
     autoRun.lastWhy = why;
     addLog(`自动运行免流：${why}，稍后重试`);
   }
@@ -461,6 +473,7 @@ async function autoRunFail(res) {
   autoRun.done = true;
   if (!state.autoRunProxy) return; // 期间被用户关掉 → 不再打扰
   addLog(`自动启动免流失败：${res.message}`, true);
+  if (res.code === 'port-conflict') showToast('请关闭并退出其他代理软件', 'error');
   try { await tauriInvoke('window_show'); } catch (_) { /* 浏览器预览无宿主 */ }
   if (res.reason === 'core') {
     showCoreDialog();
@@ -477,7 +490,7 @@ async function runAutoStart() {
   if (!autoRun.armed || !state.autoRunProxy) { disarmAutoRun(); return; }
   if (state.proxyRunning) { disarmAutoRun(); autoRun.done = true; return; }
   if (!state.helperOnline) { autoRunRetry('helper 未连接'); return; }
-  if (!navigator.onLine) { autoRunRetry('等待网络恢复'); return; }
+  if (!navigator.onLine) { autoRunRetry('等待网络恢复', true); return; }
   // /proxy/start 依赖 state/warp.json：凭据注册失败（多因网络未就绪）时按重试兜底，
   // 但只自动补注册有限次，避免反复打 Cloudflare
   if (!state.warpRegistered) {
@@ -495,8 +508,24 @@ async function runAutoStart() {
     autoRun.done = true;
     return;
   }
-  if (res.reason === 'offline' || res.reason === 'busy' || res.reason === 'helper') {
+  // 开机冷启动的「时机未到」用长预算重试：v6 探测失败、此刻 v6 尚非校园
+  // 前缀（网卡半就绪的瞬态假象）都不该一击致命地弹窗放弃。
+  if (res.reason === 'offline' || res.reason === 'net') {
+    autoRunRetry(res.message, true);
+    return;
+  }
+  if (res.reason === 'busy' || res.reason === 'helper') {
     autoRunRetry(res.message);
+    return;
+  }
+  if (res.reason === 'api') {
+    // 端口被占是确定性失败，直接弹提示；其余接口错误（快照抖动、
+    // WaitReady 超时、开机 IO 风暴下的偶发 500）都视为瞬态重试。
+    if (res.code === 'port-conflict') {
+      await autoRunFail(res);
+      return;
+    }
+    autoRunRetry(`启动接口异常：${res.message}`);
     return;
   }
   await autoRunFail(res);
@@ -1723,7 +1752,7 @@ function renderNodeGrid() {
     let message = '请先启动免流模式以加载节点列表';
     if (state.activeProxyTab === 'chain') {
       message = state.proxyRunning
-        ? '当前免流未启用链式代理，重启免流后生效'
+        ? '启用链式代理，并重启免流后生效'
         : '启动免流模式以加载链式代理节点';
     }
     el.innerHTML = `<div class="empty-state"><md-icon class="empty-state-icon">cloud_off</md-icon><span>${message}</span></div>`;
