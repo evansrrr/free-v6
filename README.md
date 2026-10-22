@@ -3,41 +3,43 @@
 <h2> FreeV6 </h2>
 <p> 教育网通用 IPv6 免流客户端 </p>
 
-[官网](https://freev6.cc.cd) | [实现原理](https://ich.cc.cd/2026/05/11/mianliu/) | [Github](https://github.com/evansrrr/free-v6) | [用户协议](docs/agreement.md) | [隐私政策](docs/privacy.md)
+[下载](https://freev6.cc.cd/download) | [使用说明](https://freev6.cc.cd/guide/introduction) | [实现原理](https://ich.cc.cd/2026/05/11/mianliu/) | [官网](https://freev6.cc.cd)
 
 <br />
 
 <a href="https://github.com/evansrrr/free-v6/stargazers">
-<img alt="Stargazers" src="https://img.shields.io/github/stars/evansrrr/free-v6?style=for-badge&logo=github&color=f4dbd6&logoColor=D9E0EE&labelColor=302D41"></a>
+<img alt="Stargazers" src="https://img.shields.io/github/stars/evansrrr/free-v6?style=for-the-badge&logo=github&color=f4dbd6&logoColor=D9E0EE&labelColor=302D41"></a>
 <a href="https://github.com/evansrrr/free-v6/releases/latest">
-<img alt="Releases" src="https://img.shields.io/github/release/evansrrr/free-v6.svg?style=for-badge&logo=semantic-release&color=f5bde6&logoColor=D9E0EE&labelColor=302D41"/></a>
+<img alt="Releases" src="https://img.shields.io/github/release/evansrrr/free-v6.svg?style=for-the-badge&logo=semantic-release&color=f5bde6&logoColor=D9E0EE&labelColor=302D41"/></a>
 <a href="https://github.com/evansrrr/free-v6/blob/main/LICENSE">
-<img alt="License" src="https://img.shields.io/github/license/evansrrr/free-v6?style=for-badge&logo=conventionalcommits&color=ee99a0&logoColor=D9E0EE&labelColor=302D41"></a>
+<img alt="License" src="https://img.shields.io/github/license/evansrrr/free-v6?style=for-the-badge&logo=conventionalcommits&color=ee99a0&logoColor=D9E0EE&labelColor=302D41"></a>
 <a href="https://github.com/evansrrr/free-v6/issues">
-<img alt="Issues" src="https://img.shields.io/github/issues/evansrrr/free-v6?style=for-badge&color=a6da95"></a>
+<img alt="Issues" src="https://img.shields.io/github/issues/evansrrr/free-v6?style=for-the-badge&color=a6da95"></a>
 </div>
 
 <br />
 
+![freev6-preview.webp](https://imgs.ich.cc.cd/file/public/1792683632507_freev6-preview.webp)
+
 ## 简要说明
+
+**详细使用说明请访问 [FreeV6 官网](https://freev6.cc.cd)！！**
 
 支持以下桌面平台：
 
 - Windows 11 x64
 
-在 [Releases](https://github.com/evansrrr/free-v6/releases/latest) 下载安装包。由于软件未签名，下载或首次运行如被拦截可选择“仍要继续”
+由于软件未签名，下载或首次运行如被拦截可选择“仍要继续”
 
 首次运行需要下载核心（~21MB），点击“启动免流”并按照提示点击“下载”，程序会自动完成下载安装。再次点击“启动免流”即可
 
 启动免流后可以在“接入点”页进行延迟测试，更换延迟较低的接入点
 
-设置中“绕过校园网/白名单”可以添加排除免流的网段和域名，例如校园网登录页ip为202.204.48.82，可以添加202.204.0.0/16以实现在免流时访问此页面
+设置中“绕过校园网/白名单”可以添加排除免流的网段和域名，例如校园网登录页 ip 为 `202.204.48.82`，可以添加 `202.204.0.0/16` 以实现在免流时访问此页面
 
 *退出软件或开关机时会尽量恢复网络状态，但仍建议手动关闭免流，避免下次开机后校园网认证异常。*
 
-bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issues)，再点点star喵
-
-详细文档请访问 [FreeV6 官网](https://freev6.cc.cd)
+bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issues)，再点点 **star** 喵
 
 ## TODO
 
@@ -64,7 +66,7 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 
 感谢支持！请我杯喝的QwQ
 
-<img alt="reward" height="250" width="250" src="https://img.ich.cc.cd/file/ichblog/img/reward.jpg" />
+<img alt="reward" height="200" width="200" src="https://img.ich.cc.cd/file/ichblog/img/reward.jpg" />
 
 <br />
 
