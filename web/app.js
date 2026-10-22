@@ -1630,6 +1630,15 @@ function wireEvents() {
       renderGuide();
     });
   });
+  // 向导内的协议链接：阻止默认跳转（会把 webview 导走），改用系统浏览器打开
+  $('#guideAgreementLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openExternal('https://freev6.cc.cd/about/agreement');
+  });
+  $('#guidePrivacyLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openExternal('https://freev6.cc.cd/about/privacy');
+  });
 
   // Update dialog: actions + backdrop/Escape (busy phases are blocked
   // inside closeUpdateDialog)

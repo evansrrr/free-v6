@@ -715,6 +715,13 @@ md-icon-button > md-icon {
   background: var(--md-surface-container);
   font-size: 12.5px !important;
 }
+.guide-link {
+  color: var(--md-primary);
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.guide-link:hover { opacity: 0.85; }
 .guide-tips {
   width: 100%;
   display: flex; flex-direction: column; gap: 8px;
