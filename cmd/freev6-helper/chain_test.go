@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -285,4 +286,33 @@ func TestStartProxyChainGates(t *testing.T) {
 			}
 		}
 	})
+}
+
+// 端口被占（第三方代理或上次残留的自家 mihomo）必须带机器可读 code，
+// 前端据此弹「请关闭并退出其他代理软件」toast。
+func TestStartProxyPortConflictReportsCode(t *testing.T) {
+	// 保证冲突存在：能绑上就自己占住；绑不上说明环境里已有占用者，同样成立
+	if listener, err := net.Listen("tcp", "127.0.0.1:7890"); err == nil {
+		defer listener.Close()
+	}
+	h := &helper{root: t.TempDir()}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/start", strings.NewReader(`{"mode":"rule","campusCidrs":["edu.cn"]}`))
+	recorder := httptest.NewRecorder()
+	h.startProxy(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "port-conflict" {
+		t.Fatalf("code = %q, want port-conflict", payload.Code)
+	}
+	if !strings.Contains(payload.Error, "please close other proxy") {
+		t.Fatalf("error text missing guidance: %q", payload.Error)
+	}
 }

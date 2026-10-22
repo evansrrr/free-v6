@@ -375,7 +375,8 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		chainProxies = parsed
 	}
 	if err := mihomo.CheckListenPorts(); err != nil {
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first"})
+		// code 供前端精准提示（toast），error 文本保留给日志排障。
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first", "code": "port-conflict"})
 		return
 	}
 	if runtime.GOOS == "windows" {
