@@ -156,3 +156,74 @@ Function F6OpenPrivacy
   Pop $R0
   ExecShell "open" "${F6_PRIVACY_URL}"
 FunctionEnd
+
+; ── 卸载：运行中进程守护 + 勾选“删除应用数据”时连安装目录一起清 ─────
+;
+; 根因（stock 卸载器）：只 Delete 安装时登记过的文件，最后 RMDir "$INSTDIR"
+; 是非递归的 —— 运行期创建的 state\ config\ runtime\ 留在原地 → 目录非空 →
+; 安装文件夹也删不掉。而“删除应用数据”勾选（$DeleteAppDataCheckboxState）
+; 只处理 $APPDATA\<bundleid> 的 WebView 配置，FreeV6 的数据全在安装目录里。
+;
+; NSIS_HOOK_PREUNINSTALL 在 Section Uninstall 顶部、stock 的
+; CheckIfAppIsRunning 之前展开；POSTUNINSTALL 在勾选处理块之后展开
+; （变量声明先于展开点，顺序安全）。
+;
+; 卸载前必须确保 helper / mihomo 没在运行：运行中核心文件被锁，RMDir /r
+; 删不干净，残留照样让文件夹删不掉 —— 与安装钩子同款重试/取消守护，
+; 静默(/S)与被动(/P)模式跳过（无人值守沿用 stock 行为）。
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !define FreeV6UnHookID ${__LINE__}
+
+  ${If} ${Silent}
+  ${OrIf} $PassiveMode = 1
+    Goto freev6_unhook_done_${FreeV6UnHookID}
+  ${EndIf}
+
+  freev6_unhook_retry_${FreeV6UnHookID}:
+    StrCpy $R7 0
+
+    !if "${INSTALLMODE}" == "currentUser"
+      nsis_tauri_utils::FindProcessCurrentUser "freev6-helper.exe"
+    !else
+      nsis_tauri_utils::FindProcess "freev6-helper.exe"
+    !endif
+    Pop $R8
+    ${If} $R8 = 0
+      StrCpy $R7 1
+    ${EndIf}
+
+    !if "${INSTALLMODE}" == "currentUser"
+      nsis_tauri_utils::FindProcessCurrentUser "mihomo-windows-amd64-v3.exe"
+    !else
+      nsis_tauri_utils::FindProcess "mihomo-windows-amd64-v3.exe"
+    !endif
+    Pop $R8
+    ${If} $R8 = 0
+      StrCpy $R7 1
+    ${EndIf}
+
+    ${If} $R7 = 0
+      Goto freev6_unhook_done_${FreeV6UnHookID}
+    ${EndIf}
+
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "检测到 freev6 相关进程仍在运行，无法彻底卸载。$\n$\n请先退出软件：右键任务栏托盘图标 → 退出（会自动停止免流）。$\n若托盘没有图标，请在任务管理器中结束 freev6 相关进程。$\n退出后点击“重试”继续卸载。" /SD IDCANCEL IDRETRY freev6_unhook_retry_${FreeV6UnHookID} IDCANCEL freev6_unhook_cancel_${FreeV6UnHookID}
+    Goto freev6_unhook_cancel_${FreeV6UnHookID}
+
+  freev6_unhook_cancel_${FreeV6UnHookID}:
+    Abort "已取消卸载：请先退出 freev6 后再运行卸载程序。"
+
+  freev6_unhook_done_${FreeV6UnHookID}:
+  !undef FreeV6UnHookID
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; 勾选“删除应用数据” → 递归清空整个安装目录（state/config/runtime 与
+  ; 任何残留文件一并删除，文件夹本身随之消失）。
+  ; /REBOOTOK：个别被锁文件（如杀软扫描中）改到重启时删除，保证最终目录
+  ; 一定清空。未勾选 → 不动：state\config 是用户凭据与设置，必须保留，
+  ; 文件夹随数据保留（stock 行为）。
+  ${If} $DeleteAppDataCheckboxState = 1
+    RMDir /r /REBOOTOK "$INSTDIR"
+  ${EndIf}
+!macroend
