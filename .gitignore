@@ -18,6 +18,7 @@ docs/agent/
 skills-lock.json
 .mimocode
 .worktrees/
+.playwright-mcp/
 
 .vscode/
 .idea/
