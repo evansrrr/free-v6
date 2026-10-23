@@ -1,4 +1,4 @@
-/* freev6 — Modern Tool SaaS theme */
+﻿/* freev6 — Modern Tool SaaS theme */
 
 /* ── Design Tokens ── */
 
@@ -518,6 +518,31 @@ md-icon-button > md-icon {
   font-weight: 400;
   font-display: block;
   src: url('fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
+/* 正文三套英文字体：Google 官方 latin unicode-range 可变字体子集
+   （见 web/fonts/README.md）。中文走系统字体，任意拉丁文本/节点名
+   都在 latin 覆盖内，无需因新增文案重新子集。 */
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('fonts/dm-sans-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('fonts/manrope-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('fonts/jetbrains-mono-latin.woff2') format('woff2');
 }
 
 /* ── Toast ── */

@@ -66,13 +66,14 @@ LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
    License:   Apache-2.0
    Copyright: Google LLC
    Note: subset of the official font (45 used glyphs, ~6KB); bundled
-   locally so icons work offline. Text fonts (DM Sans / Manrope /
-   JetBrains Mono) still load on demand from fonts.googleapis.com.
+   locally so icons work offline. Text fonts are bundled
+   as latin subsets as well (entry 10).
 
-10. DM Sans, Manrope, JetBrains Mono fonts
+10. DM Sans, Manrope, JetBrains Mono fonts (latin subsets, web/fonts/)
    License:   SIL Open Font License 1.1
-   Copyright: the respective font authors (see each font's OFL.txt)
-   Loaded on demand from fonts.googleapis.com; not bundled.
+   Copyright: the respective font authors (full text in LICENSES/OFL-1.1.txt)
+   Note: official latin unicode-range variable subsets; bundled locally so
+   text renders offline. Chinese/system fallbacks unchanged.
 
 11. mihomo (Clash.Meta core)
    License:   GPL-3.0-only
