@@ -63,10 +63,12 @@ REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
 LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
 --------------------------------------------------------------------------
 
-9. Material Symbols Outlined icon font
+9. Material Symbols Outlined icon font (subset, web/fonts/material-symbols-outlined.woff2)
    License:   Apache-2.0
    Copyright: Google LLC
-   Loaded on demand from fonts.googleapis.com; not bundled.
+   Note: subset of the official font (45 used glyphs, ~6KB); bundled
+   locally so icons work offline. Text fonts (DM Sans / Manrope /
+   JetBrains Mono) still load on demand from fonts.googleapis.com.
 
 10. DM Sans, Manrope, JetBrains Mono fonts
    License:   SIL Open Font License 1.1

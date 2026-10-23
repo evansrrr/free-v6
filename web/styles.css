@@ -509,6 +509,17 @@ md-icon-button > md-icon {
 .traffic-hint-sum b { font-weight: 700; }
 .traffic-hint md-divider { margin: 10px 0; }
 
+/* Material Symbols 本地子集（web/fonts/，仅含应用使用的 45 个字形，
+   由 Google 官方 text= 子集 + GSUB 精确剪枝产出，rlig 连字完好）。
+   离线可用：不再请求 fonts.googleapis.com 的图标 CSS。 */
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
 /* ── Toast ── */
 
 .toast {
