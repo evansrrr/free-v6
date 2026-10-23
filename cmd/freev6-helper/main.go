@@ -394,7 +394,8 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	device, err := readDevice(filepath.Join(h.root, "state", "warp.json"))
 	if err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err)})
+		// code 供前端弹「重试注册」引导（凭据缺失/损坏时重新注册即可覆盖重建）
+	writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err), "code": "warp-missing"})
 		return
 	}
 	// Default blacklist is compiled into the binary (blacklist.txt embedded
