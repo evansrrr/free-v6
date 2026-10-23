@@ -12,8 +12,10 @@ import (
 // Autostart is two cooperating pieces:
 //
 //  1. A Task Scheduler logon task ("FreeV6 Autostart", ONLOGON + HIGHEST)
-//     really launches the desktop exe — silently and elevated, so the
-//     requireAdministrator manifest never raises a UAC prompt at logon. (A Run
+//     really launches the desktop exe — elevated, so the helper can manage
+//     the network; the task's embedded requireAdministrator manifest never
+//     raises a UAC prompt at logon, and whether the main window shows is
+//     decided solely by the 静默启动 setting at launch time. (A Run
 //     entry pointing at the exe does prompt; when the logon-time consent
 //     never shows, nothing starts while Task Manager still reports the entry
 //     "enabled".)

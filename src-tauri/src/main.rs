@@ -75,7 +75,7 @@ fn window_start_dragging(app: tauri::AppHandle) {
 }
 
 // Un-hide the window so the quit confirmation is visible even when the app
-// runs tray-only (close-to-tray, --minimized, 静默启动).
+// runs tray-only (close-to-tray or 静默启动).
 #[tauri::command]
 fn window_show(app: tauri::AppHandle) {
     show_main_window(&app);
@@ -172,11 +172,15 @@ fn task_manager_allows_autostart() -> bool {
     }
 }
 
-// Tray-only launch decision: the autostart task passes --minimized/--autostart,
-// and 静默启动 (设置 → 通用) makes EVERY launch skip the window. Both this and
-// the F6 hotkey read their flag from config/settings.json next to the exe (the
-// helper persists the fields there); whitespace is stripped first so
-// hand-edited spacing still matches. Manual launches without it show the window.
+// Tray-only launch decision: visibility is governed SOLELY by 静默启动
+// (设置 → 通用). The logon task still passes --minimized/--autostart (the
+// latter is required by the Task-Manager-toggle gate in main()), but those
+// flags must no longer force-hide the window — previously boot autostart
+// never showed the main window even with 静默启动 off. Old scheduled tasks
+// that already carry the flags keep working; only the setting matters.
+// Both this and the F6 hotkey read the flag from config/settings.json next
+// to the exe (the helper persists the fields there); whitespace is stripped
+// first so hand-edited spacing still matches.
 fn settings_flag(name: &str) -> bool {
     std::env::current_exe()
         .ok()
@@ -193,13 +197,6 @@ fn settings_flag(name: &str) -> bool {
 }
 
 fn should_show_window() -> bool {
-    let flagged = std::env::args().any(|arg| {
-        let arg = arg.as_str();
-        arg == "--minimized" || arg == "--autostart"
-    });
-    if flagged {
-        return false;
-    }
     !settings_flag("silentStart")
 }
 
@@ -407,9 +404,9 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            // Tray-only launch: autostart flags (--minimized/--autostart) or
-            // 静默启动 on → show nothing but the tray icon; otherwise the
-            // window starts hidden (tauri.conf visible:false) and appears here.
+            // Tray-only launch: 静默启动 on → show nothing but the tray
+            // icon; otherwise the window starts hidden (tauri.conf
+            // visible:false) and appears here — including boot autostart.
             if should_show_window() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
