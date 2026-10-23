@@ -551,6 +551,19 @@
     </div>
   </div>
 
+  <!-- WARP registration failure -->
+  <div class="net-dialog-scrim" id="warpFailDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="warpFailDialogTitle">
+      <md-icon class="net-dialog-icon">warning</md-icon>
+      <h3 id="warpFailDialogTitle">接入凭据注册失败</h3>
+      <p id="warpFailDialogBody">注册接入凭据时出错，请检查网络后重试</p>
+      <div class="net-dialog-actions">
+        <md-text-button id="warpFailDialogCancel">取消</md-text-button>
+        <md-filled-button id="warpFailDialogRetry">重试</md-filled-button>
+      </div>
+    </div>
+  </div>
+
   <!-- Update prompt -->
   <div class="net-dialog-scrim" id="updateDialogScrim">
     <div class="net-dialog update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="updateTitle">

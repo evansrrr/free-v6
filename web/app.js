@@ -386,6 +386,11 @@ function reportStartFailure(res) {
     addLog(`操作失败: ${res.message}`, true);
     // 端口被占（其他/残留的代理软件或上次的 mihomo）：toast 给可执行的指引
     if (res.code === 'port-conflict') showToast('请关闭并退出其他代理软件', 'error');
+    // 凭据缺失（warp.json 不存在/损坏）：与注册失败同款 引导弹窗
+    if (res.code === 'warp-missing') {
+      showToast('接入凭据注册失败', 'error');
+      openWarpFailDialog(res.message);
+    }
   }
 }
 
@@ -623,6 +628,35 @@ function openChainClearDialog() {
 
 function closeChainClearDialog() {
   $('#chainClearDialogScrim')?.classList.remove('open');
+}
+
+/* ── WARP 注册失败弹窗（重试 = 纯重新注册） ─────────────────── */
+
+function isWarpFailDialogOpen() {
+  return Boolean($('#warpFailDialogScrim')?.classList.contains('open'));
+}
+
+// body 显示实际错误（自动注册的 DNS 失败、启动时凭据缺失等都汇到这里）；
+// 重复打开只刷新内容（自动运行循环失败时不叠弹窗、不重复 toast）。
+function openWarpFailDialog(message) {
+  const body = $('#warpFailDialogBody');
+  if (body) {
+    const text = message || '注册接入凭据时出错，请检查网络后重试';
+    body.textContent = text.length > 90 ? `${text.slice(0, 89)}…` : text;
+  }
+  $('#warpFailDialogScrim')?.classList.add('open');
+}
+
+function closeWarpFailDialog() {
+  $('#warpFailDialogScrim')?.classList.remove('open');
+}
+
+// 重试 = 仅重新注册（用户已确认；不自动继续启动）。失败会再次进入
+// toast+弹窗循环，直到成功或用户取消。
+async function retryWarpRegistration() {
+  closeWarpFailDialog();
+  addLog('正在重试注册接入凭据…');
+  await registerWarp(false);
 }
 
 async function applyDevMode(next) {
@@ -1296,9 +1330,13 @@ async function registerWarp(isAuto) {
     state.warpRegistered = true;
     updateSettingsUI();
     addLog(isAuto ? '已自动注册接入凭据' : '接入凭据注册成功');
+    showToast('接入凭据注册成功');
     return true;
   } catch (e) {
     addLog(`${isAuto ? '自动注册接入凭据失败' : '接入凭据注册失败'}: ${e.message}`, true);
+    // 弹窗已开（如自动运行重试循环再次失败）时不重复弹 toast，只刷新弹窗内容
+    if (!isWarpFailDialogOpen()) showToast('接入凭据注册失败', 'error');
+    openWarpFailDialog(e.message);
     return false;
   } finally {
     state.warpRegistering = false;
@@ -1619,6 +1657,16 @@ function wireEvents() {
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeChainClearDialog();
+  });
+
+  // WARP 注册失败弹窗：重试 = 纯重新注册；取消/遮罩/Escape 关闭
+  $('#warpFailDialogCancel')?.addEventListener('click', closeWarpFailDialog);
+  $('#warpFailDialogRetry')?.addEventListener('click', retryWarpRegistration);
+  $('#warpFailDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'warpFailDialogScrim') closeWarpFailDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeWarpFailDialog();
   });
 
   // First-run guide: 翻页按钮 / 页码点；只能点「开始使用」关闭
