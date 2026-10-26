@@ -1681,11 +1681,11 @@ function wireEvents() {
   // 向导内的协议链接：阻止默认跳转（会把 webview 导走），改用系统浏览器打开
   $('#guideAgreementLink')?.addEventListener('click', (e) => {
     e.preventDefault();
-    openExternal('https://freev6.cc.cd/about/agreement');
+    openExternal('https://github.com/evansrrr/free-v6/blob/main/docs/agreement.md');
   });
   $('#guidePrivacyLink')?.addEventListener('click', (e) => {
     e.preventDefault();
-    openExternal('https://freev6.cc.cd/about/privacy');
+    openExternal('https://github.com/evansrrr/free-v6/blob/main/docs/privacy.md');
   });
 
   // Update dialog: actions + backdrop/Escape (busy phases are blocked
