@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/yourname/freev6/internal/stallhttp"
 )
 
 // mihomoGitHubZipURL 是被镜像前缀拼接的发布资产本体；版本与下方
@@ -108,7 +110,7 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 	// watchdog 必须在 client.Do 之前启动：连接挂死/响应头不来的镜像会把
 	// Do 本身阻塞住，等返回再巡检就只能靠硬上限兜底了。
 	var received atomic.Int64
-	stopWatchdog := startStallWatchdog(mirrorCtx, cancel, &received)
+	stopWatchdog := stallhttp.StartWatchdog(mirrorCtx, cancel, &received, runtimeStallTimeout, runtimeStallCheckInterval)
 	defer stopWatchdog()
 
 	request, requestErr := http.NewRequestWithContext(mirrorCtx, http.MethodGet, source, nil)
@@ -142,7 +144,7 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 		}
 	}()
 
-	body := &countingReader{reader: response.Body, counter: &received}
+	body := &stallhttp.CountingReader{Reader: response.Body, Counter: &received}
 	hash := sha256.New()
 	limited := io.LimitReader(io.TeeReader(body, hash), maxRuntimeDownload)
 	if _, copyErr := io.Copy(temporary, limited); copyErr != nil {
@@ -157,56 +159,6 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 	}
 	keep = true
 	return digest, temporaryPath, nil
-}
-
-// startStallWatchdog 在 received 连续 runtimeStallTimeout 内零增长时取消
-// mirrorCtx（含尚无首字节的连接挂死阶段：lastChange 从尝试开始计时）。
-// 返回的停止函数幂等，成功/失败路径都应调用以回收 goroutine。
-func startStallWatchdog(mirrorCtx context.Context, cancel context.CancelFunc, received *atomic.Int64) func() {
-	done := make(chan struct{})
-	var stopped atomic.Bool
-	go func() {
-		lastBytes := int64(0)
-		lastChange := time.Now()
-		for {
-			select {
-			case <-mirrorCtx.Done():
-				return
-			case <-done:
-				return
-			case <-time.After(runtimeStallCheckInterval):
-				current := received.Load()
-				if current != lastBytes {
-					lastBytes = current
-					lastChange = time.Now()
-					continue
-				}
-				if time.Since(lastChange) >= runtimeStallTimeout {
-					cancel() // 零进展超时：中断在途读取，让调用方切线路
-					return
-				}
-			}
-		}
-	}()
-	return func() {
-		if stopped.CompareAndSwap(false, true) {
-			close(done)
-		}
-	}
-}
-
-// countingReader 给 watchdog 喂进度字节数（只统计真正从网络读到的量）。
-type countingReader struct {
-	reader  io.Reader
-	counter *atomic.Int64
-}
-
-func (c *countingReader) Read(buffer []byte) (int, error) {
-	read, err := c.reader.Read(buffer)
-	if read > 0 {
-		c.counter.Add(int64(read))
-	}
-	return read, err
 }
 
 func extractRuntime(archivePath, runtimeDir string) (string, error) {

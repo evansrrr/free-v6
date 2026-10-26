@@ -450,7 +450,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if geoDownloaded {
-		fmt.Fprintf(os.Stderr, "helper: downloaded %s\n", mihomo.GeositeFileName)
+		fmt.Fprintln(os.Stderr, "helper: geo data prepared")
 	}
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})

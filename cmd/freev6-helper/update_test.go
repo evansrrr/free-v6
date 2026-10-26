@@ -15,15 +15,21 @@ import (
 )
 
 func TestHostAllowed(t *testing.T) {
-	allowed := []string{"github.com", "objects.githubusercontent.com", "gh-proxy.com"}
+	allowed := []string{"github.com", "objects.githubusercontent.com", "gh-proxy.com",
+		"v6.gh-proxy.org", "v4.gh-proxy.org", "cdn.gh-proxy.org", "axisnow.gh-proxy.org"}
 	cases := map[string]bool{
 		"github.com":                    true,
 		"objects.githubusercontent.com": true,
 		"GITHUB.COM":                    true, // case-insensitive
 		"gh-proxy.com":                  true, // 大陆加速代理
+		"v6.gh-proxy.org":               true, // 新增镜像族
+		"v4.gh-proxy.org":               true,
+		"cdn.gh-proxy.org":              true,
+		"axisnow.gh-proxy.org":          true,
 		"evil-github.com":               false,
 		"github.com.evil.net":           false,
 		"evilgh-proxy.com":              false,
+		"gh-proxy.org.evil.net":         false,
 		"example.com":                   false,
 	}
 	for host, want := range cases {
@@ -260,5 +266,135 @@ func TestUpdateLatestHandlerFlow(t *testing.T) {
 	}
 	if noResp.Update {
 		t.Fatalf("unreachable must yield update:false: %s", rec2.Body.String())
+	}
+}
+
+// withUpdateDownloadTest 注入镜像前缀并压缩停滞/硬限（测试专用）。
+func withUpdateDownloadTest(t *testing.T, prefixes ...string) {
+	t.Helper()
+	origPrefixes := updateMirrorPrefixes
+	origStall := updateStallTimeout
+	origHard := updateMirrorHardTimeout
+	origInterval := updateStallCheckInterval
+	updateMirrorPrefixes = prefixes
+	updateStallTimeout = 300 * time.Millisecond
+	updateMirrorHardTimeout = 3 * time.Second
+	updateStallCheckInterval = 50 * time.Millisecond
+	t.Cleanup(func() {
+		updateMirrorPrefixes = origPrefixes
+		updateStallTimeout = origStall
+		updateMirrorHardTimeout = origHard
+		updateStallCheckInterval = origInterval
+	})
+}
+
+func TestUpdateDownloadCandidatesRewritesGitHubURL(t *testing.T) {
+	orig := updateMirrorPrefixes
+	updateMirrorPrefixes = []string{"https://a.example/", "https://b.example/"}
+	t.Cleanup(func() { updateMirrorPrefixes = orig })
+
+	githubURL := "https://github.com/evansrrr/free-v6/releases/download/v9.9.9/setup.exe"
+	got := updateDownloadCandidates(githubURL)
+	want := []string{"https://a.example/" + githubURL, "https://b.example/" + githubURL, githubURL}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidate[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// 非 github.com 的已允许主机（CDN/镜像本体）不改写。
+	cdnURL := "https://objects.githubusercontent.com/x/setup.exe"
+	if got := updateDownloadCandidates(cdnURL); len(got) != 1 || got[0] != cdnURL {
+		t.Fatalf("cdn url must stay single, got %v", got)
+	}
+}
+
+// 首条线路 500 → 换线成功；github.com 形态的 URL 经前缀改写命中本地镜像，
+// 直连候选因白名单不含 github.com 被本地拒绝（不触真实网络）。
+func TestDownloadUpdateFileFallsBackToNextMirror(t *testing.T) {
+	payload := []byte("installer payload across mirrors")
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer good.Close()
+	withUpdateDownloadTest(t, bad.URL+"/", good.URL+"/")
+
+	githubURL := "https://github.com/evansrrr/free-v6/releases/download/v9.9.9/setup.exe"
+	dest := filepath.Join(t.TempDir(), "setup.exe")
+	_, err := downloadUpdateFile(http.DefaultClient, githubURL, sha256Hex(payload), dest, []string{"127.0.0.1"}, &updateProgress{})
+	if err != nil {
+		t.Fatalf("fallback must succeed: %v", err)
+	}
+	if got, readErr := os.ReadFile(dest); readErr != nil || len(got) != len(payload) {
+		t.Fatalf("dest wrong: %v", readErr)
+	}
+}
+
+// 首条线路内容与 sha 不符 → 按线路失败继续换线。
+func TestDownloadUpdateFileDigestMismatchFallsBack(t *testing.T) {
+	payload := []byte("honest installer bytes")
+	tampered := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("tampered mirror junk"))
+	}))
+	defer tampered.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer good.Close()
+	withUpdateDownloadTest(t, tampered.URL+"/", good.URL+"/")
+
+	githubURL := "https://github.com/evansrrr/free-v6/releases/download/v9.9.9/setup.exe"
+	dest := filepath.Join(t.TempDir(), "setup.exe")
+	if _, err := downloadUpdateFile(http.DefaultClient, githubURL, sha256Hex(payload), dest, []string{"127.0.0.1"}, &updateProgress{}); err != nil {
+		t.Fatalf("mismatch must fall back: %v", err)
+	}
+	if _, statErr := os.Stat(dest); statErr != nil {
+		t.Fatalf("dest must exist after good mirror: %v", statErr)
+	}
+}
+
+// 挂死的线路在停滞窗口内被切掉——进度条最坏冻结 ~300ms（生产 10s）。
+func TestDownloadUpdateFileStallFailover(t *testing.T) {
+	payload := []byte("second mirror wins")
+	hung := make(chan struct{})
+	hungServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hung
+	}))
+	defer hungServer.Close()
+	defer close(hung)
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer good.Close()
+	withUpdateDownloadTest(t, hungServer.URL+"/", good.URL+"/")
+
+	githubURL := "https://github.com/evansrrr/free-v6/releases/download/v9.9.9/setup.exe"
+	dest := filepath.Join(t.TempDir(), "setup.exe")
+	start := time.Now()
+	if _, err := downloadUpdateFile(http.DefaultClient, githubURL, sha256Hex(payload), dest, []string{"127.0.0.1"}, &updateProgress{}); err != nil {
+		t.Fatalf("fallback must win: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("hung mirror must be cut by stall watchdog, took %v", elapsed)
+	}
+}
+
+func TestUpdateLatestURLsDefaultIncludesMirrors(t *testing.T) {
+	urls := updateLatestURLs()
+	if len(urls) != len(updateMirrorPrefixes)+1 {
+		t.Fatalf("expected %d urls (mirrors + direct), got %d", len(updateMirrorPrefixes)+1, len(urls))
+	}
+	if !strings.HasPrefix(urls[0], "https://v6.gh-proxy.org/") {
+		t.Fatalf("first url should be the fastest mirror, got %s", urls[0])
+	}
+	if urls[len(urls)-1] != "https://github.com/"+updateRepoSlug+"/releases/latest/download/version.json" {
+		t.Fatalf("last url must be the direct fallback, got %s", urls[len(urls)-1])
 	}
 }

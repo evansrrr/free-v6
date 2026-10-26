@@ -80,13 +80,14 @@ unified-delay: true
 tcp-concurrent: true
 find-process-mode: 'always'
 
-# 地理数据下载地址走大陆可达镜像（与 internal/mihomo/geodata.go 的
-# EnsureGeodata 镜像链一致）；正常情况下启动前文件已预置，这里只在
-# 文件被删除/geo-auto-update 开启时生效。
+# 地理数据下载地址走大陆可达镜像（实测最快的 v6 入口；与
+# internal/mihomo/geodata.go 的预置镜像链同族）。正常情况下启动前
+# geosite/geoip/mmdb 已被 EnsureGeodata 预置，这里只在文件被删除
+# 或 geo-auto-update 开启时生效。
 geox-url:
-  geoip: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-  geosite: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-  mmdb: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
+  geoip: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
+  geosite: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
 
 profile:
   store-selected: true

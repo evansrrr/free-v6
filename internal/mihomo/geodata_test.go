@@ -1,6 +1,7 @@
 package mihomo
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -11,12 +12,22 @@ import (
 	"time"
 )
 
-// withGeositeMirrors 临时替换镜像链（测试专用）。
+// withGeositeMirrors 临时替换镜像链（测试专用）。geoip/mmdb 资产列表
+// 一并置空：它们是 best-effort，会在 EnsureGeodata 里走 0 镜像快速失败，
+// 避免单测触碰真实网络。
 func withGeositeMirrors(t *testing.T, urls ...string) {
 	t.Helper()
 	original := geositeDownloadURLs
+	originalGeoip := geoipDownloadURLs
+	originalMmdb := mmdbDownloadURLs
 	geositeDownloadURLs = urls
-	t.Cleanup(func() { geositeDownloadURLs = original })
+	geoipDownloadURLs = nil
+	mmdbDownloadURLs = nil
+	t.Cleanup(func() {
+		geositeDownloadURLs = original
+		geoipDownloadURLs = originalGeoip
+		mmdbDownloadURLs = originalMmdb
+	})
 }
 
 // 有效的 geodata：体积达标且不是 HTML。
@@ -245,5 +256,56 @@ func TestEnsureGeodataSeedsFromInstallRoot(t *testing.T) {
 	}
 	if !GeodataValid(filepath.Join(home, GeositeFileName)) {
 		t.Fatal("state copy must be valid")
+	}
+}
+
+// geoip.dat 走自己的镜像链：geosite 已就绪时也要被预置（GEOIP 规则用）。
+func TestEnsureGeodataDownloadsGeoipBestEffort(t *testing.T) {
+	home := t.TempDir()
+	writeValidGeodata(t, filepath.Join(home, GeositeFileName))
+	geoipPayload := bytes.Repeat([]byte{0x00, 0x01}, minGeoipSize/2)
+	geoipServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(geoipPayload)
+	}))
+	defer geoipServer.Close()
+	withGeositeMirrors(t) // geosite 已有效；geoip/mmdb 镜像链见下
+	originalGeoip := geoipDownloadURLs
+	geoipDownloadURLs = []string{geoipServer.URL}
+	t.Cleanup(func() { geoipDownloadURLs = originalGeoip })
+
+	created, err := EnsureGeodata(context.Background(), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("geoip download must count as created")
+	}
+	if !geodataValidWithMin(filepath.Join(home, GeoipFileName), minGeoipSize) {
+		t.Fatal("geoip.dat must be valid after download")
+	}
+}
+
+// geoip 是 best-effort：镜像全挂时不得阻塞启动（geosite 才是硬依赖）。
+func TestEnsureGeodataGeoipFailureDoesNotBlock(t *testing.T) {
+	home := t.TempDir()
+	writeValidGeodata(t, filepath.Join(home, GeositeFileName))
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer dead.Close()
+	withGeositeMirrors(t)
+	originalGeoip := geoipDownloadURLs
+	geoipDownloadURLs = []string{dead.URL}
+	t.Cleanup(func() { geoipDownloadURLs = originalGeoip })
+
+	created, err := EnsureGeodata(context.Background(), home)
+	if err != nil {
+		t.Fatalf("geoip failure must be best-effort, got %v", err)
+	}
+	if created {
+		t.Fatal("no asset must count as created")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, GeoipFileName)); statErr == nil {
+		t.Fatal("failed geoip must not leave a file behind")
 	}
 }

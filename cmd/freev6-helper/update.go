@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/yourname/freev6/internal/stallhttp"
 )
 
 // In-app updater download support: the frontend resolves the release asset
@@ -26,15 +29,39 @@ import (
 //
 // The local API is CORS-open, so this endpoint must not become an
 // arbitrary-file fetcher: only https GitHub release hosts plus the gh-proxy
-// acceleration mirror are accepted (loopback http is allowed for tests
-// only).
+// acceleration mirror family are accepted (loopback http is allowed for
+// tests only). github.com asset URLs are rewritten through the mirror
+// prefixes with stall-based failover, same playbook as the mihomo runtime
+// download (internal/mihomo/download.go).
 
 var updateAllowedHosts = []string{
 	"github.com",
 	"objects.githubusercontent.com",
 	"release-assets.githubusercontent.com",
 	"gh-proxy.com", // 大陆访问加速代理（直通 github release 资产）
+	"v6.gh-proxy.org",
+	"v4.gh-proxy.org",
+	"cdn.gh-proxy.org",
+	"axisnow.gh-proxy.org",
 }
+
+// updateMirrorPrefixes 把 github.com 资产 URL 改写成各加速镜像的直通
+// 地址；顺序按 2026-10 校园网实测延迟。变量便于测试注入。
+var updateMirrorPrefixes = []string{
+	"https://v6.gh-proxy.org/",
+	"https://v4.gh-proxy.org/",
+	"https://gh-proxy.com/",
+	"https://axisnow.gh-proxy.org/",
+	"https://cdn.gh-proxy.org/",
+}
+
+// 单线路预算：停滞 10s 零进展即换线（进度条冻结最坏 10s 就切），硬上限
+// 兜住持续蠕动；变量便于测试压缩时长。
+var (
+	updateStallTimeout       = 10 * time.Second
+	updateMirrorHardTimeout  = 3 * time.Minute
+	updateStallCheckInterval = time.Second
+)
 
 // updateProgress is written by the download goroutine and read by the
 // progress endpoint; state/path/err/busy live behind updateRun.mu.
@@ -94,18 +121,76 @@ func validateUpdateURL(rawURL string, allowed []string) error {
 	return nil
 }
 
-// downloadUpdateFile streams rawURL into dest and verifies sha256Hex.
-// Redirects are followed by the client (github.com release assets redirect
-// to GitHub's own CDN — trusted once github.com was validated; the gh-proxy
-// mirror redirects to its upstream CDN likewise).
-func downloadUpdateFile(client *http.Client, rawURL, sha256Hex, dest string, allowed []string, prog *updateProgress) (int64, error) {
-	if err := validateUpdateURL(rawURL, allowed); err != nil {
-		return 0, err
+// updateDownloadCandidates 展开下载候选：github.com URL 走镜像前缀改写
+// 并以直连兜底；其他已允许的主机（GitHub CDN、镜像本体）原样单条——
+// 前缀拼在它们身上只会拼出无效地址。
+func updateDownloadCandidates(rawURL string) []string {
+	if err := validateUpdateURL(rawURL, []string{"github.com"}); err == nil {
+		candidates := make([]string, 0, len(updateMirrorPrefixes)+1)
+		for _, prefix := range updateMirrorPrefixes {
+			candidates = append(candidates, prefix+rawURL)
+		}
+		return append(candidates, rawURL)
 	}
+	return []string{rawURL}
+}
+
+// updateHostOf 提取 URL 的 host 用于错误汇总。
+func updateHostOf(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	return parsed.Hostname()
+}
+
+// downloadUpdateFile tries every candidate mirror for rawURL; each attempt
+// gets its own hard/stall budget so a hung mirror cannot freeze the progress
+// bar for minutes. A SHA256 mismatch also advances to the next mirror (a
+// hostile or broken edge must not block the honest one). Progress counters
+// restart on each attempt — the frontend bar may jump back, by design.
+func downloadUpdateFile(client *http.Client, rawURL, sha256Hex, dest string, allowed []string, prog *updateProgress) (int64, error) {
 	if strings.TrimSpace(sha256Hex) == "" {
 		return 0, fmt.Errorf("missing sha256")
 	}
-	resp, err := client.Get(rawURL)
+	candidates := updateDownloadCandidates(rawURL)
+	var failures []string
+	for _, candidate := range candidates {
+		if err := validateUpdateURL(candidate, allowed); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		written, attemptErr := downloadUpdateFileOnce(client, candidate, sha256Hex, dest, prog)
+		if attemptErr == nil {
+			return written, nil
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", updateHostOf(candidate), attemptErr))
+	}
+	return 0, fmt.Errorf("下载更新包失败（已尝试 %d/%d 条线路: %s），请检查网络后重试",
+		len(failures), len(candidates), strings.Join(failures, "; "))
+}
+
+// downloadUpdateFileOnce streams one mirror into dest and verifies sha256Hex.
+// Redirects are followed by the client (github.com release assets redirect
+// to GitHub's own CDN — trusted once github.com was validated; the gh-proxy
+// mirrors redirect to their upstream CDN likewise).
+func downloadUpdateFileOnce(client *http.Client, rawURL, sha256Hex, dest string, prog *updateProgress) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), updateMirrorHardTimeout)
+	defer cancel()
+
+	// watchdog 在 Do 之前启动：连接挂死会把 Do 本身阻塞住；计数器复用
+	// 进度 done——停滞与进度条看到的是同一份字节数。
+	prog.done.Store(0)
+	prog.total.Store(-1)
+	stopWatchdog := stallhttp.StartWatchdog(ctx, cancel, &prog.done, updateStallTimeout, updateStallCheckInterval)
+	defer stopWatchdog()
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("User-Agent", "freev6")
+	resp, err := client.Do(request)
 	if err != nil {
 		return 0, fmt.Errorf("request failed: %w", err)
 	}
@@ -177,9 +262,10 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 	_ = os.Remove(dest) // stale file from a previous attempt
 
 	go func() {
-		// Generous timeout: big setup.exe on a slow link; the frontend poll
-		// loop has its own cap for the UI side.
-		client := &http.Client{Timeout: 30 * time.Minute}
+		// 无全局 client 超时：每次线路尝试有自己的硬限/停滞预算
+		// （downloadUpdateFileOnce），总时长被线路数天然封顶；前端轮询
+		// 自带 UI 侧上限。
+		client := &http.Client{}
 		_, err := downloadUpdateFile(client, input.URL, input.SHA256, dest, updateAllowedHosts, &updateRun.prog)
 		updateRun.mu.Lock()
 		if err != nil {
@@ -224,12 +310,16 @@ func (h *helper) updateProgress(writer http.ResponseWriter, request *http.Reques
 // GitHub directly: no CORS exposure, no shared-pool403s.
 
 const updateRepoSlug = "evansrrr/free-v6"
-const updateProxyPrefix = "https://gh-proxy.com/"
 
 // updateLatestURLs is a var so tests can point it at a local server.
+// 缓存穿透参数拼在每条 URL 上；镜像顺序与安装包下载一致。
 var updateLatestURLs = func() []string {
 	direct := fmt.Sprintf("https://github.com/%s/releases/latest/download/version.json", updateRepoSlug)
-	return []string{updateProxyPrefix + direct, direct}
+	urls := make([]string, 0, len(updateMirrorPrefixes)+1)
+	for _, prefix := range updateMirrorPrefixes {
+		urls = append(urls, prefix+direct)
+	}
+	return append(urls, direct)
 }
 
 // stableVersionPattern accepts a plain x.y.z base (any suffix allowed for
