@@ -2774,11 +2774,27 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
 
   const dark = bgIsDark();
   try {
-    await tauriInvoke('set_background', { mode, dark });
+    const applied = await tauriInvoke('set_background', { mode, dark });
+    if (mode === 'mica' && applied === 'acrylic') {
+      // 云母不可用（Win10 或新版 Win11）→ 自动落到亚克力
+      bgState.mode = 'acrylic';
+      document.documentElement.setAttribute('data-bg-mode', 'acrylic');
+      if (select) select.value = 'acrylic';
+      if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'acrylic'); } catch (_) {} }
+      addLog('云母不可用，已自动降级为亚克力');
+      syncLiquidGlass();
+    } else if ((mode === 'acrylic' || mode === 'mica') && applied === 'default') {
+      // 系统完全不支持 → 回退默认
+      bgState.mode = 'default';
+      document.documentElement.setAttribute('data-bg-mode', 'default');
+      if (select) select.value = 'default';
+      if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
+      addLog('该背景效果在当前系统不可用', true);
+      syncLiquidGlass();
+    }
   } catch (e) {
     addLog(`背景模式切换失败: ${e}`, true);
     if (mode === 'acrylic' || mode === 'mica') {
-      // 系统不支持（如云母仅 Win11）→ 回退默认
       bgState.mode = 'default';
       document.documentElement.setAttribute('data-bg-mode', 'default');
       if (select) select.value = 'default';
@@ -2844,18 +2860,45 @@ function clearWallpaper() {
 // WebGL 液态玻璃：仅壁纸模式 + 开关开启时，对浮动面板应用
 async function syncLiquidGlass() {
   const enable = bgState.mode === 'wallpaper' && bgState.webglGlass && !!bgState.wallpaper;
-  document.documentElement.setAttribute('data-webgl-glass', enable ? 'on' : 'off');
-  if (enable) await initLiquidGlass();
-  else destroyLiquidGlass();
+  clearTimeout(bgState._initTimer);
+  if (!enable) {
+    document.documentElement.setAttribute('data-webgl-glass', 'off');
+    destroyLiquidGlass();
+    return;
+  }
+  // 延迟到首屏渲染后初始化，避免 html-to-image 预捕获阻塞 UI；
+  // 仅 init 成功才接管（否则保持 CSS 磨砂，避免透明无底的闪帧）
+  bgState._initTimer = setTimeout(async () => {
+    const ok = await initLiquidGlass();
+    document.documentElement.setAttribute('data-webgl-glass', ok ? 'on' : 'off');
+  }, 300);
 }
 
 async function initLiquidGlass() {
-  if (bgState.liquidGlass) return;
+  if (bgState.liquidGlass) return true;
+  const rail = $('.rail');
   const drawer = $('#logDrawer');
-  if (!drawer) return;
+  const targets = [rail, drawer].filter(Boolean);
+  if (!targets.length) return false;
   try {
     const { LiquidGlass } = await import('@ybouane/liquidglass');
-    drawer.dataset.config = JSON.stringify({
+    // 满高侧栏：方角 + 折射/模糊，突出「液态」折射（常驻可见）
+    if (rail) rail.dataset.config = JSON.stringify({
+      blurAmount: 0.22,
+      refraction: 0.55,
+      chromAberration: 0.1,
+      edgeHighlight: 0.1,
+      specular: 0.05,
+      fresnel: 0.9,
+      tintStrength: 0.05,
+      saturation: 0.06,
+      cornerRadius: 0,
+      zRadius: 0,
+      shadowOpacity: 0.15,
+      shadowSpread: 8,
+      shadowOffsetY: 1,
+    });
+    if (drawer) drawer.dataset.config = JSON.stringify({
       blurAmount: 0.18,
       refraction: 0.55,
       chromAberration: 0.12,
@@ -2872,12 +2915,21 @@ async function initLiquidGlass() {
     });
     bgState.liquidGlass = await LiquidGlass.init({
       root: document.body,
-      glassElements: [drawer],
+      glassElements: targets,
     });
+    // 抽屉滑入/滑出是 transform 变化，库的脏检测未必触发 → 过渡结束后手动重渲
+    if (drawer && !bgState._drawerObs) {
+      bgState._drawerObs = () => {
+        if (bgState.liquidGlass) bgState.liquidGlass.markChanged(drawer);
+      };
+      drawer.addEventListener('transitionend', bgState._drawerObs);
+    }
+    return true;
   } catch (e) {
-    // WebGL 不可用（老机器/驱动）→ 静默回退 CSS 磨砂
+    // WebGL 不可用（老机器/驱动）→ 回退 CSS 磨砂
     bgState.liquidGlass = null;
-    document.documentElement.setAttribute('data-webgl-glass', 'off');
+    addLog('WebGL 液态玻璃不可用，已回退磨砂效果', true);
+    return false;
   }
 }
 
@@ -2885,6 +2937,11 @@ function destroyLiquidGlass() {
   if (bgState.liquidGlass) {
     try { bgState.liquidGlass.destroy(); } catch (_) {}
     bgState.liquidGlass = null;
+  }
+  if (bgState._drawerObs) {
+    const drawer = $('#logDrawer');
+    if (drawer) drawer.removeEventListener('transitionend', bgState._drawerObs);
+    bgState._drawerObs = null;
   }
 }
 

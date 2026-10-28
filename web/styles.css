@@ -213,13 +213,13 @@ a { color: var(--md-primary); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: var(--md-outline-variant); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--md-outline); }
 
-/* ── App Shell ── */
-
-.app-shell { display: flex; flex: 1; min-height: 0; overflow: hidden; }
-
 /* ── Navigation Rail ── */
 
 .rail {
+  position: fixed;
+  left: 0;
+  top: 32px;
+  bottom: 0;
   width: var(--nav-width);
   min-width: var(--nav-width);
   display: flex;
@@ -282,6 +282,7 @@ a { color: var(--md-primary); text-decoration: none; }
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  margin-left: var(--nav-width);
   padding: 20px 24px 48px;
 }
 
@@ -986,7 +987,7 @@ md-icon-button > md-icon {
 
 @media (max-width: 620px) {
   .rail {
-    position: fixed; bottom: 0; left: 0; right: 0;
+    position: fixed; top: auto; bottom: 0; left: 0; right: 0;
     width: 100%; height: 52px;
     flex-direction: row; justify-content: space-around; padding: 0;
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
@@ -995,8 +996,7 @@ md-icon-button > md-icon {
   .nav-item span:not(.nav-icon) { display: none; }
   .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; justify-content: space-around; }
   .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
-  .app-shell { flex-direction: column; }
-  .main-content { flex: 1; padding: 12px 10px 64px; }
+  .main-content { flex: 1; margin-left: 0; padding: 12px 10px 64px; }
   .card-traffic, .card-stats { grid-column: auto; }
   .win-btn { width: 40px; }
   .page-title { font-size: 17px; }
@@ -1091,11 +1091,14 @@ md-icon-button > md-icon {
 
 /* 内容层抬到背景之上（其余浮层已有 z-index 50~140） */
 .titlebar,
-.app-shell { position: relative; z-index: 1; }
+.main-content { position: relative; z-index: 1; }
 
 /* ── 背景模式：透明窗口 ── */
+:root[data-bg-mode="wallpaper"] html,
 :root[data-bg-mode="wallpaper"] body,
+:root[data-bg-mode="acrylic"] html,
 :root[data-bg-mode="acrylic"] body,
+:root[data-bg-mode="mica"] html,
 :root[data-bg-mode="mica"] body { background: transparent; }
 
 :root[data-bg-mode="wallpaper"] .titlebar,
@@ -1104,13 +1107,14 @@ md-icon-button > md-icon {
 
 :root[data-bg-mode="wallpaper"] .bg-image { display: block; }
 
-/* 可读性遮罩：主题表面色低透明度，深浅色自适应 */
+/* 可读性遮罩：壁纸模式下用主题表面色低透明度；亚克力/云母下 OS 已提供
+   背景与对比，遮罩保持透明不压暗效果 */
 :root[data-bg-mode="wallpaper"] .bg-tint {
   background: color-mix(in srgb, var(--md-surface) 30%, transparent);
 }
 :root[data-bg-mode="acrylic"] .bg-tint,
 :root[data-bg-mode="mica"] .bg-tint {
-  background: color-mix(in srgb, var(--md-surface) 15%, transparent);
+  background: transparent;
 }
 
 /* ── CSS 磨砂玻璃表面（有背景时启用） ── */
@@ -1181,8 +1185,8 @@ md-icon-button > md-icon {
 /* ── WebGL 液态玻璃接管（仅壁纸 + 开关开启） ── */
 /* liquidglass 把折射 canvas 注入为玻璃元素第一个子节点，元素自身背景
    须透明、关闭 CSS 磨砂与阴影，避免与 WebGL 输出叠加。 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .log-drawer,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .toast {
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .rail,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .log-drawer {
   background: transparent !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;

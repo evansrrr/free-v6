@@ -342,25 +342,47 @@ fn hotkey_set(enabled: bool) -> Result<(), String> {
 // default/wallpaper：清除 OS 模糊，由网页 CSS 绘制背景（不透明）；
 // acrylic/mica：window-vibrancy 调用 Windows 合成 API 模糊真实桌面，
 // 此时网页 html/body 背景为透明以透出效果。dark 决定云母/亚克力深浅。
+// 返回实际生效的模式（mica 在 Win10 或新版 Win11 上不可见/不可用时降级）。
 #[tauri::command]
-fn set_background(app: tauri::AppHandle, mode: String, dark: Option<bool>) -> Result<(), String> {
+fn set_background(app: tauri::AppHandle, mode: String, dark: Option<bool>) -> Result<String, String> {
     let window = app.get_webview_window("main").ok_or("主窗口未就绪")?;
     // 先清除既有效果（跨版本/系统差异导致的失败可忽略，最坏残留一次）。
     let _ = window_vibrancy::clear_acrylic(&window);
     let _ = window_vibrancy::clear_mica(&window);
     let _ = window_vibrancy::clear_blur(&window);
-    match mode.as_str() {
-        "acrylic" => {
-            let tint: window_vibrancy::Color = if dark.unwrap_or(true) {
-                (24, 24, 28, 128)
+
+    // 亚克力 tint：alpha 压到 90，避免盖死背后桌面。Win11 22523+ 下该值被
+    // 忽略（走 DWM 的 TRANSIENTWINDOW 实时模糊），仅 Win10 生效。
+    let tint: window_vibrancy::Color = if dark.unwrap_or(true) {
+        (24, 24, 28, 90)
+    } else {
+        (240, 240, 245, 90)
+    };
+
+    let applied = match mode.as_str() {
+        // 用户诉求是「模糊背后桌面/其他窗口」，亚克力是实时模糊的正确效果；
+        // 云母只是取壁纸的淡效果。云母失败/不可用时自动落到亚克力。
+        "mica" => {
+            if window_vibrancy::apply_mica(&window, dark).is_ok() {
+                "mica"
+            } else if window_vibrancy::apply_acrylic(&window, Some(tint)).is_ok() {
+                "acrylic"
             } else {
-                (242, 242, 247, 128)
-            };
-            window_vibrancy::apply_acrylic(&window, Some(tint)).map_err(|e| e.to_string())
+                "default"
+            }
         }
-        "mica" => window_vibrancy::apply_mica(&window, dark).map_err(|e| e.to_string()),
-        _ => Ok(()),
-    }
+        "acrylic" => {
+            if window_vibrancy::apply_acrylic(&window, Some(tint)).is_ok() {
+                "acrylic"
+            } else if window_vibrancy::apply_blur(&window, Some(tint)).is_ok() {
+                "acrylic" // blur 同属「模糊背后内容」，样式并入亚克力
+            } else {
+                "default"
+            }
+        }
+        _ => "default",
+    };
+    Ok(applied.to_string())
 }
 
 fn main() {
