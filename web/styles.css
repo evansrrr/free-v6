@@ -1169,17 +1169,43 @@ md-icon-button > md-icon {
   box-shadow: var(--glass-edge);
 }
 
-/* FAB：半透明主色容器 + 磨砂 */
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-fab {
-  --md-fab-container-color: color-mix(in srgb, var(--md-primary-container) 72%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(1.5);
-  backdrop-filter: blur(14px) saturate(1.5);
+/* ── 交互控件液态玻璃（导航按钮 / 开关 / 芯片 / FAB，参考 demo 的 button 模式） ── */
+
+/* 导航栏按钮 + 日志按钮：玻璃胶囊，悬停增亮、选中主色 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item {
+  background: color-mix(in srgb, var(--md-surface-container) 30%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--md-on-surface) 5%, transparent);
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item:hover {
+  background: color-mix(in srgb, var(--md-surface-container-high) 52%, transparent);
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item.active {
+  background: color-mix(in srgb, var(--md-primary-container) 58%, transparent);
 }
 
-/* 过滤芯片（分段控件）：半透明磨砂 */
+/* 设置里的开关（md-switch）：轨道半透明磨砂 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-switch {
+  --md-switch-track-color: color-mix(in srgb, var(--md-outline) 55%, transparent);
+  --md-switch-selected-track-color: color-mix(in srgb, var(--md-primary) 70%, transparent);
+  --md-switch-track-outline-color: color-mix(in srgb, var(--md-outline) 65%, transparent);
+  --md-switch-handle-color: color-mix(in srgb, var(--md-surface-container-highest) 88%, transparent);
+}
+
+/* 分段控件 / 过滤芯片：半透明容器 + 磨砂 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-filter-chip {
+  --md-filter-chip-outline-color: color-mix(in srgb, var(--md-outline) 60%, transparent);
+  --md-filter-chip-selected-container-color: color-mix(in srgb, var(--md-primary-container) 62%, transparent);
   -webkit-backdrop-filter: blur(10px) saturate(1.5);
   backdrop-filter: blur(10px) saturate(1.5);
+}
+
+/* FAB（免流切换 / 测试延迟）：半透明主色容器 + 磨砂 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-fab {
+  --md-fab-container-color: color-mix(in srgb, var(--md-primary-container) 68%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
 }
 
 /* ── WebGL 液态玻璃接管（仅壁纸 + 开关开启） ── */
