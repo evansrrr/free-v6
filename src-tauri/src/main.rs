@@ -337,6 +337,32 @@ fn hotkey_set(enabled: bool) -> Result<(), String> {
     }
 }
 
+/* ── Window background (液态玻璃主题) ─────────────────────────────── */
+// 应用/清除窗口级背景效果。mode ∈ { default, wallpaper, acrylic, mica }。
+// default/wallpaper：清除 OS 模糊，由网页 CSS 绘制背景（不透明）；
+// acrylic/mica：window-vibrancy 调用 Windows 合成 API 模糊真实桌面，
+// 此时网页 html/body 背景为透明以透出效果。dark 决定云母/亚克力深浅。
+#[tauri::command]
+fn set_background(app: tauri::AppHandle, mode: String, dark: Option<bool>) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("主窗口未就绪")?;
+    // 先清除既有效果（跨版本/系统差异导致的失败可忽略，最坏残留一次）。
+    let _ = window_vibrancy::clear_acrylic(&window);
+    let _ = window_vibrancy::clear_mica(&window);
+    let _ = window_vibrancy::clear_blur(&window);
+    match mode.as_str() {
+        "acrylic" => {
+            let tint: window_vibrancy::Color = if dark.unwrap_or(true) {
+                (24, 24, 28, 128)
+            } else {
+                (242, 242, 247, 128)
+            };
+            window_vibrancy::apply_acrylic(&window, Some(tint)).map_err(|e| e.to_string())
+        }
+        "mica" => window_vibrancy::apply_mica(&window, dark).map_err(|e| e.to_string()),
+        _ => Ok(()),
+    }
+}
+
 fn main() {
     // Launched by the autostart logon task: honor Task Manager's Startup tab
     // toggle before any window or tray icon exists. Manual launches have no
@@ -425,6 +451,7 @@ fn main() {
             app_quit,
             get_api_token,
             hotkey_set,
+            set_background,
             update_apply
         ])
         .build(tauri::generate_context!())
