@@ -263,6 +263,24 @@ function setRunning(running) {
   if (!running) clearProxyList();
 }
 
+// FAB 过渡态文案（检测中…/启动中…）。手动路径由点击处理器驱动，自动启动
+// 此前全程不动按钮——整个过程停在「启动免流」，看起来像没反应。transition
+// 同时挡住 3s 轮询 setRunning 把文字抢回「启动免流/停止免流」。
+function fabPhase(text) {
+  const fab = $('#proxyToggle');
+  if (!fab) return;
+  state.transition = 'starting';
+  fab.label = text;
+}
+
+// 交还过渡态：按最终运行状态定形按钮（自动启动成功/失败/放弃、自动运行
+// 开关被关掉时调用）。手动路径由点击处理器的 finally 自行恢复，不走这里。
+function fabDone() {
+  state.transition = null;
+  const fab = $('#proxyToggle');
+  if (fab) fab.label = state.proxyRunning ? '停止免流' : '启动免流';
+}
+
 function updateConnectionChip(online) {
   const chip = $('#connectionChip');
   const dot = $('#headerDot');
@@ -291,12 +309,17 @@ function updateConnectionChip(online) {
 //   api     /proxy/start failed
 // auto=true
 let startFlowBusy = false;
+let startFlowSettled = Promise.resolve(); // 上一次启动流程结束的信号（手动接管等待用）
 async function startProxyFlow(auto = false) {
   if (startFlowBusy) return { ok: false, reason: 'busy', message: '启动流程正在进行' };
   if (!state.helperOnline) return { ok: false, reason: 'helper', message: 'helper 未连接' };
   startFlowBusy = true;
+  let release;
+  startFlowSettled = new Promise((resolve) => { release = resolve; });
   try {
     // core detect: fehlen → hint download
+    // 核心与 IPv6 检测阶段按钮显示「检测中…」（auto 同样走这套反馈）
+    fabPhase('检测中…');
     try {
       const runtime = await api('/runtime');
       state.runtimePresent = Boolean(runtime.present);
@@ -307,10 +330,7 @@ async function startProxyFlow(auto = false) {
 
     // IPv6 gate: only works on campus IPv6. Developer mode skips it.
     if (!state.devMode) {
-      if (!auto) {
-        $('#proxyToggle').label = '启动中…';
-        addLog('检测本机 IPv6…');
-      }
+      if (!auto) addLog('检测本机 IPv6…');
       let ip = '';
       let detail = '';
       try {
@@ -334,6 +354,7 @@ async function startProxyFlow(auto = false) {
       // 热点共享开启时，WinRT 切换会重启移动热点（热点短暂断开是预期行为），
       // 在请求发出前先说明，用户看到热点掉线时不会误以为是故障。
       if (state.hotspotShare) addLog('热点共享：正在切换，移动热点将短暂重启');
+      fabPhase('启动中…');
       started = await api('/proxy/start', { method: 'POST', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode }) });
     } catch (e) {
       return { ok: false, reason: 'api', message: e.message, code: e.code };
@@ -348,6 +369,7 @@ async function startProxyFlow(auto = false) {
     return { ok: true };
   } finally {
     startFlowBusy = false;
+    release();
   }
 }
 
@@ -440,6 +462,8 @@ function maybeArmAutoRun() {
   autoRun.regTries = 0;
   autoRun.lastWhy = '';
   addLog('自动运行免流已就绪');
+  // 自动启动期间按钮给过渡态反馈（排队/重试等待显示「启动中…」）
+  fabPhase('启动中…');
   scheduleAutoRun(1200);
 }
 
@@ -469,6 +493,8 @@ function autoRunRetry(why, long = false) {
     autoRun.lastWhy = why;
     addLog(`自动运行免流：${why}，稍后重试`);
   }
+  // 重试等待期间按钮保持「启动中…」（不落回「启动免流」闪来闪去）
+  fabPhase('启动中…');
   scheduleAutoRun(AUTO_RUN_RETRY_MS);
 }
 
@@ -476,6 +502,7 @@ function autoRunRetry(why, long = false) {
 async function autoRunFail(res) {
   disarmAutoRun();
   autoRun.done = true;
+  fabDone(); // 自动启动结束：按钮定形回「启动免流」
   if (!state.autoRunProxy) return; // 期间被用户关掉 → 不再打扰
   addLog(`自动启动免流失败：${res.message}`, true);
   if (res.code === 'port-conflict') showToast('请关闭并退出其他代理软件', 'error');
@@ -493,7 +520,7 @@ async function autoRunFail(res) {
 
 async function runAutoStart() {
   if (!autoRun.armed || !state.autoRunProxy) { disarmAutoRun(); return; }
-  if (state.proxyRunning) { disarmAutoRun(); autoRun.done = true; return; }
+  if (state.proxyRunning) { disarmAutoRun(); autoRun.done = true; fabDone(); return; }
   if (!state.helperOnline) { autoRunRetry('helper 未连接'); return; }
   if (!navigator.onLine) { autoRunRetry('等待网络恢复', true); return; }
   // /proxy/start 依赖 state/warp.json：凭据注册失败（多因网络未就绪）时按重试兜底，
@@ -508,9 +535,13 @@ async function runAutoStart() {
     return;
   }
   const res = await startProxyFlow(true);
+  // 期间被手动接管（FAB 点击已 disarm）→ 不再重试、也不再定形按钮/弹窗，
+  // 交由手动流程接管。
+  if (!autoRun.armed) return;
   if (res.ok) {
     disarmAutoRun();
     autoRun.done = true;
+    fabDone(); // 成功：按钮定形「停止免流」（setRunning 的文案被过渡态挡住）
     return;
   }
   // 开机冷启动的「时机未到」用长预算重试：v6 探测失败、此刻 v6 尚非校园
@@ -596,6 +627,7 @@ function closeNetGateDialog() {
 function showCoreDialog() {
   const dl = $('#coreDialogDownload');
   if (dl) { dl.disabled = false; dl.textContent = '下载'; }
+  renderCoreDownloadProgress(0, false); // 复位上次残留的进度态
   $('#coreDialogScrim')?.classList.add('open');
 }
 
@@ -997,14 +1029,28 @@ function setMode(mode, persist = true, silent = false) {
   if (persist) persistSettings().then(saved => { if (changed) notifyEffectiveNextStart(saved); });
 }
 
+// 设置写入代数。PUT /settings 发出时 +1、落定（成功/失败）时再 +1；任何
+// 在写入开始前发出、写入落定前返回的 /status 响应都会对不上代数，其
+// settings 字段整块丢弃。helper 的 /status 每次要拉起 PowerShell 查管理员
+// 权限（数百 ms），这种慢响应携带的还是写入前的旧值——若照单全收，刚拨好
+// 的开关会被旧值拨回去，表现就是「自动运行免流按钮不显示状态切换」。
+let settingsWriteGen = 0;
+
 function persistSettings() {
-  if (!state.helperOnline) {
-    addLog('helper 未连接，设置未保存', true);
-    return Promise.resolve(false);
-  }
+  // 失败统一走这里：日志 + 红叉 toast + 隔一个宏任务才返回 false。
+  // helper 离线时的失败发生在微任务里，若同步返回调用方会立刻拨回开关，
+  // 浏览器一帧都没画过——用户看不到任何「状态切换」，像按钮没反应。
+  // 让出一个宏任务，乐观状态至少成像一帧再落回，配合 toast 说清原因。
+  const fail = (message) => {
+    addLog(message, true);
+    showToast(message, 'error');
+    return new Promise((resolve) => setTimeout(() => resolve(false), 0));
+  };
+  if (!state.helperOnline) return fail('helper 未连接，设置未保存');
+  settingsWriteGen += 1;
   return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, chainEnabled: state.chain.enabled }) })
-    .then(() => { addLog('设置已保存'); return true; })
-    .catch(e => { addLog(`保存设置失败: ${e.message}`, true); return false; });
+    .then(() => { settingsWriteGen += 1; addLog('设置已保存'); return true; })
+    .catch((e) => { settingsWriteGen += 1; return fail(`保存设置失败: ${e.message}`); });
 }
 
 /* ── Settings save feedback (toast) ─────────────────────────── */
@@ -1299,20 +1345,75 @@ function toggleTrafficHint() {
 
 /* ── mihomo core download (设置页核心行 + 启动拦截弹窗共用) ─── */
 
-// 下载核心；btn 传入时显示「下载中…」进度，成功返回 true。
+// 渲染核心下载进度。active=false 时隐藏进度、恢复按钮文案。进度同时落到
+// 弹窗进度条与两个入口按钮（设置页「下载」、弹窗「下载」），保证两个入口
+// 都有可见反馈。total>0 时显示百分比，否则（Content-Length 未知）只显示
+// 「下载中…」+ 已下载字节在轮询里另算。
+function renderCoreDownloadProgress(pct, active) {
+  const spinner = $('#coreDialogSpinner');
+  const text = $('#coreDialogPercentText');
+  const prog = $('#coreDialogProgress');
+  if (prog) prog.hidden = !active;
+  if (spinner) spinner.value = pct;
+  if (text) text.textContent = `${pct}%`;
+  const label = active ? (pct > 0 ? `下载中 ${pct}%` : '下载中…') : '下载';
+  for (const sel of ['#downloadCore', '#coreDialogDownload']) {
+    const b = $(sel);
+    if (!b) continue;
+    b.disabled = active;
+    b.textContent = label;
+  }
+}
+
+// 轮询 /runtime/download/progress 直到 done/error。返回下载结果（含 version）
+// 或 null（失败）。
+async function pollCoreDownloadProgress() {
+  for (let i = 0; i < 600; i++) { // 上限 ~3 分钟，对齐 helper 侧总预算
+    await new Promise((r) => setTimeout(r, 300));
+    let p;
+    try {
+      p = await api('/runtime/download/progress');
+    } catch (_) {
+      continue;
+    }
+    if (p.state === 'downloading') {
+      const done = p.done || 0;
+      const total = p.total > 0 ? p.total : 0;
+      const pct = total > 0 ? Math.min(100, Math.floor((done * 100) / total)) : 0;
+      renderCoreDownloadProgress(pct, true);
+      continue;
+    }
+    if (p.state === 'done') return p;
+    if (p.state === 'error') addLog(`下载失败: ${p.error || '未知错误'}`, true);
+    else addLog('下载状态异常', true);
+    showToast('核心下载失败', 'error');
+    return null;
+  }
+  addLog('下载超时', true);
+  showToast('核心下载超时', 'error');
+  return null;
+}
+
+// 下载核心；btn 为触发入口按钮（弹窗「下载」或设置页「下载」）。成功返回
+// true（弹窗侧据此自动关闭）。
 async function downloadCore(btn) {
   if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
-  if (btn) { btn.disabled = true; btn.textContent = '下载中…'; }
+  if (btn) btn.disabled = true;
+  renderCoreDownloadProgress(0, true);
   try {
-    const result = await api('/runtime/download', { method: 'POST' });
+    await api('/runtime/download', { method: 'POST' }); // 立即返回，下载在后台
+    const result = await pollCoreDownloadProgress();
+    if (!result) return false;
     state.runtimePresent = true;
     state.runtimeChecked = true;
     addLog(`核心下载完成${result.version ? `: ${result.version}` : ''}`);
     return true;
   } catch (e) {
     addLog(`下载失败: ${e.message}`, true);
+    showToast('核心下载失败', 'error');
     return false;
   } finally {
+    renderCoreDownloadProgress(0, false);
     if (btn) { btn.disabled = false; btn.textContent = '下载'; }
     updateSettingsUI();
     updateConnectionChip(state.helperOnline);
@@ -1355,16 +1456,20 @@ function maybeAutoRegisterWarp() {
 /* ── Backend State Refresh ────────────────────────────────────── */
 
 async function refreshBackendState() {
+  const genAtStart = settingsWriteGen;
   try {
     const status = await api('/status');
     state.helperOnline = true;
-    state.mode = status.settings?.mode || state.mode;
-    state.cidrs = status.settings?.campusCidrs || state.cidrs;
-    if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
-    if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
-    if (typeof status.settings?.silentStart === 'boolean') state.silentStart = status.settings.silentStart;
-    if (typeof status.settings?.autoRunProxy === 'boolean') state.autoRunProxy = status.settings.autoRunProxy;
-    if (typeof status.settings?.hotkeyEnabled === 'boolean') state.hotkeyEnabled = status.settings.hotkeyEnabled;
+    // 设置写入在途/落定后返回的旧响应不再回灌 state（见 settingsWriteGen）
+    if (genAtStart === settingsWriteGen) {
+      state.mode = status.settings?.mode || state.mode;
+      state.cidrs = status.settings?.campusCidrs || state.cidrs;
+      if (typeof status.settings?.devMode === 'boolean') state.devMode = status.settings.devMode;
+      if (typeof status.settings?.autoStart === 'boolean') state.autoStart = status.settings.autoStart;
+      if (typeof status.settings?.silentStart === 'boolean') state.silentStart = status.settings.silentStart;
+      if (typeof status.settings?.autoRunProxy === 'boolean') state.autoRunProxy = status.settings.autoRunProxy;
+      if (typeof status.settings?.hotkeyEnabled === 'boolean') state.hotkeyEnabled = status.settings.hotkeyEnabled;
+    }
 
     setMode(state.mode, false, true);
     setRunning(Boolean(status.proxy?.running));
@@ -1469,6 +1574,7 @@ function resetTrafficDisplay(clearCounters) {
 /* ── Status Polling ───────────────────────────────────────────── */
 
 async function pollStatus() {
+  const genAtStart = settingsWriteGen;
   try {
     const status = await api('/status');
     const firstConnect = !state.helperOnline;
@@ -1503,23 +1609,27 @@ async function pollStatus() {
       addLog(isRunning ? '免流模式已启动' : '免流模式已停止');
       if (isRunning) autoDelayTestAfterStart();
     }
-    state.mode = status.settings?.mode || state.mode;
-    setMode(state.mode, false, true);
-    // Sync developer mode / auto-start when they changed on the backend
-    const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
-    const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
-    const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
-    const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
-    const nextHotkeyEnabled = typeof status.settings?.hotkeyEnabled === 'boolean' ? status.settings.hotkeyEnabled : state.hotkeyEnabled;
-    const nextHotspotShare = typeof status.settings?.hotspotShare === 'boolean' ? status.settings.hotspotShare : state.hotspotShare;
-    if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled || nextHotspotShare !== state.hotspotShare) {
-      state.devMode = nextDevMode;
-      state.autoStart = nextAutoStart;
-      state.silentStart = nextSilentStart;
-      state.autoRunProxy = nextAutoRunProxy;
-      state.hotkeyEnabled = nextHotkeyEnabled;
-      state.hotspotShare = nextHotspotShare;
-      updateSettingsUI();
+    // 设置写入期间（或写入落定前发出的慢响应）不回灌设置字段——旧值会把
+    // 用户刚拨好的开关拨回去（见 settingsWriteGen）
+    if (genAtStart === settingsWriteGen) {
+      state.mode = status.settings?.mode || state.mode;
+      setMode(state.mode, false, true);
+      // Sync developer mode / auto-start when they changed on the backend
+      const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
+      const nextAutoStart = typeof status.settings?.autoStart === 'boolean' ? status.settings.autoStart : state.autoStart;
+      const nextSilentStart = typeof status.settings?.silentStart === 'boolean' ? status.settings.silentStart : state.silentStart;
+      const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
+      const nextHotkeyEnabled = typeof status.settings?.hotkeyEnabled === 'boolean' ? status.settings.hotkeyEnabled : state.hotkeyEnabled;
+      const nextHotspotShare = typeof status.settings?.hotspotShare === 'boolean' ? status.settings.hotspotShare : state.hotspotShare;
+      if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled || nextHotspotShare !== state.hotspotShare) {
+        state.devMode = nextDevMode;
+        state.autoStart = nextAutoStart;
+        state.silentStart = nextSilentStart;
+        state.autoRunProxy = nextAutoRunProxy;
+        state.hotkeyEnabled = nextHotkeyEnabled;
+        state.hotspotShare = nextHotspotShare;
+        updateSettingsUI();
+      }
     }
     // 热点共享下降沿：仍在共享但 active 掉线 → 弹“下次启动生效”提示，
     // 每次断开只弹一次（hotspotActive 记上次值；停止免流后不弹）。
@@ -1577,6 +1687,15 @@ function wireEvents() {
         // 手动接管：取消排队中的自动启动，改由本次点击决定结果
         autoRun.done = true;
         disarmAutoRun();
+        // 自动启动仍在途（快照 PowerShell 等可能数秒）：等它落定再手动重试，
+        // 避免「启动流程正在进行」。在途流程每一步都有界（IPv6 探测 8s、
+        // 快照 10s、就绪 15s），必会落定。等待期间若已启动成功则直接收尾，
+        // 不重复启动；否则立刻手动再启动一次，而不是再等下一次自动重试。
+        if (startFlowBusy) await startFlowSettled;
+        if (state.proxyRunning) {
+          addLog('免流模式已启动');
+          return;
+        }
         const res = await startProxyFlow(false);
         if (!res.ok) reportStartFailure(res);
       }
@@ -2339,6 +2458,7 @@ function wireSettingsEvents() {
     } else {
       addLog('已关闭自动运行免流');
       disarmAutoRun();
+      fabDone(); // 排队中的自动启动取消：按钮不留在「启动中…」
     }
   });
 

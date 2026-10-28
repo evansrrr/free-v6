@@ -60,7 +60,19 @@ type DownloadResult struct {
 	SHA256  string
 }
 
+// progressSink 接收下载进度：received 为当前镜像已传输字节数，total 为响应
+// Content-Length（未知时为 -1）。回调在下载 goroutine 内随数据流入触发，
+// 实现必须线程安全且廉价（helper 用原子计数器承载）。切换镜像时 received
+// 会归零重算，前端进度条可能回跳，属预期行为。
+type progressSink func(received, total int64)
+
 func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
+	return DownloadLatestWithProgress(ctx, root, nil)
+}
+
+// DownloadLatestWithProgress 与 DownloadLatest 相同，额外通过 progress
+// 上报下载字节进度（progress 为 nil 时不报）。
+func DownloadLatestWithProgress(ctx context.Context, root string, progress progressSink) (DownloadResult, error) {
 	client := &http.Client{}
 	var failures []string
 	skipped := 0
@@ -69,7 +81,7 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 			skipped = len(runtimeDownloadURLs) - index
 			break
 		}
-		digest, temporaryPath, downloadErr := downloadRuntimeMirror(ctx, client, source)
+		digest, temporaryPath, downloadErr := downloadRuntimeMirror(ctx, client, source, progress)
 		if downloadErr == nil {
 			runtimeDir := filepath.Join(root, "runtime")
 			if mkdirErr := os.MkdirAll(runtimeDir, 0o700); mkdirErr != nil {
@@ -103,7 +115,7 @@ func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
 // 摘要与临时文件路径（调用方负责删除）。停滞 watchdog 与硬上限都通过
 // 取消 mirrorCtx 中断在途读取：连接挂死、首字节不来、传输中断流都会在
 // runtimeStallTimeout 内让位给下一条线路。
-func downloadRuntimeMirror(ctx context.Context, client *http.Client, source string) (digest string, temporaryPath string, err error) {
+func downloadRuntimeMirror(ctx context.Context, client *http.Client, source string, progress progressSink) (digest string, temporaryPath string, err error) {
 	mirrorCtx, cancel := context.WithTimeout(ctx, runtimeMirrorHardTimeout)
 	defer cancel()
 
@@ -146,7 +158,11 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 
 	body := &stallhttp.CountingReader{Reader: response.Body, Counter: &received}
 	hash := sha256.New()
-	limited := io.LimitReader(io.TeeReader(body, hash), maxRuntimeDownload)
+	reader := io.Reader(io.TeeReader(body, hash))
+	if progress != nil {
+		reader = &progressReportingReader{r: reader, received: &received, total: response.ContentLength, onProgress: progress}
+	}
+	limited := io.LimitReader(reader, maxRuntimeDownload)
 	if _, copyErr := io.Copy(temporary, limited); copyErr != nil {
 		return "", "", fmt.Errorf("save mihomo runtime download: %w", copyErr)
 	}
@@ -159,6 +175,24 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 	}
 	keep = true
 	return digest, temporaryPath, nil
+}
+
+// progressReportingReader 在每次 Read 后上报当前字节进度。received 复用
+// stall 计数器（CountingReader 已统计真正从网络读到的字节量），避免二次
+// 计数与 watchdog 看到的字节数不一致。
+type progressReportingReader struct {
+	r          io.Reader
+	received   *atomic.Int64
+	total      int64
+	onProgress progressSink
+}
+
+func (p *progressReportingReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if p.onProgress != nil && n > 0 {
+		p.onProgress(p.received.Load(), p.total)
+	}
+	return n, err
 }
 
 func extractRuntime(archivePath, runtimeDir string) (string, error) {

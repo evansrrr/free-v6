@@ -531,6 +531,10 @@
       <md-icon class="net-dialog-icon">download</md-icon>
       <h3 id="coreDialogTitle">未检测到运行核心，请先下载</h3>
       <p>下载并安装核心（~21MB）即可启动免流模式</p>
+      <div class="core-progress" id="coreDialogProgress" hidden>
+        <md-circular-progress id="coreDialogSpinner" max="100" value="0"></md-circular-progress>
+        <span class="update-status" id="coreDialogPercentText">0%</span>
+      </div>
       <div class="net-dialog-actions">
         <md-text-button id="coreDialogCancel">取消</md-text-button>
         <md-filled-button id="coreDialogDownload">下载</md-filled-button>

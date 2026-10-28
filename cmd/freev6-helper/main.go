@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourname/freev6/internal/mihomo"
@@ -100,6 +101,7 @@ func main() {
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
 	mux.HandleFunc("/api/v1/appearance", h.appearance)
 	mux.HandleFunc("/api/v1/runtime/download", h.downloadRuntime)
+	mux.HandleFunc("/api/v1/runtime/download/progress", h.runtimeDownloadProgress)
 	mux.HandleFunc("/api/v1/settings", h.settings)
 	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)
 	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
@@ -195,23 +197,92 @@ func (h *helper) runtime(writer http.ResponseWriter, request *http.Request) {
 	})
 }
 
+// runtimeDownloadRun 由后台下载 goroutine 写入、GET /runtime/download/progress
+// 读取。done/total 是字节计数器，切换镜像时归零重算（进度条可能回跳，与
+// 更新下载同约定）。state/path/version/sha256/err/busy 受 mu 保护。
+type runtimeDownloadRunState struct {
+	mu      sync.Mutex
+	state   string // idle | downloading | done | error
+	path    string
+	version string
+	sha256  string
+	err     string
+	busy    bool
+	done    atomic.Int64
+	total   atomic.Int64
+}
+
+var runtimeDownloadRun = runtimeDownloadRunState{state: "idle"}
+
+// downloadRuntime 触发后台下载并立即返回；进度由前端轮询
+// GET /api/v1/runtime/download/progress 获取（与更新下载同一套模式）。
 func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), 3*time.Minute)
-	defer cancel()
-	result, err := mihomo.DownloadLatest(ctx, h.root)
-	if err != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": err.Error()})
+
+	runtimeDownloadRun.mu.Lock()
+	if runtimeDownloadRun.busy {
+		runtimeDownloadRun.mu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "核心下载已在进行"})
 		return
 	}
+	runtimeDownloadRun.busy = true
+	runtimeDownloadRun.state = "downloading"
+	runtimeDownloadRun.path = ""
+	runtimeDownloadRun.version = ""
+	runtimeDownloadRun.sha256 = ""
+	runtimeDownloadRun.err = ""
+	runtimeDownloadRun.done.Store(0)
+	runtimeDownloadRun.total.Store(-1)
+	runtimeDownloadRun.mu.Unlock()
+
+	go func() {
+		// 请求体立即返回，下载生命周期与请求解耦：用独立 context 而非
+		// request.Context()。总预算 3 分钟（与旧实现一致），每条镜像另有
+		// 自己的停滞/硬限预算。
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		result, err := mihomo.DownloadLatestWithProgress(ctx, h.root, func(received, total int64) {
+			runtimeDownloadRun.done.Store(received)
+			runtimeDownloadRun.total.Store(total)
+		})
+		runtimeDownloadRun.mu.Lock()
+		if err != nil {
+			runtimeDownloadRun.state = "error"
+			runtimeDownloadRun.err = err.Error()
+			runtimeDownloadRun.busy = false
+		} else {
+			runtimeDownloadRun.state = "done"
+			runtimeDownloadRun.path = result.Path
+			runtimeDownloadRun.version = result.Version
+			runtimeDownloadRun.sha256 = result.SHA256
+		}
+		runtimeDownloadRun.mu.Unlock()
+	}()
+
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
+}
+
+// runtimeDownloadProgress 供前端在下载期间每 300ms 轮询一次。
+func (h *helper) runtimeDownloadProgress(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	runtimeDownloadRun.mu.Lock()
+	state, path, version, sha256Hex, errMsg := runtimeDownloadRun.state, runtimeDownloadRun.path, runtimeDownloadRun.version, runtimeDownloadRun.sha256, runtimeDownloadRun.err
+	runtimeDownloadRun.mu.Unlock()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"present": true,
-		"version": result.Version,
-		"path":    result.Path,
-		"sha256":  result.SHA256,
+		"ok":      true,
+		"state":   state,
+		"done":    runtimeDownloadRun.done.Load(),
+		"total":   runtimeDownloadRun.total.Load(),
+		"path":    path,
+		"version": version,
+		"sha256":  sha256Hex,
+		"error":   errMsg,
 	})
 }
 

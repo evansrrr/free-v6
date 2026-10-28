@@ -673,6 +673,15 @@ md-icon-button > md-icon {
   --md-circular-progress-active-indicator-color: var(--md-primary);
 }
 
+/* Core download dialog progress (复用 update 进度条的样式约定) */
+.core-progress { display: flex; align-items: center; gap: 10px; }
+.core-progress md-circular-progress {
+  --md-circular-progress-size: 30px;
+  --md-circular-progress-active-indicator-color: var(--md-primary);
+}
+/* display:flex 会盖过 UA 的 [hidden]，须显式强制隐藏 */
+#coreDialogProgress[hidden] { display: none !important; }
+
 /* ── First-run guide ── */
 
 .guide-scrim {

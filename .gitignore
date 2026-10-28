@@ -16,9 +16,10 @@ mihomo.yaml
 .agents/
 docs/agent/
 skills-lock.json
-.mimocode
+.mimocode/
 .worktrees/
 .playwright-mcp/
+.workbuddy/
 
 .vscode/
 .idea/
