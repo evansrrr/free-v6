@@ -22,13 +22,18 @@
         "lit-element/": "./vendor/lit-element/",
         "@lit/reactive-element": "./vendor/@lit/reactive-element/reactive-element.js",
         "@lit/reactive-element/": "./vendor/@lit/reactive-element/",
-        "tslib": "./vendor/tslib/tslib.es6.js"
+        "tslib": "./vendor/tslib/tslib.es6.js",
+        "@ybouane/liquidglass": "./vendor/liquidglass/index.js"
       }
     }
   </script>
   <script type="module" src="material.js"></script>
 </head>
 <body>
+  <!-- 液态玻璃背景层：壁纸 + 主题遮罩（z-index 0，其余内容在其上） -->
+  <img class="bg-image" id="bgImage" alt="" aria-hidden="true">
+  <div class="bg-tint" id="bgTint" aria-hidden="true"></div>
+
   <!-- Custom title bar — drag strip + caption buttons (replaces the native bar) -->
   <header class="titlebar" id="titlebar">
     <div class="window-controls">
@@ -234,6 +239,44 @@
                 <div class="setting-label">纯黑背景</div>
               </div>
               <md-switch id="pureBlackSwitch" aria-label="纯黑背景"></md-switch>
+            </div>
+            <md-divider></md-divider>
+            <div class="setting-item">
+              <div class="setting-icon">
+                <md-icon>blur_on</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">背景模式</div>
+              </div>
+              <md-outlined-select id="bgModeSelect" class="setting-md-select" aria-label="背景模式">
+                <md-select-option value="default">默认</md-select-option>
+                <md-select-option value="acrylic">亚克力</md-select-option>
+                <md-select-option value="mica">云母</md-select-option>
+                <md-select-option value="wallpaper">壁纸</md-select-option>
+              </md-outlined-select>
+            </div>
+            <md-divider></md-divider>
+            <div class="setting-item clickable" id="wallpaperItem">
+              <div class="setting-icon">
+                <md-icon>image</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">更换壁纸</div>
+                <div class="setting-desc" id="wallpaperDesc">选择一张图片作为背景</div>
+              </div>
+              <md-text-button id="clearWallpaperBtn" hidden>清除</md-text-button>
+            </div>
+            <input type="file" id="wallpaperFileInput" accept="image/*" hidden>
+            <md-divider></md-divider>
+            <div class="setting-item">
+              <div class="setting-icon">
+                <md-icon>blur_circular</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">液态玻璃</div>
+                <div class="setting-desc">为浮动面板启用 WebGL 折射效果</div>
+              </div>
+              <md-switch id="liquidGlassSwitch" aria-label="液态玻璃"></md-switch>
             </div>
           </div>
 

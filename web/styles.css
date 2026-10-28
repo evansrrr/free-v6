@@ -1063,3 +1063,156 @@ md-icon-button > md-icon {
   ::view-transition-old(root),
   ::view-transition-new(root) { animation-duration: 1ms; }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   液态玻璃主题 (Liquid Glass)
+   - 背景层：壁纸 <img> + 主题遮罩（body 顶层，z-index 0）
+   - 背景模式：default / wallpaper / acrylic / mica（data-bg-mode）
+   - CSS 磨砂玻璃：backdrop-filter 覆盖主要表面，保证全 UI 流畅
+   - WebGL 液态玻璃：app.js 经 @ybouane/liquidglass 应用到浮动面板
+     （data-webgl-glass="on" 时接管，见 app.js）
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── 背景层 ── */
+.bg-image,
+.bg-tint {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.bg-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none; /* 仅壁纸模式显示 */
+}
+.bg-tint { background: transparent; }
+
+/* 内容层抬到背景之上（其余浮层已有 z-index 50~140） */
+.titlebar,
+.app-shell { position: relative; z-index: 1; }
+
+/* ── 背景模式：透明窗口 ── */
+:root[data-bg-mode="wallpaper"] body,
+:root[data-bg-mode="acrylic"] body,
+:root[data-bg-mode="mica"] body { background: transparent; }
+
+:root[data-bg-mode="wallpaper"] .titlebar,
+:root[data-bg-mode="acrylic"] .titlebar,
+:root[data-bg-mode="mica"] .titlebar { background: transparent; }
+
+:root[data-bg-mode="wallpaper"] .bg-image { display: block; }
+
+/* 可读性遮罩：主题表面色低透明度，深浅色自适应 */
+:root[data-bg-mode="wallpaper"] .bg-tint {
+  background: color-mix(in srgb, var(--md-surface) 30%, transparent);
+}
+:root[data-bg-mode="acrylic"] .bg-tint,
+:root[data-bg-mode="mica"] .bg-tint {
+  background: color-mix(in srgb, var(--md-surface) 15%, transparent);
+}
+
+/* ── CSS 磨砂玻璃表面（有背景时启用） ── */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) {
+  --glass-bg: color-mix(in srgb, var(--md-surface-container) 52%, transparent);
+  --glass-bg-strong: color-mix(in srgb, var(--md-surface-container-high) 64%, transparent);
+  --glass-blur: 20px;
+  --glass-edge: inset 0 1px 0 color-mix(in srgb, var(--md-on-surface) 7%, transparent);
+}
+
+/* 卡片 / 设置组 / 导航导轨 / CIDR 条目 / 更新说明 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .settings-group,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .rail,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .cidr-item,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .update-notes {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  box-shadow: var(--glass-edge);
+}
+
+/* node-card 保留其边框，仅换半透明背景 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+}
+
+/* hover 态保持半透明 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card-stats:hover,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card:hover,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .setting-item.clickable:hover {
+  background: color-mix(in srgb, var(--md-surface-container-high) 70%, transparent);
+}
+
+/* 连接状态芯片（未连接态） */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .connection-chip {
+  background: color-mix(in srgb, var(--md-surface-container-high) 68%, transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+}
+
+/* 抽屉 / 对话框 / 引导 / 提示 toast（更强调的玻璃） */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .log-drawer,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .net-dialog,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .guide-dialog,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .toast {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  backdrop-filter: blur(28px) saturate(1.7);
+  box-shadow: var(--glass-edge);
+}
+
+/* FAB：半透明主色容器 + 磨砂 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-fab {
+  --md-fab-container-color: color-mix(in srgb, var(--md-primary-container) 72%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+}
+
+/* 过滤芯片（分段控件）：半透明磨砂 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-filter-chip {
+  -webkit-backdrop-filter: blur(10px) saturate(1.5);
+  backdrop-filter: blur(10px) saturate(1.5);
+}
+
+/* ── WebGL 液态玻璃接管（仅壁纸 + 开关开启） ── */
+/* liquidglass 把折射 canvas 注入为玻璃元素第一个子节点，元素自身背景
+   须透明、关闭 CSS 磨砂与阴影，避免与 WebGL 输出叠加。 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .log-drawer,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .toast {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+/* ── 纯黑背景（OLED）优先级高于玻璃 ── */
+[data-theme="dark"][data-oled="1"] .card,
+[data-theme="dark"][data-oled="1"] .settings-group,
+[data-theme="dark"][data-oled="1"] .rail,
+[data-theme="dark"][data-oled="1"] .log-drawer,
+[data-theme="dark"][data-oled="1"] .net-dialog,
+[data-theme="dark"][data-oled="1"] .guide-dialog,
+[data-theme="dark"][data-oled="1"] .toast {
+  background: #000 !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"][data-oled="1"] .card,
+  [data-theme="system"][data-oled="1"] .settings-group,
+  [data-theme="system"][data-oled="1"] .rail,
+  [data-theme="system"][data-oled="1"] .log-drawer,
+  [data-theme="system"][data-oled="1"] .net-dialog,
+  [data-theme="system"][data-oled="1"] .guide-dialog,
+  [data-theme="system"][data-oled="1"] .toast {
+    background: #000 !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+}

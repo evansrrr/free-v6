@@ -2740,6 +2740,233 @@ function loadAppearancePrefs() {
   if (state.dynamicColor) refreshDynamicColor(true); // helper may still be connecting
 }
 
+/* ── Appearance: liquid-glass background (液态玻璃主题) ─────────── */
+
+const bgState = {
+  mode: 'default',          // default | wallpaper | acrylic | mica
+  webglGlass: true,         // WebGL 折射增强（仅壁纸模式生效）
+  wallpaper: null,          // data URL；null = 未设置
+  liquidGlass: null,        // @ybouane/liquidglass 实例
+};
+
+const BG_MODE_KEY = 'freev6-bg-mode';
+const BG_GLASS_KEY = 'freev6-webgl-glass';
+const BG_WALLPAPER_KEY = 'freev6-wallpaper';
+
+// 当前深浅色（亚克力/云母 dark 参数）
+function bgIsDark() {
+  const theme = document.documentElement.getAttribute('data-theme');
+  if (theme === 'light') return false;
+  if (theme === 'dark') return true;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+// 设置 <html data-bg-mode> 并调用 Rust 应用/清除窗口级效果
+async function applyBackgroundMode(mode, { persist = true } = {}) {
+  if (mode === 'wallpaper' && !bgState.wallpaper) mode = 'default';
+  bgState.mode = mode;
+  document.documentElement.setAttribute('data-bg-mode', mode);
+  if (persist) { try { localStorage.setItem(BG_MODE_KEY, mode); } catch (_) {} }
+  const select = $('#bgModeSelect');
+  if (select) select.value = mode;
+
+  syncLiquidGlass(); // 仅壁纸 + 开关开启时启用 WebGL 折射
+
+  const dark = bgIsDark();
+  try {
+    await tauriInvoke('set_background', { mode, dark });
+  } catch (e) {
+    addLog(`背景模式切换失败: ${e}`, true);
+    if (mode === 'acrylic' || mode === 'mica') {
+      // 系统不支持（如云母仅 Win11）→ 回退默认
+      bgState.mode = 'default';
+      document.documentElement.setAttribute('data-bg-mode', 'default');
+      if (select) select.value = 'default';
+      if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
+      syncLiquidGlass();
+    }
+  }
+}
+
+// 压缩图片为 ≤2560px 的 JPEG data URL（控制 localStorage 体积）
+function compressWallpaper(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 2560;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        const scale = Math.min(MAX / width, MAX / height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片读取失败')); };
+    img.src = url;
+  });
+}
+
+function applyWallpaper(dataUrl) {
+  bgState.wallpaper = dataUrl;
+  const imgEl = $('#bgImage');
+  if (imgEl) imgEl.src = dataUrl;
+  try {
+    localStorage.setItem(BG_WALLPAPER_KEY, dataUrl);
+  } catch (_) {
+    addLog('壁纸过大，仅本次生效（无法持久化）', true);
+  }
+  const clearBtn = $('#clearWallpaperBtn');
+  if (clearBtn) clearBtn.hidden = false;
+  const desc = $('#wallpaperDesc');
+  if (desc) desc.textContent = '已设置壁纸，点击更换';
+  applyBackgroundMode('wallpaper');
+}
+
+function clearWallpaper() {
+  bgState.wallpaper = null;
+  const imgEl = $('#bgImage');
+  if (imgEl) imgEl.removeAttribute('src');
+  try { localStorage.removeItem(BG_WALLPAPER_KEY); } catch (_) {}
+  const clearBtn = $('#clearWallpaperBtn');
+  if (clearBtn) clearBtn.hidden = true;
+  const desc = $('#wallpaperDesc');
+  if (desc) desc.textContent = '选择一张图片作为背景';
+  if (bgState.mode === 'wallpaper') applyBackgroundMode('default');
+}
+
+// WebGL 液态玻璃：仅壁纸模式 + 开关开启时，对浮动面板应用
+async function syncLiquidGlass() {
+  const enable = bgState.mode === 'wallpaper' && bgState.webglGlass && !!bgState.wallpaper;
+  document.documentElement.setAttribute('data-webgl-glass', enable ? 'on' : 'off');
+  if (enable) await initLiquidGlass();
+  else destroyLiquidGlass();
+}
+
+async function initLiquidGlass() {
+  if (bgState.liquidGlass) return;
+  const drawer = $('#logDrawer');
+  if (!drawer) return;
+  try {
+    const { LiquidGlass } = await import('@ybouane/liquidglass');
+    drawer.dataset.config = JSON.stringify({
+      blurAmount: 0.18,
+      refraction: 0.55,
+      chromAberration: 0.12,
+      edgeHighlight: 0.14,
+      specular: 0.06,
+      fresnel: 1.0,
+      tintStrength: 0.06,
+      saturation: 0.06,
+      cornerRadius: 18,
+      zRadius: 26,
+      shadowOpacity: 0.28,
+      shadowSpread: 16,
+      shadowOffsetY: 2,
+    });
+    bgState.liquidGlass = await LiquidGlass.init({
+      root: document.body,
+      glassElements: [drawer],
+    });
+  } catch (e) {
+    // WebGL 不可用（老机器/驱动）→ 静默回退 CSS 磨砂
+    bgState.liquidGlass = null;
+    document.documentElement.setAttribute('data-webgl-glass', 'off');
+  }
+}
+
+function destroyLiquidGlass() {
+  if (bgState.liquidGlass) {
+    try { bgState.liquidGlass.destroy(); } catch (_) {}
+    bgState.liquidGlass = null;
+  }
+}
+
+function loadBackgroundPrefs() {
+  try {
+    bgState.mode = localStorage.getItem(BG_MODE_KEY) || 'default';
+    bgState.webglGlass = localStorage.getItem(BG_GLASS_KEY) !== '0';
+    bgState.wallpaper = localStorage.getItem(BG_WALLPAPER_KEY);
+  } catch (_) {}
+  if (!['default', 'wallpaper', 'acrylic', 'mica'].includes(bgState.mode)) {
+    bgState.mode = 'default';
+  }
+  if (bgState.mode === 'wallpaper' && !bgState.wallpaper) bgState.mode = 'default';
+
+  if (bgState.wallpaper) {
+    const imgEl = $('#bgImage');
+    if (imgEl) imgEl.src = bgState.wallpaper;
+    const clearBtn = $('#clearWallpaperBtn');
+    if (clearBtn) clearBtn.hidden = false;
+    const desc = $('#wallpaperDesc');
+    if (desc) desc.textContent = '已设置壁纸，点击更换';
+  }
+  const select = $('#bgModeSelect');
+  if (select) select.value = bgState.mode;
+  const glassSwitch = $('#liquidGlassSwitch');
+  if (glassSwitch) glassSwitch.selected = bgState.webglGlass;
+
+  document.documentElement.setAttribute('data-bg-mode', bgState.mode);
+  applyBackgroundMode(bgState.mode, { persist: false });
+}
+
+function wireBackgroundEvents() {
+  $('#bgModeSelect')?.addEventListener('change', (e) => {
+    const mode = e.target.value;
+    if (mode === 'wallpaper' && !bgState.wallpaper) {
+      const select = $('#bgModeSelect');
+      if (select) select.value = bgState.mode;
+      $('#wallpaperFileInput')?.click();
+      addLog('请选择一张图片作为壁纸');
+      return;
+    }
+    applyBackgroundMode(mode);
+    addLog(`切换背景模式: ${mode}`);
+  });
+
+  $('#wallpaperItem')?.addEventListener('click', () => $('#wallpaperFileInput')?.click());
+  $('#clearWallpaperBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    clearWallpaper();
+    addLog('已清除壁纸');
+  });
+  $('#wallpaperFileInput')?.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ''; // 允许重复选同一张图
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { addLog('请选择图片文件', true); return; }
+    try {
+      const dataUrl = await compressWallpaper(file);
+      applyWallpaper(dataUrl);
+      addLog('壁纸已应用');
+    } catch (err) {
+      addLog(`壁纸设置失败: ${err.message}`, true);
+    }
+  });
+
+  $('#liquidGlassSwitch')?.addEventListener('change', (e) => {
+    bgState.webglGlass = e.target.selected;
+    try { localStorage.setItem(BG_GLASS_KEY, bgState.webglGlass ? '1' : '0'); } catch (_) {}
+    syncLiquidGlass();
+    addLog(bgState.webglGlass ? '已开启液态玻璃' : '已关闭液态玻璃');
+  });
+
+  // 主题变化时重设亚克力/云母深浅（显式切换 + 系统深浅切换都覆盖）
+  const reapplyVibrancy = () => {
+    if (bgState.mode === 'acrylic' || bgState.mode === 'mica') {
+      tauriInvoke('set_background', { mode: bgState.mode, dark: bgIsDark() });
+    }
+  };
+  $('#themeSelect')?.addEventListener('change', reapplyVibrancy);
+  window.matchMedia('(prefers-color-scheme: dark)')?.addEventListener?.('change', reapplyVibrancy);
+}
+
 /* ── Window Controls (immersive titlebar) ─────────────────────── */
 
 const tauriInvoke = (cmd, args) => {
@@ -2781,11 +3008,13 @@ function wireTitlebar() {
 function init() {
   loadSavedTheme();
   loadAppearancePrefs();
+  loadBackgroundPrefs();
   loadTrafficStats();
   wireTitlebar();
   wireEvents();
   wireProxyEvents();
   wireSettingsEvents();
+  wireBackgroundEvents();
   renderLogs();
   initChart();
   refreshBackendState();
