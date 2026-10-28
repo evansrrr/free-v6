@@ -249,6 +249,12 @@ function showView(view) {
 const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3.5"/></svg>';
 
+// FAB 文案改为普通 <span class="fab-label">（md-fab 已替换为普通 button）
+function setFabLabel(text) {
+  const label = $('#proxyToggle .fab-label');
+  if (label) label.textContent = text;
+}
+
 function setRunning(running) {
   state.proxyRunning = running;
   const fab = $('#proxyToggle');
@@ -256,7 +262,7 @@ function setRunning(running) {
 
   if (icon) icon.innerHTML = running ? ICON_STOP : ICON_PLAY;
   // 启停进行中（启动中…/停止中…）不让 3s 轮询抢回按钮文字
-  if (fab && !state.transition) fab.label = running ? '停止免流' : '启动免流';
+  if (fab && !state.transition) setFabLabel(running ? '停止免流' : '启动免流');
   fab?.classList.toggle('running', running);
   // 停止后 mihomo 已退出，接入点列表再无数据来源 → 立即清空回空态
   //（覆盖 FAB 停止、停止并退出、轮询检测到已停止、helper 断开四条路径）
@@ -270,7 +276,7 @@ function fabPhase(text) {
   const fab = $('#proxyToggle');
   if (!fab) return;
   state.transition = 'starting';
-  fab.label = text;
+  setFabLabel(text);
 }
 
 // 交还过渡态：按最终运行状态定形按钮（自动启动成功/失败/放弃、自动运行
@@ -278,7 +284,7 @@ function fabPhase(text) {
 function fabDone() {
   state.transition = null;
   const fab = $('#proxyToggle');
-  if (fab) fab.label = state.proxyRunning ? '停止免流' : '启动免流';
+  if (fab) setFabLabel(state.proxyRunning ? '停止免流' : '启动免流');
 }
 
 function updateConnectionChip(online) {
@@ -2833,6 +2839,8 @@ function applyWallpaper(dataUrl) {
   bgState.wallpaper = dataUrl;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.src = dataUrl;
+  const railBg = $('#railBg');
+  if (railBg) railBg.src = dataUrl; // 供导航按钮折射捕获（opacity 0）
   try {
     localStorage.setItem(BG_WALLPAPER_KEY, dataUrl);
   } catch (_) {
@@ -2849,6 +2857,8 @@ function clearWallpaper() {
   bgState.wallpaper = null;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.removeAttribute('src');
+  const railBg = $('#railBg');
+  if (railBg) railBg.removeAttribute('src');
   try { localStorage.removeItem(BG_WALLPAPER_KEY); } catch (_) {}
   const clearBtn = $('#clearWallpaperBtn');
   if (clearBtn) clearBtn.hidden = true;
@@ -2875,59 +2885,61 @@ async function syncLiquidGlass() {
 }
 
 async function initLiquidGlass() {
-  if (bgState.liquidGlass) return true;
-  const rail = $('.rail');
+  if (bgState.liquidGlass && bgState.railGlass) return true;
   const drawer = $('#logDrawer');
-  const targets = [rail, drawer].filter(Boolean);
-  if (!targets.length) return false;
+  const fabs = $$('.fab-item');
+  const navItems = $$('.rail .nav-item');
   try {
     const { LiquidGlass } = await import('@ybouane/liquidglass');
-    // 满高侧栏：方角 + 折射/模糊，突出「液态」折射（常驻可见）
-    if (rail) rail.dataset.config = JSON.stringify({
-      blurAmount: 0.22,
-      refraction: 0.55,
-      chromAberration: 0.1,
-      edgeHighlight: 0.1,
-      specular: 0.05,
-      fresnel: 0.9,
-      tintStrength: 0.05,
-      saturation: 0.06,
-      cornerRadius: 0,
-      zRadius: 0,
-      shadowOpacity: 0.15,
-      shadowSpread: 8,
-      shadowOffsetY: 1,
-    });
-    if (drawer) drawer.dataset.config = JSON.stringify({
-      blurAmount: 0.18,
-      refraction: 0.55,
-      chromAberration: 0.12,
-      edgeHighlight: 0.14,
-      specular: 0.06,
-      fresnel: 1.0,
-      tintStrength: 0.06,
-      saturation: 0.06,
-      cornerRadius: 18,
-      zRadius: 26,
-      shadowOpacity: 0.28,
-      shadowSpread: 16,
-      shadowOffsetY: 2,
-    });
-    bgState.liquidGlass = await LiquidGlass.init({
-      root: document.body,
-      glassElements: targets,
-    });
-    // 抽屉滑入/滑出是 transform 变化，库的脏检测未必触发 → 过渡结束后手动重渲
-    if (drawer && !bgState._drawerObs) {
-      bgState._drawerObs = () => {
-        if (bgState.liquidGlass) bgState.liquidGlass.markChanged(drawer);
-      };
-      drawer.addEventListener('transitionend', bgState._drawerObs);
+
+    const FAB_CFG = {
+      button: true, blurAmount: 0.2, refraction: 0.5, chromAberration: 0.08,
+      edgeHighlight: 0.12, specular: 0.08, fresnel: 0.9, tintStrength: 0.04,
+      saturation: 0.05, cornerRadius: 16, zRadius: 20, shadowOpacity: 0.25,
+      shadowSpread: 12, shadowOffsetY: 3,
+    };
+    const NAV_CFG = {
+      button: true, blurAmount: 0.2, refraction: 0.5, chromAberration: 0.1,
+      edgeHighlight: 0.12, specular: 0.06, fresnel: 0.9, tintStrength: 0.05,
+      saturation: 0.05, cornerRadius: 20, zRadius: 20, shadowOpacity: 0.2,
+      shadowSpread: 10, shadowOffsetY: 2,
+    };
+
+    // 主实例（root=body）：抽屉 + FAB
+    if (!bgState.liquidGlass && drawer) {
+      drawer.dataset.config = JSON.stringify({
+        blurAmount: 0.18, refraction: 0.55, chromAberration: 0.12,
+        edgeHighlight: 0.14, specular: 0.06, fresnel: 1.0, tintStrength: 0.06,
+        saturation: 0.06, cornerRadius: 18, zRadius: 26, shadowOpacity: 0.28,
+        shadowSpread: 16, shadowOffsetY: 2,
+      });
+      fabs.forEach((f) => { f.dataset.config = JSON.stringify(FAB_CFG); });
+      bgState.liquidGlass = await LiquidGlass.init({
+        root: document.body,
+        glassElements: [drawer, ...fabs].filter(Boolean),
+      });
+      // 抽屉滑入/滑出是 transform 变化，库的脏检测未必触发 → 过渡结束后重渲
+      if (!bgState._drawerObs) {
+        bgState._drawerObs = () => {
+          if (bgState.liquidGlass) bgState.liquidGlass.markChanged(drawer);
+        };
+        drawer.addEventListener('transitionend', bgState._drawerObs);
+      }
+    }
+
+    // 导轨实例（root=.rail）：导航按钮 + 日志按钮（button 模式，折射壁纸副本）
+    if (!bgState.railGlass && navItems.length) {
+      navItems.forEach((b) => { b.dataset.config = JSON.stringify(NAV_CFG); });
+      bgState.railGlass = await LiquidGlass.init({
+        root: $('.rail'),
+        glassElements: navItems,
+      });
     }
     return true;
   } catch (e) {
     // WebGL 不可用（老机器/驱动）→ 回退 CSS 磨砂
     bgState.liquidGlass = null;
+    bgState.railGlass = null;
     addLog('WebGL 液态玻璃不可用，已回退磨砂效果', true);
     return false;
   }
@@ -2938,11 +2950,33 @@ function destroyLiquidGlass() {
     try { bgState.liquidGlass.destroy(); } catch (_) {}
     bgState.liquidGlass = null;
   }
+  if (bgState.railGlass) {
+    try { bgState.railGlass.destroy(); } catch (_) {}
+    bgState.railGlass = null;
+  }
   if (bgState._drawerObs) {
     const drawer = $('#logDrawer');
     if (drawer) drawer.removeEventListener('transitionend', bgState._drawerObs);
     bgState._drawerObs = null;
   }
+}
+
+// 玻璃开关兼容 md-switch API：.selected 属性 + click 派发 change，
+// 现有 app.js 的开关接线（读 .selected / 写 .selected / 监听 change）零改动。
+function setupGlassSwitches() {
+  $$('.glass-switch').forEach((btn) => {
+    if (btn._gsInit) return;
+    btn._gsInit = true;
+    Object.defineProperty(btn, 'selected', {
+      configurable: true,
+      get() { return btn.getAttribute('aria-checked') === 'true'; },
+      set(v) { btn.setAttribute('aria-checked', v ? 'true' : 'false'); },
+    });
+    btn.addEventListener('click', () => {
+      btn.selected = !btn.selected;
+      btn.dispatchEvent(new Event('change'));
+    });
+  });
 }
 
 function loadBackgroundPrefs() {
@@ -2959,6 +2993,8 @@ function loadBackgroundPrefs() {
   if (bgState.wallpaper) {
     const imgEl = $('#bgImage');
     if (imgEl) imgEl.src = bgState.wallpaper;
+    const railBg = $('#railBg');
+    if (railBg) railBg.src = bgState.wallpaper;
     const clearBtn = $('#clearWallpaperBtn');
     if (clearBtn) clearBtn.hidden = false;
     const desc = $('#wallpaperDesc');
@@ -3063,6 +3099,7 @@ function wireTitlebar() {
 /* ── Init ─────────────────────────────────────────────────────── */
 
 function init() {
+  setupGlassSwitches(); // 先给玻璃开关挂 .selected 兼容，再让各 wiring 读写
   loadSavedTheme();
   loadAppearancePrefs();
   loadBackgroundPrefs();

@@ -225,12 +225,24 @@ a { color: var(--md-primary); text-decoration: none; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 0;
-  gap: 2px;
-  background: var(--md-surface-container-low);
+  padding: 12px 8px;
+  gap: 12px;
+  background: transparent;
   border-right: 1px solid var(--md-outline-variant);
   user-select: none;
   z-index: 2;
+}
+
+/* 壁纸副本：仅用于 liquidglass 折射捕获，视觉不可见（opacity 0），
+   但保留全屏矩形使 getBoundingClientRect 非零、可被折射采样 */
+.rail .bg-copy {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .brand-mark {
@@ -238,7 +250,7 @@ a { color: var(--md-primary); text-decoration: none; }
   height: 36px;
   display: grid;
   place-items: center;
-  margin: 0 0 20px;
+  margin: 0 0 8px;
   border-radius: var(--radius-sm);
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
@@ -247,20 +259,12 @@ a { color: var(--md-primary); text-decoration: none; }
   flex-shrink: 0;
 }
 
-.nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  padding: 0 8px;
-  flex: 1;
-}
-
 .nav-item {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  align-self: stretch;
   padding: 10px 4px 6px;
   border-radius: var(--radius-lg);
   color: var(--md-on-surface-variant);
@@ -273,8 +277,8 @@ a { color: var(--md-primary); text-decoration: none; }
 .nav-item .nav-icon { --md-icon-size: 20px; }
 .nav-item:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .nav-item.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
-/* stretch + 8px insets so the log pill matches .nav-list item width exactly */
-.bottom-item { margin: auto 8px 0; align-self: stretch; }
+/* 日志按钮推到导轨底部 */
+.bottom-item { margin-top: auto; align-self: stretch; }
 
 /* ── Main Content ── */
 
@@ -881,21 +885,23 @@ md-icon-button > md-icon {
 .fab-item {
   position: fixed; bottom: 24px; right: 24px; z-index: 60;
   display: none;
-  --md-fab-container-color: var(--md-sys-color-primary-container);
-  --md-fab-label-text-color: var(--md-sys-color-on-primary-container);
-  --md-fab-icon-color: var(--md-sys-color-on-primary-container);
-  transition: transform 250ms var(--ease-emphasized), opacity 250ms;
+  align-items: center; gap: 8px;
+  height: 56px; padding: 0 18px;
+  border: none; border-radius: 16px;
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font: 600 14px 'Manrope', system-ui, sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  transition: transform 250ms var(--ease-emphasized), opacity 250ms, color 150ms;
 }
 .fab-item.visible { display: inline-flex; }
 .fab-item:hover { transform: translateY(-3px); }
 .fab-item:active { transform: translateY(0); }
 .fab-item md-icon { --md-icon-size: 24px; }
 .fab-item md-icon svg { width: var(--md-icon-size, 24px); height: var(--md-icon-size, 24px); display: block; }
-.proxy-fab.running {
-  --md-fab-container-color: var(--green-container);
-  --md-fab-label-text-color: var(--green);
-  --md-fab-icon-color: var(--green);
-}
+.fab-label { white-space: nowrap; }
+.proxy-fab.running { background: var(--green-container); color: var(--green); }
 .fab-item.loading { pointer-events: none; opacity: .7; }
 .fab-progress {
   --md-circular-progress-size: 24px;
@@ -989,12 +995,11 @@ md-icon-button > md-icon {
   .rail {
     position: fixed; top: auto; bottom: 0; left: 0; right: 0;
     width: 100%; height: 52px;
-    flex-direction: row; justify-content: space-around; padding: 0;
+    flex-direction: row; justify-content: space-around; gap: 0; padding: 0;
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
-  .brand-mark, .bottom-item { display: none; }
+  .brand-mark, .bottom-item, .rail .bg-copy { display: none; }
   .nav-item span:not(.nav-icon) { display: none; }
-  .nav-list { flex-direction: row; gap: 0; padding: 0; flex: 1; justify-content: space-around; }
   .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
   .main-content { flex: 1; margin-left: 0; padding: 12px 10px 64px; }
   .card-traffic, .card-stats { grid-column: auto; }
@@ -1125,10 +1130,9 @@ md-icon-button > md-icon {
   --glass-edge: inset 0 1px 0 color-mix(in srgb, var(--md-on-surface) 7%, transparent);
 }
 
-/* 卡片 / 设置组 / 导航导轨 / CIDR 条目 / 更新说明 */
+/* 卡片 / 设置组 / CIDR 条目 / 更新说明 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card,
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .settings-group,
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .rail,
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .cidr-item,
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .update-notes {
   background: var(--glass-bg);
@@ -1185,12 +1189,49 @@ md-icon-button > md-icon {
   background: color-mix(in srgb, var(--md-primary-container) 58%, transparent);
 }
 
-/* 设置里的开关（md-switch）：轨道半透明磨砂 */
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-switch {
-  --md-switch-track-color: color-mix(in srgb, var(--md-outline) 55%, transparent);
-  --md-switch-selected-track-color: color-mix(in srgb, var(--md-primary) 70%, transparent);
-  --md-switch-track-outline-color: color-mix(in srgb, var(--md-outline) 65%, transparent);
-  --md-switch-handle-color: color-mix(in srgb, var(--md-surface-container-highest) 88%, transparent);
+/* 设置里的开关：玻璃开关（普通 DOM，替换 md-switch） */
+.glass-switch {
+  position: relative;
+  width: 52px;
+  height: 32px;
+  border: 2px solid var(--md-outline);
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 180ms, border-color 180ms;
+}
+.glass-switch .gs-handle {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: var(--md-outline);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .35);
+  transition: transform 180ms var(--ease-decelerate), background 180ms;
+}
+.glass-switch[aria-checked="true"] {
+  border-color: var(--md-primary);
+  background: var(--md-primary);
+}
+.glass-switch[aria-checked="true"] .gs-handle {
+  transform: translateX(22px);
+  background: var(--md-on-primary);
+}
+/* 玻璃态：轨道半透明磨砂 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .glass-switch {
+  border-color: color-mix(in srgb, var(--md-outline) 55%, transparent);
+  background: color-mix(in srgb, var(--md-surface-container) 38%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(1.4);
+  backdrop-filter: blur(8px) saturate(1.4);
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .glass-switch[aria-checked="true"] {
+  background: color-mix(in srgb, var(--md-primary) 72%, transparent);
+  border-color: color-mix(in srgb, var(--md-primary) 72%, transparent);
 }
 
 /* 分段控件 / 过滤芯片：半透明容器 + 磨砂 */
@@ -1202,21 +1243,34 @@ md-icon-button > md-icon {
 }
 
 /* FAB（免流切换 / 测试延迟）：半透明主色容器 + 磨砂 */
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) md-fab {
-  --md-fab-container-color: color-mix(in srgb, var(--md-primary-container) 68%, transparent);
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .fab-item {
+  background: color-mix(in srgb, var(--md-primary-container) 68%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.5);
   backdrop-filter: blur(14px) saturate(1.5);
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .proxy-fab.running {
+  background: color-mix(in srgb, var(--green-container) 70%, transparent);
+  color: var(--green);
 }
 
 /* ── WebGL 液态玻璃接管（仅壁纸 + 开关开启） ── */
 /* liquidglass 把折射 canvas 注入为玻璃元素第一个子节点，元素自身背景
    须透明、关闭 CSS 磨砂与阴影，避免与 WebGL 输出叠加。 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .rail,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .log-drawer {
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .log-drawer,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item {
   background: transparent !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
+}
+/* WebGL 接管时 active 导航项用主色文字（玻璃底透明，不再用主色容器底） */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item.active {
+  color: var(--md-primary);
+}
+/* WebGL 接管时运行态 FAB 用绿色文字（玻璃底透明，不再用绿色容器底） */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .proxy-fab.running {
+  color: var(--green);
 }
 
 /* ── 纯黑背景（OLED）优先级高于玻璃 ── */

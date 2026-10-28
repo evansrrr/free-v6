@@ -51,21 +51,20 @@
 
   <!-- Navigation Rail -->
     <aside class="rail" aria-label="主导航">
+      <img class="bg-copy" id="railBg" alt="" aria-hidden="true">
       <div class="brand-mark" aria-label="freev6">F 6</div>
-      <nav class="nav-list">
-        <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
-          <md-icon class="nav-icon">monitoring</md-icon>
-          <span>仪表盘</span>
-        </button>
-        <button class="nav-item" data-view="proxies" aria-label="接入点">
-          <md-icon class="nav-icon">public</md-icon>
-          <span>接入点</span>
-        </button>
-        <button class="nav-item" data-view="settings" aria-label="设置">
-          <md-icon class="nav-icon">settings</md-icon>
-          <span>设置</span>
-        </button>
-      </nav>
+      <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
+        <md-icon class="nav-icon">monitoring</md-icon>
+        <span>仪表盘</span>
+      </button>
+      <button class="nav-item" data-view="proxies" aria-label="接入点">
+        <md-icon class="nav-icon">public</md-icon>
+        <span>接入点</span>
+      </button>
+      <button class="nav-item" data-view="settings" aria-label="设置">
+        <md-icon class="nav-icon">settings</md-icon>
+        <span>设置</span>
+      </button>
       <button class="nav-item bottom-item" id="logsButton" aria-label="日志">
         <md-icon class="nav-icon">receipt_long</md-icon>
         <span>日志</span>
@@ -226,7 +225,7 @@
               <div class="setting-text">
                 <div class="setting-label">动态取色</div>
               </div>
-              <md-switch id="dynamicColorSwitch" aria-label="动态取色"></md-switch>
+              <button class="glass-switch" id="dynamicColorSwitch" role="switch" aria-checked="false" aria-label="动态取色"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -236,7 +235,7 @@
               <div class="setting-text">
                 <div class="setting-label">纯黑背景</div>
               </div>
-              <md-switch id="pureBlackSwitch" aria-label="纯黑背景"></md-switch>
+              <button class="glass-switch" id="pureBlackSwitch" role="switch" aria-checked="false" aria-label="纯黑背景"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -274,7 +273,7 @@
                 <div class="setting-label">液态玻璃</div>
                 <div class="setting-desc">为浮动面板启用 WebGL 折射效果</div>
               </div>
-              <md-switch id="liquidGlassSwitch" aria-label="液态玻璃"></md-switch>
+              <button class="glass-switch" id="liquidGlassSwitch" role="switch" aria-checked="false" aria-label="液态玻璃"><span class="gs-handle"></span></button>
             </div>
           </div>
 
@@ -287,7 +286,7 @@
               <div class="setting-text">
                 <div class="setting-label">开机自启动</div>
               </div>
-              <md-switch id="autoStartSwitch" aria-label="开机自启动"></md-switch>
+              <button class="glass-switch" id="autoStartSwitch" role="switch" aria-checked="false" aria-label="开机自启动"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -297,7 +296,7 @@
               <div class="setting-text">
                 <div class="setting-label">静默启动</div>
               </div>
-              <md-switch id="silentStartSwitch" aria-label="静默启动"></md-switch>
+              <button class="glass-switch" id="silentStartSwitch" role="switch" aria-checked="false" aria-label="静默启动"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -308,7 +307,7 @@
                 <div class="setting-label">自动运行免流</div>
                 <div class="setting-desc">应用打开时自动尝试启动免流模式</div>
               </div>
-              <md-switch id="autoRunSwitch" aria-label="自动运行免流"></md-switch>
+              <button class="glass-switch" id="autoRunSwitch" role="switch" aria-checked="false" aria-label="自动运行免流"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -319,7 +318,7 @@
                 <div class="setting-label">快捷键</div>
                 <div class="setting-desc">按 F6 打开主窗口，需要软件后台运行</div>
               </div>
-              <md-switch id="hotkeySwitch" aria-label="快捷键"></md-switch>
+              <button class="glass-switch" id="hotkeySwitch" role="switch" aria-checked="false" aria-label="快捷键"><span class="gs-handle"></span></button>
             </div>
             <md-divider></md-divider>
             <div class="setting-item">
@@ -330,7 +329,7 @@
                 <div class="setting-label">共享移动热点</div>
                 <div class="setting-desc">向连接 Windows 热点的设备共享免流</div>
               </div>
-              <md-switch id="hotspotShareSwitch" aria-label="共享移动热点"></md-switch>
+              <button class="glass-switch" id="hotspotShareSwitch" role="switch" aria-checked="false" aria-label="共享移动热点"><span class="gs-handle"></span></button>
             </div>
             
           </div>
@@ -399,7 +398,7 @@
               <div class="setting-text">
                 <div class="setting-label">开发者模式</div>
               </div>
-              <md-switch id="devModeSwitch" aria-label="开发者模式"></md-switch>
+              <button class="glass-switch" id="devModeSwitch" role="switch" aria-checked="false" aria-label="开发者模式"><span class="gs-handle"></span></button>
             </div>
           </div>
 
@@ -497,7 +496,7 @@
               <div class="setting-label">启用链式代理</div>
               <div class="setting-desc">启用后，出口 IP 为自有代理</div>
             </div>
-            <md-switch id="chainEnabledSwitch" aria-label="启用链式代理"></md-switch>
+            <button class="glass-switch" id="chainEnabledSwitch" role="switch" aria-checked="false" aria-label="启用链式代理"><span class="gs-handle"></span></button>
           </div>
           <md-divider></md-divider>
           <div class="setting-item">
@@ -523,14 +522,16 @@
     <div class="log-list" id="logList"></div>
   </aside>
 
-  <md-fab id="proxyToggle" class="fab-item proxy-fab" label="启动免流" aria-label="启动/停止免流">
-    <md-icon slot="icon" id="toggleIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg></md-icon>
-  </md-fab>
+  <button id="proxyToggle" class="fab-item glass-fab proxy-fab" aria-label="启动/停止免流">
+    <md-icon id="toggleIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg></md-icon>
+    <span class="fab-label">启动免流</span>
+  </button>
 
-  <md-fab id="delayTestFab" class="fab-item delay-fab" label="测试延迟" aria-label="延迟测试">
-    <md-icon slot="icon" id="fabIcon">bolt</md-icon>
-    <md-circular-progress slot="icon" id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
-  </md-fab>
+  <button id="delayTestFab" class="fab-item glass-fab delay-fab" aria-label="延迟测试">
+    <md-icon id="fabIcon">bolt</md-icon>
+    <md-circular-progress id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
+    <span class="fab-label">测试延迟</span>
+  </button>
 
   <div class="net-dialog-scrim" id="netDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
