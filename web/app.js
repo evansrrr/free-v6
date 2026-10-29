@@ -2835,12 +2835,29 @@ function compressWallpaper(file) {
   });
 }
 
+// 同步各 liquidglass 根的壁纸副本（导轨 / FAB 层），供折射捕获
+function setWallpaperCopies(src) {
+  [
+    ['#railBg', () => bgState.railGlass],
+    ['#fabBg', () => bgState.liquidGlass],
+  ].forEach(([sel, getInst]) => {
+    const el = $(sel);
+    if (!el) return;
+    if (!src) { el.removeAttribute('src'); return; }
+    // 壁纸副本换图后库感知不到 → 手动失效重渲
+    el.onload = () => {
+      const inst = getInst();
+      if (inst) { try { inst.markChanged(); } catch (_) {} }
+    };
+    el.src = src;
+  });
+}
+
 function applyWallpaper(dataUrl) {
   bgState.wallpaper = dataUrl;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.src = dataUrl;
-  const railBg = $('#railBg');
-  if (railBg) railBg.src = dataUrl; // 供导航按钮折射捕获（opacity 0）
+  setWallpaperCopies(dataUrl);
   try {
     localStorage.setItem(BG_WALLPAPER_KEY, dataUrl);
   } catch (_) {
@@ -2857,8 +2874,7 @@ function clearWallpaper() {
   bgState.wallpaper = null;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.removeAttribute('src');
-  const railBg = $('#railBg');
-  if (railBg) railBg.removeAttribute('src');
+  setWallpaperCopies(null);
   try { localStorage.removeItem(BG_WALLPAPER_KEY); } catch (_) {}
   const clearBtn = $('#clearWallpaperBtn');
   if (clearBtn) clearBtn.hidden = true;
@@ -2886,45 +2902,25 @@ async function syncLiquidGlass() {
 
 async function initLiquidGlass() {
   if (bgState.liquidGlass && bgState.railGlass) return true;
-  const drawer = $('#logDrawer');
+  const fabLayer = $('#fabLayer');
   const fabs = $$('.fab-item');
   const navItems = $$('.rail .nav-item');
   try {
     const { LiquidGlass } = await import('@ybouane/liquidglass');
 
-    const FAB_CFG = {
-      button: true, blurAmount: 0.2, refraction: 0.5, chromAberration: 0.08,
-      edgeHighlight: 0.12, specular: 0.08, fresnel: 0.9, tintStrength: 0.04,
-      saturation: 0.05, cornerRadius: 16, zRadius: 20, shadowOpacity: 0.25,
-      shadowSpread: 12, shadowOffsetY: 3,
-    };
-    const NAV_CFG = {
-      button: true, blurAmount: 0.2, refraction: 0.5, chromAberration: 0.1,
-      edgeHighlight: 0.12, specular: 0.06, fresnel: 0.9, tintStrength: 0.05,
-      saturation: 0.05, cornerRadius: 20, zRadius: 20, shadowOpacity: 0.2,
-      shadowSpread: 10, shadowOffsetY: 2,
-    };
+    // 原汁原味：除「关闭着色(tintStrength:0)」与「圆角对齐 CSS」外，
+    // 其余全部沿用库默认值（refraction .69 / chroma .05 / edgeHighlight .05 /
+    // specular 0 / fresnel 1 / zRadius 40 / blur 0），即官方 demo 的玻璃观感。
+    const FAB_CFG = { button: true, tintStrength: 0, cornerRadius: 16 };
+    const NAV_CFG = { button: true, tintStrength: 0, cornerRadius: 20 };
 
-    // 主实例（root=body）：抽屉 + FAB
-    if (!bgState.liquidGlass && drawer) {
-      drawer.dataset.config = JSON.stringify({
-        blurAmount: 0.18, refraction: 0.55, chromAberration: 0.12,
-        edgeHighlight: 0.14, specular: 0.06, fresnel: 1.0, tintStrength: 0.06,
-        saturation: 0.06, cornerRadius: 18, zRadius: 26, shadowOpacity: 0.28,
-        shadowSpread: 16, shadowOffsetY: 2,
-      });
+    // FAB 实例（root=#fabLayer：只含壁纸副本 + FAB，小 root 初始化快）
+    if (!bgState.liquidGlass && fabLayer && fabs.length) {
       fabs.forEach((f) => { f.dataset.config = JSON.stringify(FAB_CFG); });
       bgState.liquidGlass = await LiquidGlass.init({
-        root: document.body,
-        glassElements: [drawer, ...fabs].filter(Boolean),
+        root: fabLayer,
+        glassElements: fabs,
       });
-      // 抽屉滑入/滑出是 transform 变化，库的脏检测未必触发 → 过渡结束后重渲
-      if (!bgState._drawerObs) {
-        bgState._drawerObs = () => {
-          if (bgState.liquidGlass) bgState.liquidGlass.markChanged(drawer);
-        };
-        drawer.addEventListener('transitionend', bgState._drawerObs);
-      }
     }
 
     // 导轨实例（root=.rail）：导航按钮 + 日志按钮（button 模式，折射壁纸副本）
@@ -2953,11 +2949,6 @@ function destroyLiquidGlass() {
   if (bgState.railGlass) {
     try { bgState.railGlass.destroy(); } catch (_) {}
     bgState.railGlass = null;
-  }
-  if (bgState._drawerObs) {
-    const drawer = $('#logDrawer');
-    if (drawer) drawer.removeEventListener('transitionend', bgState._drawerObs);
-    bgState._drawerObs = null;
   }
 }
 
@@ -2993,8 +2984,7 @@ function loadBackgroundPrefs() {
   if (bgState.wallpaper) {
     const imgEl = $('#bgImage');
     if (imgEl) imgEl.src = bgState.wallpaper;
-    const railBg = $('#railBg');
-    if (railBg) railBg.src = bgState.wallpaper;
+    setWallpaperCopies(bgState.wallpaper);
     const clearBtn = $('#clearWallpaperBtn');
     if (clearBtn) clearBtn.hidden = false;
     const desc = $('#wallpaperDesc');

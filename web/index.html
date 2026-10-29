@@ -522,16 +522,20 @@
     <div class="log-list" id="logList"></div>
   </aside>
 
-  <button id="proxyToggle" class="fab-item glass-fab proxy-fab" aria-label="启动/停止免流">
-    <md-icon id="toggleIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg></md-icon>
-    <span class="fab-label">启动免流</span>
-  </button>
+  <!-- 玻璃层：FAB + 壁纸副本（独立 liquidglass 根，避免光栅化整页） -->
+  <div id="fabLayer">
+    <img class="bg-copy" id="fabBg" alt="" aria-hidden="true">
+    <button id="proxyToggle" class="fab-item glass-fab proxy-fab" aria-label="启动/停止免流">
+      <md-icon id="toggleIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg></md-icon>
+      <span class="fab-label">启动免流</span>
+    </button>
 
-  <button id="delayTestFab" class="fab-item glass-fab delay-fab" aria-label="延迟测试">
-    <md-icon id="fabIcon">bolt</md-icon>
-    <md-circular-progress id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
-    <span class="fab-label">测试延迟</span>
-  </button>
+    <button id="delayTestFab" class="fab-item glass-fab delay-fab" aria-label="延迟测试">
+      <md-icon id="fabIcon">bolt</md-icon>
+      <md-circular-progress id="fabProgress" class="fab-progress" indeterminate hidden></md-circular-progress>
+      <span class="fab-label">测试延迟</span>
+    </button>
+  </div>
 
   <div class="net-dialog-scrim" id="netDialogScrim">
     <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
