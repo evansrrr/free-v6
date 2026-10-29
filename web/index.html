@@ -53,18 +53,23 @@
     <aside class="rail" aria-label="主导航">
       <img class="bg-copy" id="railBg" alt="" aria-hidden="true">
       <div class="brand-mark" aria-label="freev6">F 6</div>
-      <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
-        <md-icon class="nav-icon">monitoring</md-icon>
-        <span>仪表盘</span>
-      </button>
-      <button class="nav-item" data-view="proxies" aria-label="接入点">
-        <md-icon class="nav-icon">public</md-icon>
-        <span>接入点</span>
-      </button>
-      <button class="nav-item" data-view="settings" aria-label="设置">
-        <md-icon class="nav-icon">settings</md-icon>
-        <span>设置</span>
-      </button>
+      <!-- 非玻璃容器（对应官网 .hero-tabs）：只承载图标，玻璃滑块在其上方滑动 -->
+      <div class="nav-group">
+        <button class="nav-item active" data-view="dashboard" aria-label="仪表盘">
+          <md-icon class="nav-icon">monitoring</md-icon>
+          <span>仪表盘</span>
+        </button>
+        <button class="nav-item" data-view="proxies" aria-label="接入点">
+          <md-icon class="nav-icon">public</md-icon>
+          <span>接入点</span>
+        </button>
+        <button class="nav-item" data-view="settings" aria-label="设置">
+          <md-icon class="nav-icon">settings</md-icon>
+          <span>设置</span>
+        </button>
+      </div>
+      <!-- 液态玻璃指示器（对应官网 #glass-tab-indicator）：尺寸/位置由 JS 计算 -->
+      <div id="railIndicator" aria-hidden="true"></div>
       <button class="nav-item bottom-item" id="logsButton" aria-label="日志">
         <md-icon class="nav-icon">receipt_long</md-icon>
         <span>日志</span>

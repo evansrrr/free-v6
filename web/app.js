@@ -240,6 +240,8 @@ function showView(view) {
   $$('.nav-item[data-view]').forEach(item => {
     item.classList.toggle('active', item.dataset.view === view);
   });
+  // 玻璃滑块跟到新的选中项（与官网 tab 指示器同样的滑动动画）
+  syncRailIndicator(true);
 }
 
 /* ── Proxy Toggle ── */
@@ -2900,19 +2902,86 @@ async function syncLiquidGlass() {
   }, 300);
 }
 
+/* ── 导航玻璃指示器（对应官网 .hero-tabs + #glass-tab-indicator） ──
+   单个玻璃滑块在导航项之间滑动；导航项本身无色，图标留在玻璃内被折射，
+   文字压在玻璃之上保持清晰。 */
+function railIndicatorRect() {
+  const rail = $('.rail');
+  const indicator = $('#railIndicator');
+  const active = $('.nav-group .nav-item.active') || $('.nav-group .nav-item');
+  if (!rail || !indicator || !active) return null;
+  const railRect = rail.getBoundingClientRect();
+  const itemRect = active.getBoundingClientRect();
+  if (!itemRect.width) return null;
+  return {
+    indicator,
+    w: itemRect.width,
+    h: itemRect.height,
+    x: itemRect.left - railRect.left,
+    y: itemRect.top - railRect.top,
+  };
+}
+
+// 预置尺寸：库在 init 时按元素尺寸分配 canvas，必须先把滑块放到正确的一格
+function primeRailIndicator() {
+  const r = railIndicatorRect();
+  if (!r) return;
+  r.indicator.style.transition = 'none';
+  r.indicator.style.width = `${r.w}px`;
+  r.indicator.style.height = `${r.h}px`;
+  r.indicator.style.transform = `translate(${r.x}px, ${r.y}px)`;
+  r.indicator.offsetHeight; // 强制 reflow，避免从屏幕外哨兵值动画过来
+  r.indicator.style.transition = '';
+}
+
+function syncRailIndicator(animate) {
+  if (!bgState.railGlass) return;
+  const r = railIndicatorRect();
+  if (!r) return;
+  if (!animate) r.indicator.style.transition = 'none';
+  r.indicator.style.width = `${r.w}px`;
+  r.indicator.style.height = `${r.h}px`;
+  r.indicator.style.transform = `translate(${r.x}px, ${r.y}px)`;
+  if (!animate) {
+    r.indicator.offsetHeight;
+    r.indicator.style.transition = '';
+  }
+}
+
+function wireRailIndicator() {
+  if (bgState._railResize) return;
+  bgState._railResize = () => {
+    if (bgState.railGlass) syncRailIndicator(false);
+  };
+  window.addEventListener('resize', bgState._railResize);
+  // 图标字体 / 自定义元素升级会改变导航项尺寸，库和 window.resize 都不会察觉
+  const group = $('.nav-group');
+  if (group && window.ResizeObserver) {
+    bgState._railRO = new ResizeObserver(() => {
+      if (bgState.railGlass) syncRailIndicator(false);
+    });
+    bgState._railRO.observe(group);
+  }
+}
+
 async function initLiquidGlass() {
   if (bgState.liquidGlass && bgState.railGlass) return true;
   const fabLayer = $('#fabLayer');
   const fabs = $$('.fab-item');
-  const navItems = $$('.rail .nav-item');
+  const indicator = $('#railIndicator');
+  const logsBtn = $('#logsButton');
   try {
     const { LiquidGlass } = await import('@ybouane/liquidglass');
 
-    // 原汁原味：除「关闭着色(tintStrength:0)」与「圆角对齐 CSS」外，
-    // 其余全部沿用库默认值（refraction .69 / chroma .05 / edgeHighlight .05 /
-    // specular 0 / fresnel 1 / zRadius 40 / blur 0），即官方 demo 的玻璃观感。
-    const FAB_CFG = { button: true, tintStrength: 0, cornerRadius: 16 };
-    const NAV_CFG = { button: true, tintStrength: 0, cornerRadius: 20 };
+    // 配置直接照抄官网 site/index.html：
+    // - #glass-btn / 浮动按钮：button 模式 + blur .3 + brightness -.1
+    // - #glass-tab-indicator：圆角/倒角 16、blur 0（图标保持锐利）、edgeHighlight .2
+    const FAB_CFG = { button: true, cornerRadius: 16, blurAmount: 0.3, brightness: -0.1 };
+    const INDICATOR_CFG = {
+      cornerRadius: 16, zRadius: 16, blurAmount: 0,
+      edgeHighlight: 0.2, shadowOpacity: 0.25, tintStrength: 0,
+    };
+    const LOGS_CFG = { button: true, cornerRadius: 20, blurAmount: 0.3, brightness: -0.1 };
 
     // FAB 实例（root=#fabLayer：只含壁纸副本 + FAB，小 root 初始化快）
     if (!bgState.liquidGlass && fabLayer && fabs.length) {
@@ -2923,20 +2992,29 @@ async function initLiquidGlass() {
       });
     }
 
-    // 导轨实例（root=.rail）：导航按钮 + 日志按钮（button 模式，折射壁纸副本）
-    if (!bgState.railGlass && navItems.length) {
-      navItems.forEach((b) => { b.dataset.config = JSON.stringify(NAV_CFG); });
+    // 导轨实例（root=.rail）：玻璃滑块 + 日志按钮
+    if (!bgState.railGlass && indicator) {
+      indicator.dataset.config = JSON.stringify(INDICATOR_CFG);
+      if (logsBtn) logsBtn.dataset.config = JSON.stringify(LOGS_CFG);
+      primeRailIndicator(); // 必须先定尺寸再 init
+      const targets = [indicator, logsBtn].filter(Boolean);
       bgState.railGlass = await LiquidGlass.init({
         root: $('.rail'),
-        glassElements: navItems,
+        glassElements: targets,
       });
+      syncRailIndicator(false);
+      wireRailIndicator();
+      // 图标字体/自定义元素升级后导航项尺寸可能变化，库不会察觉 → 再对齐一次
+      const settle = () => requestAnimationFrame(() => requestAnimationFrame(() => syncRailIndicator(false)));
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(settle);
+      settle();
     }
     return true;
   } catch (e) {
     // WebGL 不可用（老机器/驱动）→ 回退 CSS 磨砂
     bgState.liquidGlass = null;
     bgState.railGlass = null;
-    addLog('WebGL 液态玻璃不可用，已回退磨砂效果', true);
+    addLog(`WebGL 液态玻璃不可用，已回退磨砂效果（${e}）`, true);
     return false;
   }
 }
@@ -2949,6 +3027,17 @@ function destroyLiquidGlass() {
   if (bgState.railGlass) {
     try { bgState.railGlass.destroy(); } catch (_) {}
     bgState.railGlass = null;
+  }
+  // 清理滑块残留的 canvas 与尺寸，避免关掉玻璃后留一块陈旧贴图
+  const ind = $('#railIndicator');
+  if (ind) {
+    ind.querySelectorAll('canvas').forEach((c) => c.remove());
+    ind.style.transition = 'none';
+    ind.style.width = '0';
+    ind.style.height = '0';
+    ind.style.transform = 'translate(-9999px, -9999px)';
+    ind.offsetHeight;
+    ind.style.transition = '';
   }
 }
 

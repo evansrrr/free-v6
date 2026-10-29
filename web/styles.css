@@ -268,6 +268,36 @@ a { color: var(--md-primary); text-decoration: none; }
   flex-shrink: 0;
 }
 
+/* 导航分组容器（参考官网 .hero-tabs：非玻璃、只承载图标，玻璃滑块在其之上滑动） */
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+  padding: 6px 0;
+  margin: 0 8px 8px;
+  border-radius: 26px;
+  flex-shrink: 0;
+}
+
+/* 液态玻璃指示器（参考官网 #glass-tab-indicator）：尺寸/位置由 JS 计算，
+   默认停在屏幕外，避免首帧在 (0,0) 闪一下 */
+#railIndicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: var(--radius-lg);
+  transform: translate(-9999px, -9999px);
+  transition: transform 450ms cubic-bezier(.65, 0, .35, 1),
+              width 450ms cubic-bezier(.65, 0, .35, 1),
+              height 450ms cubic-bezier(.65, 0, .35, 1);
+  will-change: transform;
+}
+
 .nav-item {
   display: flex;
   flex-direction: column;
@@ -284,10 +314,11 @@ a { color: var(--md-primary); text-decoration: none; }
   position: relative;
 }
 .nav-item .nav-icon { --md-icon-size: 20px; }
+.nav-item > span { white-space: nowrap; }
 .nav-item:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .nav-item.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
 /* 日志按钮推到导轨底部 */
-.bottom-item { margin-top: auto; align-self: stretch; }
+.bottom-item { margin-top: auto; margin-left: 8px; margin-right: 8px; align-self: stretch; }
 
 /* ── Main Content ── */
 
@@ -1008,6 +1039,10 @@ md-icon-button > md-icon {
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
   .brand-mark, .bottom-item, .bg-copy { display: none; }
+  .nav-group {
+    flex: 1; flex-direction: row; gap: 0; padding: 0; margin: 0;
+    border-radius: 0; background: transparent;
+  }
   .nav-item span:not(.nav-icon) { display: none; }
   .nav-item { flex: 1; padding: 6px 0; border-radius: 0; }
   .main-content { flex: 1; margin-left: 0; padding: 12px 10px 64px; }
@@ -1191,22 +1226,45 @@ md-icon-button > md-icon {
   box-shadow: var(--glass-edge);
 }
 
-/* ── 交互控件液态玻璃（导航按钮 / 开关 / 芯片 / FAB，参考 demo 的 button 模式） ── */
+/* ── 交互控件液态玻璃（导航指示器 / 开关 / 芯片 / FAB，参考官网 demo） ── */
 
-/* 导航栏按钮 + 日志按钮：无色玻璃胶囊（悬停/选中只提亮，不填充颜色） */
+/* 导航分组：与官网 .hero-tabs 一致——容器只铺一层薄底（demo 为 #00000033），
+   不做磨砂、不做折射；玻璃由上层滑块提供，容器底色因此会出现在折射里 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-group {
+  background: color-mix(in srgb, var(--md-surface) 40%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10),
+              inset 0 0 0 1px rgba(255, 255, 255, .06);
+}
+
+/* 导航项：无色（不用主色容器），图标与文字加投影，悬停只降图标不透明度 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item {
-  background: color-mix(in srgb, var(--md-surface-container) 26%, transparent);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  backdrop-filter: blur(12px) saturate(1.4);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--md-on-surface) 6%, transparent);
+  background: transparent;
+  color: var(--md-on-surface);
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item .nav-icon {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .35));
+}
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item > span {
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .45);
 }
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item:hover {
-  background: color-mix(in srgb, var(--md-surface-container-high) 44%, transparent);
+  background: transparent;
   color: var(--md-on-surface);
 }
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item.active {
-  background: color-mix(in srgb, var(--md-surface-container-high) 60%, transparent);
-  color: var(--md-on-surface);
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item:hover .nav-icon {
+  opacity: .85;
+}
+/* 未启用 WebGL 时：选中态回退为 CSS 玻璃胶囊 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-group .nav-item.active {
+  background: color-mix(in srgb, var(--md-surface-container-high) 46%, transparent);
+  opacity: 1;
+}
+/* 日志按钮在玻璃模式下保持独立玻璃胶囊（与官网 .glass-btn 一致） */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .bottom-item {
+  background: color-mix(in srgb, var(--md-surface-container) 30%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
 }
 
 /* 品牌标记：玻璃模式下弱化为玻璃胶囊，避免实色块打断玻璃语言 */
@@ -1295,19 +1353,28 @@ md-icon-button > md-icon {
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
+/* 指示器存在时，选中态不再需要 CSS 底色 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active {
+  background: transparent !important;
+}
+/* 图标留在玻璃「里面」被折射（官网 tab 效果），文字压在玻璃之上保持清晰 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item > span {
+  position: relative;
+  z-index: 6;
+}
 /* 透明底下的文字可读性（玻璃自身无填充，靠投影保证深/浅壁纸下都可读） */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item {
   color: var(--md-on-surface);
   text-shadow: 0 1px 4px rgba(0, 0, 0, .55);
 }
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item.active { color: var(--md-primary); }
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active { color: var(--md-primary); }
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .proxy-fab.running { color: var(--green); }
 /* 折射 canvas 溢出色差/阴影，玻璃元素不能裁剪 */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item { overflow: visible; }
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator { overflow: visible; }
 /* 玻璃层内的图标/文字需压在 canvas(z-index:-1) 之上 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item > *,
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item > * { position: relative; z-index: 1; }
 
 /* ── 纯黑背景（OLED）优先级高于玻璃 ── */
