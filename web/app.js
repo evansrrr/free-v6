@@ -2595,6 +2595,10 @@ function applyTheme(theme) {
   try { localStorage.setItem('freev6-theme', theme); } catch (_) {}
   // The derived palette's lightness depends on dark vs light — re-derive
   if (state.dynamicColor && state.dynamicSeed) applyDynamicPalette();
+  // 原生云母/亚克力材质的深浅必须跟着走：applyTheme 可能被
+  // document.startViewTransition 推迟到快照之后执行，用独立 change 监听
+  // 会在 data-theme 还没改时就读到旧的深浅值，导致窗口材质与 UI 相反。
+  syncNativeVibrancy();
   // Listen for system changes when in system mode
   if (theme === 'system') {
     if (!state._systemThemeListener) {
@@ -2770,6 +2774,12 @@ function bgIsDark() {
   if (theme === 'light') return false;
   if (theme === 'dark') return true;
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+// 让原生窗口材质（mica/acrylic 的 dark 参数）与当前主题一致
+function syncNativeVibrancy() {
+  if (bgState.mode !== 'acrylic' && bgState.mode !== 'mica') return;
+  tauriInvoke('set_background', { mode: bgState.mode, dark: bgIsDark() });
 }
 
 // 设置 <html data-bg-mode> 并调用 Rust 应用/清除窗口级效果
@@ -3179,14 +3189,9 @@ function wireBackgroundEvents() {
     addLog(bgState.webglGlass ? '已开启液态玻璃' : '已关闭液态玻璃');
   });
 
-  // 主题变化时重设亚克力/云母深浅（显式切换 + 系统深浅切换都覆盖）
-  const reapplyVibrancy = () => {
-    if (bgState.mode === 'acrylic' || bgState.mode === 'mica') {
-      tauriInvoke('set_background', { mode: bgState.mode, dark: bgIsDark() });
-    }
-  };
-  $('#themeSelect')?.addEventListener('change', reapplyVibrancy);
-  window.matchMedia('(prefers-color-scheme: dark)')?.addEventListener?.('change', reapplyVibrancy);
+  // 显式切换主题由 applyTheme -> syncNativeVibrancy 负责（顺序可控）；
+  // 这里只兜「跟随系统」时系统深浅变化（data-theme 不变，只有 CSS 媒体查询生效）
+  window.matchMedia('(prefers-color-scheme: dark)')?.addEventListener?.('change', syncNativeVibrancy);
 }
 
 /* ── Window Controls (immersive titlebar) ─────────────────────── */

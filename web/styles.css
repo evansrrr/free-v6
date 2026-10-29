@@ -20,6 +20,7 @@
   --md-on-tertiary-container: #e6deff;
 
   --md-surface: #121318;
+  --glass-veil-a: 42%;
   --md-surface-dim: #121318;
   --md-surface-container-lowest: #0d0e13;
   --md-surface-container-low: #1a1b22;
@@ -116,6 +117,8 @@
   --md-tertiary-container: #f7d8ff;
   --md-on-tertiary-container: #271330;
   --md-surface: #f8f9ff;
+  /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块 */
+  --glass-veil-a: 78%;
   --md-surface-dim: #d8d9e0;
   --md-surface-container-lowest: #ffffff;
   --md-surface-container-low: #f2f3fa;
@@ -156,6 +159,8 @@
     --md-tertiary-container: #f7d8ff;
     --md-on-tertiary-container: #271330;
     --md-surface: #f8f9ff;
+    /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块 */
+    --glass-veil-a: 78%;
     --md-surface-dim: #d8d9e0;
     --md-surface-container-lowest: #ffffff;
     --md-surface-container-low: #f2f3fa;
@@ -1171,8 +1176,8 @@ md-icon-button > md-icon {
 /* ── CSS 磨砂玻璃表面（有背景时启用） ── */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) {
   /* 低不透明度 + 强模糊：让壁纸色彩透出，与液态玻璃按钮质感一致 */
-  --glass-bg: color-mix(in srgb, var(--md-surface-container) 40%, transparent);
-  --glass-bg-strong: color-mix(in srgb, var(--md-surface-container-high) 56%, transparent);
+  --glass-bg: color-mix(in srgb, var(--md-surface) var(--glass-veil-a), transparent);
+  --glass-bg-strong: color-mix(in srgb, var(--md-surface) calc(var(--glass-veil-a) + 14%), transparent);
   --glass-blur: 26px;
   --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .16),
                 inset 0 0 0 1px rgba(255, 255, 255, .07);
@@ -1245,7 +1250,7 @@ md-icon-button > md-icon {
 /* 导航分组：与官网 .hero-tabs 一致——容器只铺一层薄底（demo 为 #00000033），
    不做磨砂、不做折射；玻璃由上层滑块提供，容器底色因此会出现在折射里 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-group {
-  background: color-mix(in srgb, var(--md-surface) 40%, transparent);
+  background: var(--glass-bg);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10),
               inset 0 0 0 1px rgba(255, 255, 255, .06);
 }
@@ -1388,6 +1393,21 @@ md-icon-button > md-icon {
 }
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active { color: var(--md-primary); }
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .proxy-fab.running { color: var(--green); }
+/* WebGL 玻璃的底色蒙层：canvas 形状内不透明，元素自身背景被它完全盖住，
+   只能用伪元素叠在 canvas（z-index:-1）之上、内容（z-index:1）之下。
+   底色与 CSS 面板共用 --glass-bg，浅色主题下两者才不会一个发白一个裸透。 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item::after,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #logsButton::after,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--glass-bg);
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* 折射 canvas 溢出色差/阴影，玻璃元素不能裁剪 */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item,
