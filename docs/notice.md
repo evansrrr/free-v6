@@ -46,10 +46,11 @@
 
 ## 排障
 
-想看客户端拿到的到底是什么：启动软件后在本机执行
+想看客户端拿到的到底是什么：自己起一个 helper（token 用你指定的值，端口 13335 空闲时可用）
 
 ```bash
-curl -H "Authorization: Bearer $FREEV6_API_TOKEN" http://127.0.0.1:13335/api/v1/notice
+FREEV6_API_TOKEN=dev ./freev6-helper.exe
+curl -H "Authorization: Bearer dev" http://127.0.0.1:13335/api/v1/notice
 ```
 
 `stale: true` 表示这次用的是本机缓存；`error` 字段会写明所有镜像的失败原因。公告没更新先确认 `raw` 路径可访问：`https://github.com/evansrrr/free-v6/raw/main/notice.json`。
