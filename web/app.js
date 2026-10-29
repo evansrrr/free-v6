@@ -693,6 +693,34 @@ function closeChainClearDialog() {
   $('#chainClearDialogScrim')?.classList.remove('open');
 }
 
+/* ── 重置设置（设置 → 关于） ─────────────────────────────────────
+   恢复 settings.json 到默认值并清除已导入的链式代理，是恢复操作。
+   运行中的 mihomo 不受影响——弹窗会提示先停止免流。 */
+
+function openResetDialog() {
+  const hint = $('#resetStopHint');
+  if (hint) hint.hidden = !state.proxyRunning;
+  $('#resetDialogScrim')?.classList.add('open');
+}
+
+function closeResetDialog() {
+  $('#resetDialogScrim')?.classList.remove('open');
+}
+
+async function resetSettings() {
+  try {
+    await api('/settings/reset', { method: 'POST' });
+    addLog('设置已重置为默认值');
+    showToast('设置已重置');
+    // settings.json 已变 + chain-proxy.yaml 已删：两端都要重新同步
+    await refreshBackendState();
+    await refreshChainStatus();
+  } catch (e) {
+    addLog(`重置设置失败: ${e.message}`, true);
+    showToast('重置失败，请重试', 'error');
+  }
+}
+
 /* ── WARP 注册失败弹窗（重试 = 纯重新注册） ─────────────────── */
 
 function isWarpFailDialogOpen() {
@@ -2011,6 +2039,19 @@ function wireEvents() {
     if (e.key === 'Escape') closeChainClearDialog();
   });
 
+  // 重置设置确认弹窗：确认 = 重置，取消/遮罩/Escape 关闭
+  $('#resetDialogCancel')?.addEventListener('click', closeResetDialog);
+  $('#resetDialogConfirm')?.addEventListener('click', () => {
+    closeResetDialog();
+    resetSettings();
+  });
+  $('#resetDialogScrim')?.addEventListener('click', (e) => {
+    if (e.target?.id === 'resetDialogScrim') closeResetDialog();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeResetDialog();
+  });
+
   // WARP 注册失败弹窗：重试 = 纯重新注册；取消/遮罩/Escape 关闭
   $('#warpFailDialogCancel')?.addEventListener('click', closeWarpFailDialog);
   $('#warpFailDialogRetry')?.addEventListener('click', retryWarpRegistration);
@@ -2603,6 +2644,9 @@ function wireSettingsEvents() {
   $('#readmeItem')?.addEventListener('click', () => {
     openExternal('https://freev6.cc.cd');
   });
+
+  // 重置设置：弹确认弹窗，不直接执行
+  $('#resetSettingsItem')?.addEventListener('click', openResetDialog);
 
   // 软件版本行：发现新版时显示“有新版本”角标，点击重新打开更新弹窗
   // （即使用户点过“跳过此版本”，这里始终可进入）

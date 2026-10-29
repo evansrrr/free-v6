@@ -494,6 +494,17 @@
                 <div class="setting-label">使用说明</div>
               </div>
               <md-icon class="setting-arrow">chevron_right</md-icon>
+            </div>
+            <md-divider></md-divider>
+            <div class="setting-item clickable" id="resetSettingsItem">
+              <div class="setting-icon">
+                <md-icon>autorenew</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">重置设置</div>
+                <div class="setting-desc">恢复全部设置到默认值</div>
+              </div>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>          </div>
 
         </div>
@@ -637,6 +648,20 @@
       <div class="net-dialog-actions">
         <md-text-button id="chainClearDialogCancel">取消</md-text-button>
         <md-filled-button id="chainClearDialogConfirm">清除</md-filled-button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 重置设置确认弹窗 -->
+  <div class="net-dialog-scrim" id="resetDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="resetDialogTitle">
+      <md-icon class="net-dialog-icon">autorenew</md-icon>
+      <h3 id="resetDialogTitle">重置全部设置？</h3>
+      <p>将恢复以下内容为默认值：免流模式、绕过网段、开发者模式、开机自启、静默启动、自动运行免流、快捷键、热点共享，并清除已导入的链式代理。</p>
+      <p class="dialog-hint" id="resetStopHint" hidden>免流正在运行，请先停止免流再重置</p>
+      <div class="net-dialog-actions">
+        <md-text-button id="resetDialogCancel">取消</md-text-button>
+        <md-filled-button id="resetDialogConfirm" class="danger">重置</md-filled-button>
       </div>
     </div>
   </div>

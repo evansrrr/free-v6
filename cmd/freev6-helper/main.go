@@ -103,6 +103,7 @@ func main() {
 	mux.HandleFunc("/api/v1/runtime/download", h.downloadRuntime)
 	mux.HandleFunc("/api/v1/runtime/download/progress", h.runtimeDownloadProgress)
 	mux.HandleFunc("/api/v1/settings", h.settings)
+	mux.HandleFunc("/api/v1/settings/reset", h.resetSettings)
 	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)
 	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
 	mux.HandleFunc("/api/v1/warp/register", h.registerWarp)
@@ -285,6 +286,37 @@ func (h *helper) runtimeDownloadProgress(writer http.ResponseWriter, request *ht
 		"sha256":  sha256Hex,
 		"error":   errMsg,
 	})
+}
+
+// resetSettings wipes the user's stored settings back to defaults and removes
+// any imported chain proxy. It is a recovery action, not a routine toggle:
+// autostart is torn down if it was on, the chain-proxy file is deleted, and
+// settings.json is overwritten with defaultSettings(). The running mihomo
+// (if any) is untouched — the frontend warns the user to stop first.
+func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	// 开机自启开着时撤销任务调度：先做有副作用的操作，失败则 500，
+	// 否则文件写了但自启任务还挂着。
+	if current, err := h.loadSettings(); err == nil && current.AutoStart {
+		if syncErr := removeAutoStart(); syncErr != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": syncErr.Error()})
+			return
+		}
+	}
+	// 清除已导入的链式代理（文件不存在不算错误）
+	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defaults := defaultSettings()
+	if err := h.saveSettings(defaults); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "settings": defaults})
 }
 
 func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {

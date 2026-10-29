@@ -835,6 +835,17 @@ md-icon-button > md-icon {
   --md-text-button-label-text-size: 12px;
   --md-text-button-label-text-line-height: 16px;
 }
+/* 弹窗内的操作提示（如「免流正在运行，请先停止」）：比正文 p 更醒目 */
+.dialog-hint {
+  font-size: 12px !important;
+  font-weight: 600;
+  color: var(--orange) !important;
+}
+/* 危险操作按钮（重置设置）：红底白字，区别于普通确认 */
+md-filled-button.danger {
+  --md-filled-button-container-color: var(--red);
+  --md-filled-button-label-text-color: #fff;
+}
 
 /* Update dialog */
 .update-dialog { width: min(440px, calc(100vw - 48px)); }
