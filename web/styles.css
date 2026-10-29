@@ -965,6 +965,15 @@ md-icon-button > md-icon {
 .setting-item.clickable:hover { background: var(--md-surface-container-high); }
 .setting-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-xs); background: var(--md-surface-container-high); flex-shrink: 0; }
 .setting-icon md-icon { --md-icon-size: 16px; color: var(--md-on-surface-variant); }
+/* 手绘 SVG 图标（字体子集里没有的字形）按图标尺寸缩放 */
+.setting-icon md-icon svg {
+  width: var(--md-icon-size, 16px);
+  height: var(--md-icon-size, 16px);
+  display: block;
+  /* Material 的 ::slotted(svg) 会把 fill 设成 currentColor，压掉了根节点的
+     fill="none" 呈现属性 —— 必须在作者样式里显式清掉，否则线稿会变成实心块 */
+  fill: none;
+}
 .setting-text { flex: 1; min-width: 0; }
 .setting-label { font-size: 13px; font-weight: 600; color: var(--md-on-surface); }
 .setting-value { font-size: 13px; font-weight: 500; color: var(--md-on-surface-variant); white-space: nowrap; }

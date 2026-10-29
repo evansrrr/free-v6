@@ -38,3 +38,11 @@
 
 不跑子集的后果：新图标名会以字母碎片形式显示（即 2026-10 那次线上问题的
 样子），所以**加图标必须同步重跑子集**。
+
+例外：少数图标（背景模式 / 更换壁纸 / 液态玻璃）改为**内联 SVG**，
+不走字体——它们曾因未加入子集而显示成字母碎片（R / A / 工）。
+内联 SVG 的约束：
+- 根节点 `fill` 会被 Material 的 `::slotted(svg)` 覆盖成 currentColor，
+  必须在 `.setting-icon md-icon svg` 里显式 `fill: none`，否则线稿变实心块；
+- 尺寸用 `--md-icon-size`（settings 里是 16px），24 视框、2.2 描边，
+  与 Material Symbols 在 16px 下的字重接近。
