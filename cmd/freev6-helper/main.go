@@ -109,6 +109,7 @@ func main() {
 	mux.HandleFunc("/api/v1/update/download", h.updateDownload)
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
+	mux.HandleFunc("/api/v1/notice", h.notice)
 	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
 	// Per-launch bearer token minted by the desktop shell: without it the
 	// helper must not serve an unauthenticated loopback API (any browser
