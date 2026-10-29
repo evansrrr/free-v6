@@ -458,25 +458,148 @@ md-icon-button > md-icon {
 .card-header-text p { font-size: 11px; color: var(--md-on-surface-variant); margin: 0; }
 
 .card-traffic { margin-bottom: 10px; }
-/* stats card hugs its content instead of spanning the full column.
-   Clickable: click / Enter opens the 本月+累计 detail hint card below. */
-.card-stats {
-  width: fit-content;
-  min-width: 236px; /* same footprint as .traffic-hint below */
+/* 仪表盘下方并排的两张信息卡：流量统计 + 公告。
+   两张卡同为 236px 定宽（与展开面板一致，不随窗口拉伸），
+   高度交给 flex 的 stretch 对齐，窗口不够宽时自动换行堆叠。 */
+.dashboard-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+/* Clickable: click / Enter opens the 本月+累计 detail hint card below. */
+.card-stats,
+.card-notice {
+  width: 236px;
+  flex: 0 0 236px;
   max-width: 100%;
   position: relative;
   cursor: pointer;
   transition: background-color 150ms ease;
 }
-.card-stats:hover { background: var(--md-surface-container-high); }
-.card-stats:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+.card-stats:hover,
+.card-notice:hover { background: var(--md-surface-container-high); }
+.card-stats:focus-visible,
+.card-notice:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
 .stats-expand {
   --md-icon-size: 16px;
   margin-left: auto;
   color: var(--md-on-surface-variant);
   transition: transform 200ms var(--ease-decelerate);
 }
-.card-stats.open .stats-expand { transform: rotate(180deg); }
+.card-stats.open .stats-expand,
+.card-notice.open .stats-expand { transform: rotate(180deg); }
+
+/* ── Notice Card ── */
+
+/* 未读圆点：有未读公告时出现，展开即记已读（localStorage）。 */
+.notice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--md-primary);
+  box-shadow: 0 0 0 3px rgba(126, 170, 255, .18);
+  flex-shrink: 0;
+}
+.notice-dot[hidden] { display: none; }
+
+/* level 只改图标配色，文案与布局保持一致 */
+.card-notice[data-level="warning"] .card-header-icon {
+  background: var(--orange-container);
+  color: var(--orange);
+}
+.card-notice[data-level="critical"] .card-header-icon {
+  background: var(--red-container);
+  color: var(--red);
+}
+
+.notice-preview { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.notice-preview-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--md-on-surface);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 35px; /* 空态与两行标题同高，卡片不跳动 */
+}
+.notice-preview-title.empty { color: var(--md-on-surface-variant); font-weight: 500; }
+.notice-preview-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--md-on-surface-variant);
+}
+
+/* 详情面板沿用 .traffic-hint 的定位/翻转/进场动画，只覆盖排版 */
+.notice-hint {
+  padding: 12px 14px;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+}
+.notice-hint-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.notice-hint-title { font-size: 12px; font-weight: 700; line-height: 1.4; }
+.notice-hint-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--md-on-surface-variant);
+}
+.notice-hint-body {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--md-on-surface-variant);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notice-hint-link { margin-top: 8px; }
+.notice-hint-history {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--md-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.notice-hint-history[hidden] { display: none; }
+.notice-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  color: var(--md-on-surface-variant);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.notice-history-item:hover { background: var(--md-surface-container-highest); color: var(--md-on-surface); }
+.notice-history-item.current { color: var(--md-primary); }
+.notice-history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-history-date {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  opacity: .8;
+}
+.notice-stale-chip {
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--orange-container);
+  color: var(--orange);
+  font-family: 'Manrope', sans-serif;
+  font-size: 9.5px;
+  font-weight: 700;
+}
 
 /* ── Traffic Chart ── */
 

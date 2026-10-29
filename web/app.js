@@ -32,6 +32,12 @@ const state = {
   lastUpload: 0,
   lastDownload: 0,
 
+  // Notice（公告板）：启动时由 helper /api/v1/notice 拉取一次
+  notices: [],
+  noticeStale: false,
+  noticeError: '',
+  noticeActive: 0, // 详情面板当前展示第几条（历史列表可切换）
+
   // Proxy
   proxyGroup: null,       // { now, all: [] }
   proxyDelays: {},
@@ -1323,15 +1329,18 @@ function renderTrafficHint() {
   $('#hintTotalSum').textContent = formatBytes(trafficStats.total.up + trafficStats.total.down);
 }
 
-// 卡片下方空间不足（窗口较矮）时翻转到卡片上方；打开时与窗口 resize 时都会跑
-function positionTrafficHint() {
-  const hint = $('#trafficHint');
-  const card = $('#statsCard');
-  if (!hint || hint.hidden || !card) return;
-  hint.classList.remove('above');
-  if (card.getBoundingClientRect().bottom + hint.offsetHeight + 10 > window.innerHeight) {
-    hint.classList.add('above');
+// 卡片下方空间不足（窗口较矮）时翻转到卡片上方；打开时与窗口 resize 时都会跑。
+// 流量统计与公告两张卡共用这一套翻转逻辑。
+function positionPopover(panel, card) {
+  if (!panel || panel.hidden || !card) return;
+  panel.classList.remove('above');
+  if (card.getBoundingClientRect().bottom + panel.offsetHeight + 10 > window.innerHeight) {
+    panel.classList.add('above');
   }
+}
+
+function positionTrafficHint() {
+  positionPopover($('#trafficHint'), $('#statsCard'));
 }
 
 function openTrafficHint() {
@@ -1358,6 +1367,189 @@ function toggleTrafficHint() {
   const hint = $('#trafficHint');
   if (!hint) return;
   if (hint.hidden) openTrafficHint(); else closeTrafficHint();
+}
+
+/* ── Notice（公告板） ─────────────────────────────────────────────
+   内容来自仓库根 notice.json，由 helper 代取（GET /api/v1/notice），
+   每次启动查一次（顶栏刷新也会重查）。任何失败都退化成「暂无公告」或
+   上次的本机缓存，绝不弹窗、不阻塞启动。 */
+
+const NOTICE_READ_KEY = 'freev6-notice-read';
+const NOTICE_READ_MAX = 50; // 只留最近 50 个 id，localStorage 不无限长
+
+function noticeReadIDs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NOTICE_READ_KEY) || '[]');
+    return Array.isArray(raw) ? raw.filter((id) => typeof id === 'string') : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function markNoticesRead(items) {
+  try {
+    const seen = new Set(noticeReadIDs());
+    for (const item of items) seen.add(item.id);
+    localStorage.setItem(NOTICE_READ_KEY, JSON.stringify([...seen].slice(-NOTICE_READ_MAX)));
+  } catch (_) { /* 存储不可用：本次不记已读，下次启动仍会提示 */ }
+}
+
+function noticeUnreadCount() {
+  const seen = new Set(noticeReadIDs());
+  return state.notices.filter((item) => !seen.has(item.id)).length;
+}
+
+// 公告时间统一显示为「MM-DD HH:mm」（本地时区）
+function noticeTimeText(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+async function checkNotice() {
+  try {
+    const res = await api('/notice');
+    const list = Array.isArray(res?.notices) ? res.notices : [];
+    state.notices = list.filter((item) => item && typeof item.id === 'string' && typeof item.title === 'string');
+    state.noticeStale = !!res?.stale;
+    state.noticeError = res?.error || '';
+  } catch (e) {
+    // 保留已显示的内容：手动刷新失败不该把已有公告抹掉
+    state.noticeError = e.message || 'helper 未连接';
+  }
+  state.noticeActive = 0;
+  renderNoticeCard();
+  if ($('#noticeHint') && !$('#noticeHint').hidden) {
+    renderNoticeHint();
+    positionNoticeHint();
+  }
+}
+
+function renderNoticeCard() {
+  const card = $('#noticeCard');
+  if (!card) return;
+  const latest = state.notices[0];
+  const titleEl = $('#noticePreviewTitle');
+  const timeEl = $('#noticePreviewTime');
+
+  if (latest) {
+    titleEl.textContent = latest.title;
+    titleEl.classList.remove('empty');
+    const when = noticeTimeText(latest.published);
+    timeEl.textContent = state.noticeStale ? `${when} · 离线缓存` : when;
+    card.dataset.level = latest.level || 'info';
+    card.setAttribute('aria-label', `公告：${latest.title}，点击查看详情`);
+  } else {
+    titleEl.textContent = state.noticeError ? '暂时无法获取公告' : '暂无公告';
+    titleEl.classList.add('empty');
+    timeEl.textContent = '';
+    card.dataset.level = 'info';
+    card.setAttribute('aria-label', '公告，暂无内容');
+  }
+
+  const dot = $('#noticeDot');
+  if (dot) dot.hidden = noticeUnreadCount() === 0;
+}
+
+function renderNoticeHint() {
+  const hint = $('#noticeHint');
+  if (!hint) return;
+  const titleEl = $('#noticeHintTitle');
+  const timeEl = $('#noticeHintTime');
+  const bodyEl = $('#noticeHintBody');
+  const linkEl = $('#noticeHintLink');
+  const historyEl = $('#noticeHintHistory');
+  const items = state.notices;
+
+  if (!items.length) {
+    titleEl.textContent = state.noticeError ? '暂时无法获取公告' : '暂无公告';
+    timeEl.textContent = '';
+    bodyEl.textContent = state.noticeError
+      ? '连接不上 helper，公告暂时取不到。点右上角刷新可以重试。'
+      : '维护通知、节点变更和版本提醒都会出现在这里。';
+    linkEl.hidden = true;
+    historyEl.hidden = true;
+    return;
+  }
+
+  const index = Math.min(Math.max(state.noticeActive, 0), items.length - 1);
+  state.noticeActive = index;
+  const item = items[index];
+
+  titleEl.textContent = item.title;
+  timeEl.textContent = '';
+  const when = document.createElement('span');
+  when.textContent = noticeTimeText(item.published);
+  timeEl.append(when);
+  if (state.noticeStale) {
+    const chip = document.createElement('span');
+    chip.className = 'notice-stale-chip';
+    chip.textContent = '离线缓存';
+    timeEl.append(chip);
+  }
+
+  bodyEl.textContent = item.body || '（这条公告没有正文）';
+
+  if (item.link) {
+    linkEl.hidden = false;
+    linkEl.textContent = item.linkText || '查看详情';
+    linkEl.dataset.url = item.link;
+  } else {
+    linkEl.hidden = true;
+    delete linkEl.dataset.url;
+  }
+
+  // 其余公告在面板底部列出，点一条即可切换（新的在前）
+  const others = items.map((entry, i) => ({ entry, i })).filter(({ i }) => i !== index);
+  historyEl.hidden = others.length === 0;
+  historyEl.innerHTML = others.map(({ entry, i }) => `
+    <button class="notice-history-item" data-notice-index="${i}" title="${escapeHTML(entry.title)}">
+      <span class="notice-history-title">${escapeHTML(entry.title)}</span>
+      <span class="notice-history-date">${escapeHTML(noticeTimeText(entry.published))}</span>
+    </button>`).join('');
+}
+
+// 事件路径里是否包含某个元素。切换历史公告会在冒泡途中重建面板 DOM，
+// 此时事件 target 已被摘除，closest() 会一路返回 null —— 必须用
+// composedPath（派发时就缓存好的完整路径）判断「点的是卡内还是卡外」。
+function eventPathHas(event, element) {
+  if (!element) return false;
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  return path.includes(element);
+}
+
+function positionNoticeHint() {
+  positionPopover($('#noticeHint'), $('#noticeCard'));
+}
+
+function openNoticeHint() {
+  const hint = $('#noticeHint');
+  const card = $('#noticeCard');
+  if (!hint || !card) return;
+  hint.hidden = false;
+  renderNoticeHint();
+  positionNoticeHint();
+  card.classList.add('open');
+  card.setAttribute('aria-expanded', 'true');
+  // 展开即视为已读：先落盘再重渲染卡片，未读圆点随之消失
+  markNoticesRead(state.notices);
+  renderNoticeCard();
+}
+
+function closeNoticeHint() {
+  const hint = $('#noticeHint');
+  if (!hint || hint.hidden) return;
+  hint.hidden = true;
+  const card = $('#noticeCard');
+  card?.classList.remove('open');
+  card?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleNoticeHint() {
+  const hint = $('#noticeHint');
+  if (!hint) return;
+  if (hint.hidden) openNoticeHint(); else closeNoticeHint();
 }
 
 /* ── mihomo core download (设置页核心行 + 启动拦截弹窗共用) ─── */
@@ -1854,6 +2046,7 @@ function wireEvents() {
     addLog('手动刷新');
     refreshBackendState();
     fetchProxies();
+    checkNotice();
   });
 
   // 流量统计卡：点击 / 回车弹出「本月 + 累计」详情提示卡
@@ -1877,6 +2070,41 @@ function wireEvents() {
   });
   // 提示卡打开期间调整窗口 → 重新判断上/下翻转
   window.addEventListener('resize', positionTrafficHint);
+
+  // 公告卡：交互与流量统计卡一致（点击 / Enter 展开，外部点击 / Esc 收起）。
+  // 点到面板内部不算切换，交给面板内的按钮自己处理。
+  $('#noticeCard')?.addEventListener('click', (e) => {
+    if (eventPathHas(e, $('#noticeHint'))) return;
+    toggleNoticeHint();
+  });
+  $('#noticeCard')?.addEventListener('keydown', (e) => {
+    if (eventPathHas(e, $('#noticeHint'))) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleNoticeHint();
+    }
+  });
+  // 公告里的详情链接：只走系统浏览器（link 已在 helper 侧限定 https）
+  $('#noticeHintLink')?.addEventListener('click', () => {
+    const url = $('#noticeHintLink')?.dataset.url;
+    if (url) openExternal(url);
+  });
+  // 历史公告：点一条切到该条详情
+  $('#noticeHintHistory')?.addEventListener('click', (e) => {
+    const button = e.target?.closest?.('[data-notice-index]');
+    if (!button) return;
+    state.noticeActive = parseInt(button.dataset.noticeIndex, 10) || 0;
+    renderNoticeHint();
+    positionNoticeHint();
+  });
+  // 点面板内部（含历史列表）不算收起
+  document.addEventListener('click', (e) => {
+    if (!eventPathHas(e, $('#noticeCard'))) closeNoticeHint();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeNoticeHint();
+  });
+  window.addEventListener('resize', positionNoticeHint);
   // 离开页面或切到后台时，把未落盘的统计强制写入 localStorage
   window.addEventListener('pagehide', () => flushTrafficStats(true));
   document.addEventListener('visibilitychange', () => {
@@ -3256,6 +3484,9 @@ function init() {
 
   // 后台检查 GitHub 正式版更新（离线/私有仓库 404 → 静默跳过，不阻塞启动）
   setTimeout(() => { checkForUpdate(); }, 1500);
+
+  // 每次启动检查一次公告（失败静默：离线/缓存不可用都只是空卡片）
+  setTimeout(() => { checkNotice(); }, 1200);
 
   // Show proxy FAB on initial dashboard view
   $('#proxyToggle')?.classList.add('visible');

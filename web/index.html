@@ -121,70 +121,106 @@
           </div>
         </div>
 
-        <div class="card card-stats" id="statsCard" role="button" tabindex="0"
-             aria-haspopup="dialog" aria-expanded="false" aria-controls="trafficHint"
-             aria-label="流量统计，点击查看本月与累计详情">
-          <div class="card-header">
-            <div class="card-header-icon">
-              <md-icon>donut_small</md-icon>
-            </div>
-            <div class="card-header-text">
-              <h3>流量统计</h3>
-            </div>
-            <md-icon class="stats-expand" aria-hidden="true">expand_more</md-icon>
-          </div>
-          <div class="stats-ring-wrap">
-            <svg class="stats-ring" viewBox="0 0 36 36" aria-hidden="true">
-              <circle cx="18" cy="18" r="13.5" stroke="var(--md-surface-container-highest)" stroke-width="5" />
-              <circle cx="18" cy="18" r="13.5" stroke="var(--md-primary)" stroke-width="5"
-                      stroke-dasharray="0 84.8" transform="rotate(-90 18 18)"
-                      id="ringUpload" />
-              <circle cx="18" cy="18" r="13.5" stroke="var(--md-tertiary)" stroke-width="5"
-                      stroke-dasharray="0 84.8" transform="rotate(-90 18 18)"
-                      id="ringDownload" />
-            </svg>
-            <div class="stats-legend">
-              <div class="stats-legend-item">
-                <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
-                <span class="stats-legend-text">上传</span>
-                <span class="stats-legend-value" id="totalUp">0 B</span>
+        <!-- 两张信息卡并排：流量统计 + 公告（等宽 236px、等高对齐） -->
+        <div class="dashboard-pair">
+
+          <div class="card card-stats" id="statsCard" role="button" tabindex="0"
+               aria-haspopup="dialog" aria-expanded="false" aria-controls="trafficHint"
+               aria-label="流量统计，点击查看本月与累计详情">
+            <div class="card-header">
+              <div class="card-header-icon">
+                <md-icon>donut_small</md-icon>
               </div>
-              <div class="stats-legend-item">
-                <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
-                <span class="stats-legend-text">下载</span>
-                <span class="stats-legend-value" id="totalDown">0 B</span>
+              <div class="card-header-text">
+                <h3>流量统计</h3>
+              </div>
+              <md-icon class="stats-expand" aria-hidden="true">expand_more</md-icon>
+            </div>
+            <div class="stats-ring-wrap">
+              <svg class="stats-ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle cx="18" cy="18" r="13.5" stroke="var(--md-surface-container-highest)" stroke-width="5" />
+                <circle cx="18" cy="18" r="13.5" stroke="var(--md-primary)" stroke-width="5"
+                        stroke-dasharray="0 84.8" transform="rotate(-90 18 18)"
+                        id="ringUpload" />
+                <circle cx="18" cy="18" r="13.5" stroke="var(--md-tertiary)" stroke-width="5"
+                        stroke-dasharray="0 84.8" transform="rotate(-90 18 18)"
+                        id="ringDownload" />
+              </svg>
+              <div class="stats-legend">
+                <div class="stats-legend-item">
+                  <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
+                  <span class="stats-legend-text">上传</span>
+                  <span class="stats-legend-value" id="totalUp">0 B</span>
+                </div>
+                <div class="stats-legend-item">
+                  <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
+                  <span class="stats-legend-text">下载</span>
+                  <span class="stats-legend-value" id="totalDown">0 B</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="traffic-hint" id="trafficHint" role="dialog" aria-label="流量统计详情" hidden>
+              <div class="traffic-hint-head">流量详情</div>
+              <div class="traffic-hint-group">
+                <div class="traffic-hint-title">本月<span class="traffic-hint-sub" id="hintMonthKey">--</span></div>
+                <div class="traffic-hint-row">
+                  <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
+                  <span>上传</span><b id="hintMonthUp">0 B</b>
+                </div>
+                <div class="traffic-hint-row">
+                  <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
+                  <span>下载</span><b id="hintMonthDown">0 B</b>
+                </div>
+                <div class="traffic-hint-row traffic-hint-sum"><span>合计</span><b id="hintMonthSum">0 B</b></div>
+              </div>
+              <md-divider></md-divider>
+              <div class="traffic-hint-group">
+                <div class="traffic-hint-title">累计</div>
+                <div class="traffic-hint-row">
+                  <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
+                  <span>上传</span><b id="hintTotalUp">0 B</b>
+                </div>
+                <div class="traffic-hint-row">
+                  <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
+                  <span>下载</span><b id="hintTotalDown">0 B</b>
+                </div>
+                <div class="traffic-hint-row traffic-hint-sum"><span>合计</span><b id="hintTotalSum">0 B</b></div>
               </div>
             </div>
           </div>
 
-          <div class="traffic-hint" id="trafficHint" role="dialog" aria-label="流量统计详情" hidden>
-            <div class="traffic-hint-head">流量详情</div>
-            <div class="traffic-hint-group">
-              <div class="traffic-hint-title">本月<span class="traffic-hint-sub" id="hintMonthKey">--</span></div>
-              <div class="traffic-hint-row">
-                <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
-                <span>上传</span><b id="hintMonthUp">0 B</b>
+          <!-- 公告卡：与流量统计卡同尺寸并排，点击展开详情；内容来自 helper
+               /api/v1/notice（仓库 notice.json），启动时检查一次 -->
+          <div class="card card-notice" id="noticeCard" role="button" tabindex="0"
+               aria-haspopup="dialog" aria-expanded="false" aria-controls="noticeHint"
+               aria-label="公告，点击查看详情">
+            <div class="card-header">
+              <div class="card-header-icon">
+                <md-icon>info</md-icon>
               </div>
-              <div class="traffic-hint-row">
-                <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
-                <span>下载</span><b id="hintMonthDown">0 B</b>
+              <div class="card-header-text">
+                <h3>公告</h3>
               </div>
-              <div class="traffic-hint-row traffic-hint-sum"><span>合计</span><b id="hintMonthSum">0 B</b></div>
+              <span class="notice-dot" id="noticeDot" hidden aria-label="有未读公告"></span>
+              <md-icon class="stats-expand" aria-hidden="true">expand_more</md-icon>
             </div>
-            <md-divider></md-divider>
-            <div class="traffic-hint-group">
-              <div class="traffic-hint-title">累计</div>
-              <div class="traffic-hint-row">
-                <span class="stats-legend-dot" style="background:var(--md-primary)"></span>
-                <span>上传</span><b id="hintTotalUp">0 B</b>
+            <div class="notice-preview">
+              <p class="notice-preview-title" id="noticePreviewTitle">暂无公告</p>
+              <span class="notice-preview-time" id="noticePreviewTime"></span>
+            </div>
+
+            <div class="traffic-hint notice-hint" id="noticeHint" role="dialog" aria-label="公告详情" hidden>
+              <div class="notice-hint-head">
+                <span class="notice-hint-title" id="noticeHintTitle">--</span>
+                <span class="notice-hint-time" id="noticeHintTime"></span>
               </div>
-              <div class="traffic-hint-row">
-                <span class="stats-legend-dot" style="background:var(--md-tertiary)"></span>
-                <span>下载</span><b id="hintTotalDown">0 B</b>
-              </div>
-              <div class="traffic-hint-row traffic-hint-sum"><span>合计</span><b id="hintTotalSum">0 B</b></div>
+              <div class="notice-hint-body" id="noticeHintBody"></div>
+              <md-text-button class="notice-hint-link" id="noticeHintLink" hidden>查看详情</md-text-button>
+              <div class="notice-hint-history" id="noticeHintHistory" hidden></div>
             </div>
           </div>
+
         </div>
 
       </section>
