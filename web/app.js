@@ -267,9 +267,16 @@ const ICON_RESTORE = '<svg viewBox="0 0 24 24" aria-hidden="true">'
   + '<path d="M8.6 8.6V6.5A1.9 1.9 0 0 1 10.5 4.6h7A1.9 1.9 0 0 1 19.4 6.5v7a1.9 1.9 0 0 1-1.9 1.9h-2.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>'
   + '</svg>';
 
-// FAB 文案改为普通 <span class="fab-label">（md-fab 已替换为普通 button）
+// FAB 文案改为普通 <span class="fab-label">（md-fab 已替换为普通 button）。
+// 注意：给普通 button 赋 fab.label 属性是无效的——文案必须写进 span，
+// 否则「启动中…」结束后没有任何代码能把按钮文字恢复回来（卡死根因）。
 function setFabLabel(text) {
-  const label = $('#proxyToggle .fab-label');
+  fabLabel($('#proxyToggle'), text);
+}
+
+// 通用 FAB 文案写入：任何带 .fab-label span 的按钮都走这里。
+function fabLabel(fab, text) {
+  const label = fab?.querySelector('.fab-label');
   if (label) label.textContent = text;
 }
 
@@ -1900,7 +1907,7 @@ function wireEvents() {
     fab.style.opacity = '0.6';
     // 忙碌指示：进行中展示 启动中…/停止中…，结束（成功/失败）后按最终状态恢复
     state.transition = state.proxyRunning ? 'stopping' : 'starting';
-    fab.label = state.transition === 'stopping' ? '停止中…' : '启动中…';
+    setFabLabel(state.transition === 'stopping' ? '停止中…' : '启动中…');
     try {
       if (state.proxyRunning) {
         await stopProxyApi();
@@ -1932,7 +1939,7 @@ function wireEvents() {
       fab.style.pointerEvents = '';
       fab.style.opacity = '';
       // 启动失败→启动免流；停止失败→停止免流
-      fab.label = state.proxyRunning ? '停止免流' : '启动免流';
+      setFabLabel(state.proxyRunning ? '停止免流' : '启动免流');
     }
   });
 
@@ -2262,7 +2269,7 @@ async function runDelayTest() {
   if (fab) fab.classList.add('loading');
   if (fabIcon) fabIcon.hidden = true;
   if (fabProgress) fabProgress.hidden = false;
-  if (fab) fab.label = '测试中…';
+  fabLabel(fab, '测试中…');
   renderNodeGrid();
 
   const group = state.proxyGroup;
@@ -2296,7 +2303,7 @@ async function runDelayTest() {
       if (!state.testingDelay) return;
       state.proxyDelays[name] = delay;
       completed++;
-      if (fab) fab.label = `测试中 ${completed}/${nodes.length}`;
+      fabLabel(fab, `测试中 ${completed}/${nodes.length}`);
       renderNodeGrid();
     }
   }
@@ -2322,7 +2329,7 @@ function resetFab() {
   const fabProgress = $('#fabProgress');
   if (fab) {
     fab.classList.remove('loading');
-    fab.label = '测试延迟';
+    fabLabel(fab, '测试延迟');
   }
   if (fabIcon) fabIcon.hidden = false;
   if (fabProgress) fabProgress.hidden = true;
