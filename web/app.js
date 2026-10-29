@@ -35,7 +35,8 @@ const state = {
   // Notice（公告板）：启动时由 helper /api/v1/notice 拉取一次
   notices: [],
   noticeStale: false,
-  noticeError: '',
+  noticeChecked: false, // 本会话是否已成功拉到公告（连上 helper 后只查一次）
+  noticeChecking: false, // 请求在途防抖，避免连上瞬间重入
   noticeActive: 0, // 详情面板当前展示第几条（历史列表可切换）
 
   // Proxy
@@ -1408,15 +1409,25 @@ function noticeTimeText(iso) {
 }
 
 async function checkNotice() {
+  if (state.noticeChecking) return;
+  // helper 还没连上就不查，也不记失败：等 ensureNoticeChecked 在连上后补跑。
+  // 否则启动瞬间 helper 尚未就绪，会把「暂无公告」误报成「连接不上 helper」。
+  if (!state.helperOnline) {
+    state.noticeChecked = false;
+    return;
+  }
+  state.noticeChecking = true;
   try {
     const res = await api('/notice');
     const list = Array.isArray(res?.notices) ? res.notices : [];
     state.notices = list.filter((item) => item && typeof item.id === 'string' && typeof item.title === 'string');
     state.noticeStale = !!res?.stale;
-    state.noticeError = res?.error || '';
-  } catch (e) {
-    // 保留已显示的内容：手动刷新失败不该把已有公告抹掉
-    state.noticeError = e.message || 'helper 未连接';
+    state.noticeChecked = true; // 拿到 200 就算检查完成；空公告（含 404）≠失败
+  } catch (_) {
+    // 请求失败（helper 中途重启等偶发）：保留已显示内容，留待下次补查
+    state.noticeChecked = false;
+  } finally {
+    state.noticeChecking = false;
   }
   state.noticeActive = 0;
   renderNoticeCard();
@@ -1424,6 +1435,11 @@ async function checkNotice() {
     renderNoticeHint();
     positionNoticeHint();
   }
+}
+
+// helper 首次连上后补查一次；本会话成功过就不再重复。
+function ensureNoticeChecked() {
+  if (!state.noticeChecked) checkNotice();
 }
 
 function renderNoticeCard() {
@@ -1441,7 +1457,7 @@ function renderNoticeCard() {
     card.dataset.level = latest.level || 'info';
     card.setAttribute('aria-label', `公告：${latest.title}，点击查看详情`);
   } else {
-    titleEl.textContent = state.noticeError ? '暂时无法获取公告' : '暂无公告';
+    titleEl.textContent = '暂无公告';
     titleEl.classList.add('empty');
     timeEl.textContent = '';
     card.dataset.level = 'info';
@@ -1463,11 +1479,9 @@ function renderNoticeHint() {
   const items = state.notices;
 
   if (!items.length) {
-    titleEl.textContent = state.noticeError ? '暂时无法获取公告' : '暂无公告';
+    titleEl.textContent = '暂无公告';
     timeEl.textContent = '';
-    bodyEl.textContent = state.noticeError
-      ? '连接不上 helper，公告暂时取不到。点右上角刷新可以重试。'
-      : '维护通知、节点变更和版本提醒都会出现在这里。';
+    bodyEl.textContent = '维护通知、节点变更和版本提醒都会出现在这里。';
     linkEl.hidden = true;
     historyEl.hidden = true;
     return;
@@ -1669,7 +1683,8 @@ async function refreshBackendState() {
   try {
     const status = await api('/status');
     state.helperOnline = true;
-    // 设置写入在途/落定后返回的旧响应不再回灌 state（见 settingsWriteGen）
+    // helper 刚就绪：公告还没查过的话补查一次（不阻塞后续状态同步）
+    ensureNoticeChecked();
     if (genAtStart === settingsWriteGen) {
       state.mode = status.settings?.mode || state.mode;
       state.cidrs = status.settings?.campusCidrs || state.cidrs;
@@ -1810,6 +1825,8 @@ async function pollStatus() {
       state.warpRegistered = Boolean(status.warp?.registered);
       updateSettingsUI();
       maybeAutoRegisterWarp();
+      // 首次连上：公告还没查过的话补查一次（启动瞬间的检查可能早于 helper 就绪）
+      ensureNoticeChecked();
     }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
@@ -3485,8 +3502,8 @@ function init() {
   // 后台检查 GitHub 正式版更新（离线/私有仓库 404 → 静默跳过，不阻塞启动）
   setTimeout(() => { checkForUpdate(); }, 1500);
 
-  // 每次启动检查一次公告（失败静默：离线/缓存不可用都只是空卡片）
-  setTimeout(() => { checkNotice(); }, 1200);
+  // 每次启动检查一次公告（helper 就绪前静默等待，见 ensureNoticeChecked）
+  setTimeout(() => { ensureNoticeChecked(); }, 1200);
 
   // Show proxy FAB on initial dashboard view
   $('#proxyToggle')?.classList.add('visible');
