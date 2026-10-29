@@ -2973,15 +2973,18 @@ async function initLiquidGlass() {
   try {
     const { LiquidGlass } = await import('@ybouane/liquidglass');
 
-    // 配置直接照抄官网 site/index.html：
-    // - #glass-btn / 浮动按钮：button 模式 + blur .3 + brightness -.1
-    // - #glass-tab-indicator：圆角/倒角 16、blur 0（图标保持锐利）、edgeHighlight .2
-    const FAB_CFG = { button: true, cornerRadius: 16, blurAmount: 0.3, brightness: -0.1 };
+    // 基准取自官网 site/index.html，只按深色壁纸做两处微调：
+    // - 按钮（#glass-btn）：button 模式 + 适度模糊；去掉 demo 的 brightness -.1，
+    //   那档是为浅色竹林照片压亮度用的，深色壁纸上会把按钮压成灰块
+    // - 滑块（#glass-tab-indicator）：blur 0 保持图标锐利，圆角对齐导航项
+    const FAB_CFG = { button: true, cornerRadius: 16, blurAmount: 0.28 };
+    // 官网默认 edgeHighlight .2 是为浅色照片调的；深色壁纸上滑块会「沉」进底槽，
+    // 这里略微提亮度 + 加强边缘高光，保证选中态一眼可辨（其余仍是库默认）
     const INDICATOR_CFG = {
-      cornerRadius: 16, zRadius: 16, blurAmount: 0,
-      edgeHighlight: 0.2, shadowOpacity: 0.25, tintStrength: 0,
+      cornerRadius: 20, zRadius: 16, blurAmount: 0,
+      edgeHighlight: 0.32, shadowOpacity: 0.18, brightness: 0.1, tintStrength: 0,
     };
-    const LOGS_CFG = { button: true, cornerRadius: 20, blurAmount: 0.3, brightness: -0.1 };
+    const LOGS_CFG = { button: true, cornerRadius: 20, blurAmount: 0.28 };
 
     // FAB 实例（root=#fabLayer：只含壁纸副本 + FAB，小 root 初始化快）
     if (!bgState.liquidGlass && fabLayer && fabs.length) {

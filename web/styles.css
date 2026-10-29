@@ -49,7 +49,7 @@
   --radius-md: 14px;
   --radius-lg: 20px;
   --radius-full: 9999px;
-  --nav-width: 64px;
+  --nav-width: 72px;
   --ease-decelerate: cubic-bezier(0, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
 
@@ -274,9 +274,9 @@ a { color: var(--md-primary); text-decoration: none; }
   flex-direction: column;
   gap: 4px;
   align-self: stretch;
-  padding: 6px 0;
-  margin: 0 8px 8px;
-  border-radius: 26px;
+  padding: 0;
+  margin: 0 0 8px;
+  border-radius: var(--radius-lg);
   flex-shrink: 0;
 }
 
@@ -304,7 +304,9 @@ a { color: var(--md-primary); text-decoration: none; }
   align-items: center;
   gap: 2px;
   align-self: stretch;
-  padding: 10px 4px 6px;
+  height: 48px;
+  justify-content: center;
+  padding: 0 6px;
   border-radius: var(--radius-lg);
   color: var(--md-on-surface-variant);
   font-size: 10px;
@@ -318,7 +320,7 @@ a { color: var(--md-primary); text-decoration: none; }
 .nav-item:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .nav-item.active { color: var(--md-on-primary-container); background: var(--md-primary-container); }
 /* 日志按钮推到导轨底部 */
-.bottom-item { margin-top: auto; margin-left: 8px; margin-right: 8px; align-self: stretch; }
+.bottom-item { margin-top: auto; align-self: stretch; }
 
 /* ── Main Content ── */
 
@@ -1201,11 +1203,16 @@ md-icon-button > md-icon {
   backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
 }
 
-/* hover 态保持半透明 */
+/* hover：玻璃已经有底色，不再叠一层填充（会变成不透明蒙版），
+   只把边缘高光提亮一档，并铺一层极淡的顶部光泽 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card-stats:hover,
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card:hover,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card:hover {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 62%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .34),
+              inset 0 0 0 1px rgba(255, 255, 255, .14);
+}
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .setting-item.clickable:hover {
-  background: color-mix(in srgb, var(--md-surface-container-high) 70%, transparent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 70%);
 }
 
 /* 连接状态芯片（未连接态） */
@@ -1357,8 +1364,9 @@ md-icon-button > md-icon {
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active {
   background: transparent !important;
 }
-/* 图标留在玻璃「里面」被折射（官网 tab 效果），文字压在玻璃之上保持清晰 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item > span {
+/* 图标与文字都压在滑块 canvas 之上：md-icon 走 Shadow DOM，
+   html-to-image 抓不到图标字形，留在玻璃后面会整块消失 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item > * {
   position: relative;
   z-index: 6;
 }
@@ -1376,6 +1384,22 @@ md-icon-button > md-icon {
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator { overflow: visible; }
 /* 玻璃层内的图标/文字需压在 canvas(z-index:-1) 之上 */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item > * { position: relative; z-index: 1; }
+/* 玻璃态下不做位移动效：canvas 会跟着位移重采样，叠出第二层「蒙版」观感。
+   悬停/按下的反馈交给库自身的 button 模式（hover 提亮、press 压平），
+   这里只补一档极轻的整体提亮，保证鼠标进出的反馈可感知 */
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:hover,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:active { transform: none; }
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .bottom-item {
+  transition: filter 160ms ease, opacity 250ms, color 150ms;
+}
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:hover,
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .bottom-item:hover {
+  filter: brightness(1.08);
+}
+:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:active {
+  filter: brightness(0.96);
+}
 
 /* ── 纯黑背景（OLED）优先级高于玻璃 ── */
 [data-theme="dark"][data-oled="1"] .card,
