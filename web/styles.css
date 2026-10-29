@@ -1207,12 +1207,19 @@ md-icon-button > md-icon {
    只把边缘高光提亮一档，并铺一层极淡的顶部光泽 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card-stats:hover,
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card:hover {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, .07), rgba(255, 255, 255, 0) 62%);
+  background-color: var(--glass-bg);
+  background-image: linear-gradient(180deg,
+    color-mix(in srgb, var(--md-on-surface) 9%, transparent),
+    color-mix(in srgb, var(--md-on-surface) 0%, transparent) 62%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .34),
               inset 0 0 0 1px rgba(255, 255, 255, .14);
 }
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .setting-item.clickable:hover {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 70%);
+  /* 基础规则用的是 background 简写（会带上 background-color），
+     这里换成 M3 的状态层：on-surface 7%，暗色下微微提亮、亮色下微微压暗，
+     是半透明覆盖而不是实心块 */
+  background-color: color-mix(in srgb, var(--md-on-surface) 7%, transparent);
+  background-image: none;
 }
 
 /* 连接状态芯片（未连接态） */
@@ -1246,7 +1253,7 @@ md-icon-button > md-icon {
 /* 导航项：无色（不用主色容器），图标与文字加投影，悬停只降图标不透明度 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item {
   background: transparent;
-  color: var(--md-on-surface);
+  color: var(--md-on-surface-variant);
 }
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item .nav-icon {
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .35));
@@ -1258,12 +1265,14 @@ md-icon-button > md-icon {
   background: transparent;
   color: var(--md-on-surface);
 }
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-item:hover .nav-icon {
-  opacity: .85;
-}
-/* 未启用 WebGL 时：选中态回退为 CSS 玻璃胶囊 */
+/* 未启用 WebGL 时的选中态：实心玻璃胶囊。
+   底色用 surface-container-highest（暗色主题比底槽更亮、亮色主题比底槽更暗），
+   配上主色文字 + 一圈描边，色阶与色相双重区分，两套主题都一眼可辨。 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-group .nav-item.active {
-  background: color-mix(in srgb, var(--md-surface-container-high) 46%, transparent);
+  background-color: color-mix(in srgb, var(--md-surface-container-highest) 92%, transparent);
+  color: var(--md-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .20),
+              inset 0 0 0 1px color-mix(in srgb, var(--md-on-surface) 12%, transparent);
   opacity: 1;
 }
 /* 日志按钮在玻璃模式下保持独立玻璃胶囊（与官网 .glass-btn 一致） */
@@ -1360,9 +1369,10 @@ md-icon-button > md-icon {
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
-/* 指示器存在时，选中态不再需要 CSS 底色 */
+/* 指示器存在时，选中态不再需要 CSS 底色与描边（玻璃由滑块提供） */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active {
   background: transparent !important;
+  box-shadow: none !important;
 }
 /* 图标与文字都压在滑块 canvas 之上：md-icon 走 Shadow DOM，
    html-to-image 抓不到图标字形，留在玻璃后面会整块消失 */
