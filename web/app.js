@@ -234,6 +234,9 @@ function showView(view) {
     // FABs are window-anchored: proxy toggle on dashboard, delay test on proxies
     $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
     $('#delayTestFab')?.classList.toggle('visible', view === 'proxies');
+    // 刚显示出来的 FAB 尺寸从 0 变成实际值，库只会重设 canvas 尺寸、不会重绘，
+    // 必须主动标脏，否则要等鼠标悬停（button 模式）才会出现玻璃
+    if (bgState.liquidGlass) kickGlassRefresh();
   }, oldView ? 80 : 0);
 
   // Update nav highlighting immediately
@@ -2945,7 +2948,35 @@ function syncRailIndicator(animate) {
   if (!animate) {
     r.indicator.offsetHeight;
     r.indicator.style.transition = '';
+  } else {
+    pulseRailIndicator();
   }
+}
+
+/* 库的渲染帧有 `_glassDirty` 门槛：没有元素标脏就整帧跳过。
+   CSS transform 平移滑块不会自动标脏，canvas 会带着旧贴图整体搬走 —— 
+   所以滑动期间逐帧 markChanged，让折射按新位置重算。
+   约 30fps 节流：每帧都要重新栅格化滑块背后的内容，不必满帧跑。 */
+function pulseRailIndicator() {
+  if (!bgState.railGlass) return;
+  cancelAnimationFrame(bgState._railPulse);
+  const started = performance.now();
+  let last = 0;
+  const tick = (now) => {
+    const ind = $('#railIndicator');
+    if (!ind || !bgState.railGlass) return;
+    if (now - last > 32) {
+      last = now;
+      try { bgState.railGlass.markChanged(ind); } catch (_) {}
+    }
+    if (now - started < 520) {
+      bgState._railPulse = requestAnimationFrame(tick);
+    } else {
+      // 落位后再补一帧，保证最终位置是准的
+      try { bgState.railGlass.markChanged(ind); } catch (_) {}
+    }
+  };
+  bgState._railPulse = requestAnimationFrame(tick);
 }
 
 function wireRailIndicator() {
@@ -2993,6 +3024,7 @@ async function initLiquidGlass() {
         root: fabLayer,
         glassElements: fabs,
       });
+      kickGlassRefresh();
     }
 
     // 导轨实例（root=.rail）：玻璃滑块 + 日志按钮
@@ -3007,6 +3039,7 @@ async function initLiquidGlass() {
       });
       syncRailIndicator(false);
       wireRailIndicator();
+      kickGlassRefresh();
       // 图标字体/自定义元素升级后导航项尺寸可能变化，库不会察觉 → 再对齐一次
       const settle = () => requestAnimationFrame(() => requestAnimationFrame(() => syncRailIndicator(false)));
       if (document.fonts && document.fonts.ready) document.fonts.ready.then(settle);
@@ -3020,6 +3053,20 @@ async function initLiquidGlass() {
     addLog(`WebGL 液态玻璃不可用，已回退磨砂效果（${e}）`, true);
     return false;
   }
+}
+
+/* 全量重绘一次。两个用途：
+   1) init 完成时壁纸副本可能还没解码完，首帧会拿到空白场景；
+   2) FAB 一开始是 display:none（canvas 被定成 0 尺寸），显示后尺寸变了
+      但没有任何东西标脏，库不会重绘 —— 只在 hover 时靠 button 模式才亮起来。 */
+function kickGlassRefresh() {
+  const kick = () => {
+    try { bgState.liquidGlass?.markChanged(); } catch (_) {}
+    try { bgState.railGlass?.markChanged(); } catch (_) {}
+  };
+  requestAnimationFrame(kick);
+  setTimeout(kick, 120);
+  setTimeout(kick, 480);
 }
 
 function destroyLiquidGlass() {
