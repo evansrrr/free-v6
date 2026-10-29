@@ -253,6 +253,12 @@ function showView(view) {
 // and dynamic color): rounded play triangle / rounded square.
 const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3.5"/></svg>';
+// 窗口「还原」态图标。字体子集里没有 filter_none（会渲染成字母碎片），
+// 这里手绘成两个错位方框，形状与 Material 的 filter_none 一致。
+const ICON_RESTORE = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+  + '<rect x="4.6" y="8.6" width="10.8" height="10.8" rx="1.9" fill="none" stroke="currentColor" stroke-width="2.4"/>'
+  + '<path d="M8.6 8.6V6.5A1.9 1.9 0 0 1 10.5 4.6h7A1.9 1.9 0 0 1 19.4 6.5v7a1.9 1.9 0 0 1-1.9 1.9h-2.1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>'
+  + '</svg>';
 
 // FAB 文案改为普通 <span class="fab-label">（md-fab 已替换为普通 button）
 function setFabLabel(text) {
@@ -3206,7 +3212,8 @@ function wireTitlebar() {
   if (!bar) return;
   const maxIcon = $('#winMaximizeIcon');
   const setMaxIcon = (maximized) => {
-    if (maxIcon) maxIcon.textContent = maximized ? 'filter_none' : 'crop_square';
+    // 还原态用内联 SVG，最大化态仍是字体里的 crop_square
+    if (maxIcon) maxIcon.innerHTML = maximized ? ICON_RESTORE : 'crop_square';
   };
   const refreshMax = () => tauriInvoke('window_maximized').then(setMaxIcon);
   refreshMax();

@@ -20,6 +20,8 @@
   --md-on-tertiary-container: #e6deff;
 
   --md-surface: #121318;
+  /* 玻璃底色不透明度：暗色 42% / 亮色 78%。
+     三处必须同步：:root(暗) · [data-theme="light"] · system 的亮色媒体查询。 */
   --glass-veil-a: 42%;
   --md-surface-dim: #121318;
   --md-surface-container-lowest: #0d0e13;
@@ -117,7 +119,8 @@
   --md-tertiary-container: #f7d8ff;
   --md-on-tertiary-container: #271330;
   --md-surface: #f8f9ff;
-  /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块 */
+  /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块。
+     与 :root / system 亮色块保持一致 */
   --glass-veil-a: 78%;
   --md-surface-dim: #d8d9e0;
   --md-surface-container-lowest: #ffffff;
@@ -159,7 +162,8 @@
     --md-tertiary-container: #f7d8ff;
     --md-on-tertiary-container: #271330;
     --md-surface: #f8f9ff;
-    /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块 */
+    /* 亮色主题玻璃要更「实」一点，否则压在深色壁纸上会变成深色块。
+       与 :root / [data-theme="light"] 保持一致 */
     --glass-veil-a: 78%;
     --md-surface-dim: #d8d9e0;
     --md-surface-container-lowest: #ffffff;
@@ -370,6 +374,8 @@ a { color: var(--md-primary); text-decoration: none; }
   transition: background 120ms, color 120ms;
 }
 .win-btn md-icon { --md-icon-size: 16px; }
+/* 手绘 SVG 图标（字体子集里没有的字形）按图标尺寸缩放 */
+.win-btn md-icon svg { width: var(--md-icon-size, 16px); height: var(--md-icon-size, 16px); display: block; }
 .win-btn:hover { background: var(--md-surface-container-highest); color: var(--md-on-surface); }
 .win-btn:active { background: var(--md-surface-container-high); }
 .win-close:hover { background: #c42b1c; color: #fff; }

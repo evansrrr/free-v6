@@ -42,3 +42,14 @@ jobs:
       # cargo test stays out on purpose: the test binary carries a
       # requireAdministrator manifest (os error 740 when not elevated).
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+  # 前端没有打包/测试步骤，但有一类 bug 在运行时是完全静默的：
+  # <md-icon> 用了字体子集里没有的名字时，浏览器回退成普通文字，
+  # 再被 16px 的图标框一裁 —— 只剩首字母碎片（blur_on 曾显示成 "R"）。
+  # check-icons.py 扫 index.html + app.js 里所有字体图标名，对不上就让 CI 失败。
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icon subset guard
+        run: python3 scripts/check-icons.py
