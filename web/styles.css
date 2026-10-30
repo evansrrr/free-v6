@@ -1350,21 +1350,26 @@ md-filled-button.danger {
   background: transparent;
 }
 
-/* node-card 保留其边框，仅换半透明背景 */
+/* node-card 保留其边框，仅换半透明背景；给一个零透明的内阴影作为 hover
+   高光的过渡起点，避免 box-shadow 从 none 直接跳到高光而显得突兀 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card {
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
   backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0),
+              inset 0 0 0 1px rgba(255, 255, 255, 0);
 }
 
-/* hover：玻璃已经有底色，不再叠一层填充（会变成不透明蒙版），
-   只把边缘高光提亮一档，并铺一层极淡的顶部光泽 */
+/* hover：玻璃已有底色，不再叠一层填充（会变成不透明蒙版）。
+   改为「状态层微调背景色 + 边缘高光」，两者都走 transition 平滑淡入淡出；
+   原来的 background-image 渐变无法过渡，出现/消失会瞬间跳变，故弃用。 */
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card-stats,
+:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card {
+  transition: background-color 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .card-stats:hover,
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .node-card:hover {
-  background-color: var(--glass-bg);
-  background-image: linear-gradient(180deg,
-    color-mix(in srgb, var(--md-on-surface) 9%, transparent),
-    color-mix(in srgb, var(--md-on-surface) 0%, transparent) 62%);
+  background-color: color-mix(in srgb, var(--md-on-surface) 7%, var(--glass-bg));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .34),
               inset 0 0 0 1px rgba(255, 255, 255, .14);
 }
@@ -1429,13 +1434,8 @@ md-filled-button.danger {
               inset 0 0 0 1px color-mix(in srgb, var(--md-on-surface) 12%, transparent);
   opacity: 1;
 }
-/* 日志按钮在玻璃模式下保持独立玻璃胶囊（与官网 .glass-btn 一致） */
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .bottom-item {
-  background: color-mix(in srgb, var(--md-surface-container) 30%, transparent);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  backdrop-filter: blur(12px) saturate(1.4);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
-}
+/* 日志按钮与其余导航项保持一致：玻璃模式下不再单独套胶囊/蒙版，
+   统一走 .nav-item 的透明底处理，避免出现其他导航按钮没有的突兀蒙版 */
 
 /* 品牌标记：玻璃模式下弱化为玻璃胶囊，避免实色块打断玻璃语言 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .brand-mark {
@@ -1546,7 +1546,6 @@ md-filled-button.danger {
    只能用伪元素叠在 canvas（z-index:-1）之上、内容（z-index:1）之下。
    底色与 CSS 面板共用 --glass-bg，浅色主题下两者才不会一个发白一个裸透。 */
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item::after,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #logsButton::after,
 :root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator::after {
   content: "";
   position: absolute;
