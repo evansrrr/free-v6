@@ -1,0 +1,100 @@
+/* ============================================================
+   FreeV6 万圣节彩蛋样式（随 v0.5.2 发布）
+   仅由 halloween.js 在万圣节当天动态加载，平时不引入、零开销。
+   装饰层不拦截点击；糖果雨与兜底 toast 均为叠加层，不影响业务 UI。
+   ============================================================ */
+
+/* ── 漂浮装饰层：南瓜 / 蝙蝠 / 幽灵，纯氛围、pointer-events:none ── */
+#halloweenLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;          /* 高于内容层(1)、低于 FAB(60) 与对话框(120~140) */
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.h-deco {
+  position: absolute;
+  top: -12%;
+  left: 50%;
+  font-size: var(--size, 24px);
+  line-height: 1;
+  opacity: 0;
+  animation: h-fall var(--dur, 16s) linear var(--delay, 0s) infinite;
+  will-change: transform, opacity;
+}
+
+.h-deco--pumpkin { filter: drop-shadow(0 0 6px rgba(255, 140, 40, 0.28)); }
+.h-deco--bat     { filter: drop-shadow(0 0 4px rgba(168, 120, 255, 0.30)); }
+.h-deco--ghost   { filter: drop-shadow(0 0 6px rgba(210, 220, 255, 0.32)); }
+.h-deco--web     { opacity: 0; }
+
+@keyframes h-fall {
+  0%   { transform: translate(var(--dx, 0vw), 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 0.55; }
+  85%  { opacity: 0.55; }
+  100% { transform: translate(var(--dx, 0vw), 120vh) rotate(360deg); opacity: 0; }
+}
+
+/* ── 品牌标「F 6」万圣节当天变成可点击小南瓜 ── */
+.brand-mark.halloween-mark {
+  width: 40px;
+  height: 40px;
+  background: transparent;                 /* 去掉原容器色块，只留南瓜本体 */
+  color: #ffb35c;
+  font-size: 26px;
+  cursor: pointer;
+  animation: h-bob 2.6s ease-in-out infinite;
+}
+
+@keyframes h-bob {
+  0%, 100% { transform: translateY(0) rotate(-5deg); }
+  50%      { transform: translateY(-4px) rotate(5deg); }
+}
+
+.brand-mark.halloween-mark:hover  { transform: scale(1.18); }
+.brand-mark.halloween-mark:active { transform: scale(0.94); }
+
+/* ── 糖果雨（点击南瓜触发，从点击点四散） ── */
+.h-candy {
+  position: fixed;
+  z-index: 141;          /* 压过对话框(140)，短暂出现即消失 */
+  pointer-events: none;
+  font-size: var(--size, 16px);
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  animation: h-candy-burst 1s ease-out forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes h-candy-burst {
+  0%   { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--tx, 0px)), calc(-50% + var(--ty, 0px)))
+          scale(1.1) rotate(360deg); opacity: 0; }
+}
+
+/* ── 兜底轻提醒（未接入 app.js showToast 时用，正常走原 toast） ── */
+.h-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 16px);
+  z-index: 142;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(22, 22, 30, 0.92);
+  color: #ffe2b0;
+  font: 500 14px/1.4 'Manrope', system-ui, sans-serif;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.h-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ── 尊重系统「减弱动效」设置，关闭全部动画 ── */
+@media (prefers-reduced-motion: reduce) {
+  .h-deco,
+  .brand-mark.halloween-mark,
+  .h-candy { animation: none !important; }
+}
