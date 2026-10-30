@@ -104,7 +104,7 @@
     });
   }
 
-  // 交互入口：糖果雨 + 轻提醒
+  // 交互入口：只下糖果雨，不弹 toast（避免打断用户）
   function treat(ev) {
     var origin = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     if (ev && typeof ev.clientX === 'number') {
@@ -117,7 +117,6 @@
       }
     }
     burst(origin);
-    toast('🎃 万圣节快乐！不给糖就捣蛋～');
   }
 
   // 从指定点四散的糖果雨
