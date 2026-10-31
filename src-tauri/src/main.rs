@@ -248,6 +248,7 @@ extern "system" {
     fn GetMessageW(lpMsg: *mut Win32Msg, hWnd: isize, filterMin: u32, filterMax: u32) -> i32;
     fn PeekMessageW(lpMsg: *mut Win32Msg, hWnd: isize, filterMin: u32, filterMax: u32, remove: u32) -> i32;
     fn PostThreadMessageW(idThread: u32, msg: u32, wParam: usize, lParam: isize) -> i32;
+    fn MessageBoxW(hWnd: isize, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -401,7 +402,14 @@ fn main() {
             // and the webview always share the same value from first boot.
             let api_token = generate_api_token();
             app.manage(ApiToken(api_token.clone()));
-            start_helper(app, &api_token)?;
+            // Spawn 失败（helper 被杀软隔离/删除）→ 弹窗告知用户并退出。
+            // 不能 `?`：那会一路传播成 panic（release panic=abort，用户只
+            // 看到"打不开"）。return Ok(()) 跳过后续热键/托盘初始化。
+            if let Err(err) = start_helper(app, &api_token) {
+                warn_helper_blocked(&format!("启动 freev6-helper 失败: {err}"));
+                app.handle().exit(1);
+                return Ok(());
+            }
             // F6 hotkey must work even when the window never shows (tray-only /
             // 静默启动), so it lives outside the webview: register per the
             // persisted setting before any UI exists.
@@ -502,6 +510,36 @@ fn main() {
         });
 }
 
+// Native message-box flags for warn_helper_blocked. MB_ICONWARNING reads as
+// "something is wrong with your setup" rather than "the app crashed" — the
+// right tone for an AV false-positive, where the user can actually fix it.
+const MB_OK: u32 = 0x0000_0000;
+const MB_ICONWARNING: u32 = 0x0000_0030;
+const MB_SETFOREGROUND: u32 = 0x0001_0000;
+
+// The helper sidecar is either missing (quarantined/deleted by AV) or was
+// killed at runtime (real-time protection removing the file behind us). A
+// silent panic/exit here is exactly the "软件打不开" dead end the user hit;
+// a native dialog explains the fix. Raw MessageBoxW — same no-extra-crate
+// FFI rationale as the hotkey block.
+fn warn_helper_blocked(detail: &str) {
+    let title: Vec<u16> = "FreeV6 组件异常"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let body = format!(
+        "freev6 的核心组件（freev6-helper.exe）无法正常运行，很可能是被杀毒软件误判为病毒并隔离或删除。\n\n\
+        请尝试：\n\
+        1. 打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，恢复被隔离的文件；\n\
+        2. 或将 FreeV6 安装目录加入杀毒软件的排除项，然后重新安装。\n\n\
+        详细信息：{detail}"
+    );
+    let body: Vec<u16> = body.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        MessageBoxW(0, body.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    }
+}
+
 fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::current_exe()?
         .parent()
@@ -528,6 +566,9 @@ fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std
                 CommandEvent::Terminated(status) => {
                     eprintln!("freev6-helper exited: {status:?}");
                     if !stopping.load(Ordering::Acquire) {
+                        // 非主动停止：helper 被外部杀死（最可能是杀软隔离了
+                        // 文件并终止进程）。弹窗提示，而不是静默 exit(1)。
+                        warn_helper_blocked("freev6-helper 进程被异常终止，疑似被杀毒软件隔离。");
                         app_handle.exit(1);
                     }
                     break;
