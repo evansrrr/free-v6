@@ -123,6 +123,11 @@ func TestUpdateDownloadHandlerFlow(t *testing.T) {
 	originalHosts := append([]string(nil), updateAllowedHosts...)
 	updateAllowedHosts = append(updateAllowedHosts, "127.0.0.1")
 	t.Cleanup(func() { updateAllowedHosts = originalHosts })
+	// Keep the download hermetic: the handler writes to updateSetupDest() by
+	// default (the real per-user cache dir), which tests must not touch.
+	originalDest := updateSetupDest
+	updateSetupDest = func() string { return filepath.Join(t.TempDir(), "setup.exe") }
+	t.Cleanup(func() { updateSetupDest = originalDest })
 
 	body, _ := json.Marshal(updateDownloadRequest{URL: server.URL + "/setup.exe", SHA256: sha256Hex(payload)})
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body))

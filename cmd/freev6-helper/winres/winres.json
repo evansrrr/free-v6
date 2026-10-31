@@ -1,0 +1,61 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "icon128.png",
+        "icon32.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "FreeV6.Helper",
+          "version": "0.5.2.0"
+        },
+        "description": "FreeV6 Helper",
+        "minimum-os": "win10",
+        "execution-level": "as invoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "system",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": true,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "0.5.2.0",
+          "product_version": "0.5.2.0"
+        },
+        "info": {
+          "0409": {
+            "Comments": "FreeV6 desktop helper service",
+            "CompanyName": "FreeV6 Project",
+            "FileDescription": "FreeV6 Helper",
+            "FileVersion": "0.5.2.0",
+            "InternalName": "freev6-helper",
+            "LegalCopyright": "Copyright (c) 2026 freev6 contributors",
+            "LegalTrademarks": "",
+            "OriginalFilename": "freev6-helper.exe",
+            "PrivateBuild": "",
+            "ProductName": "FreeV6",
+            "ProductVersion": "0.5.2.0",
+            "SpecialBuild": ""
+          }
+        }
+      }
+    }
+  }
+}

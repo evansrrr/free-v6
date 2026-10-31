@@ -85,6 +85,15 @@ jobs:
             Write-Host "tauri-cli $want already available"
           }
 
+      - name: Embed Windows version resources (go-winres)
+        shell: pwsh
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          $v = (('${{ github.ref_name }}' -replace '^v', '') -split '-')[0]
+          $ver4 = "$v.0"
+          Set-Location cmd/freev6-helper
+          go-winres make --in winres/winres.json --arch amd64 --product-version $ver4 --file-version $ver4
+
       - name: Build setup.exe (cargo tauri build)
         run: cargo tauri build
 

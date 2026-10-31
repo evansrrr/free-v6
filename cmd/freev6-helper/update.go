@@ -104,6 +104,19 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// updateSetupDest returns where the NSIS update package is downloaded to.
+// It deliberately avoids %TEMP%: dropping an .exe into the temp folder and
+// then executing it is the single strongest "dropper" heuristic AV engines
+// (including Defender's !ml models) key on. A per-user cache dir reads as
+// routine application behaviour instead. Falls back to temp only if the OS
+// refuses to report a cache dir. A var so tests can point it at t.TempDir().
+var updateSetupDest = func() string {
+	if dir, err := os.UserCacheDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "FreeV6", "freev6-update-setup.exe")
+	}
+	return filepath.Join(os.TempDir(), "freev6-update-setup.exe")
+}
+
 // validateUpdateURL enforces https (loopback http for tests) and the host
 // allowlist before any request is made.
 func validateUpdateURL(rawURL string, allowed []string) error {
@@ -243,7 +256,7 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	dest := filepath.Join(os.TempDir(), "freev6-update-setup.exe")
+	dest := updateSetupDest()
 
 	updateRun.mu.Lock()
 	if updateRun.busy {
