@@ -26,4 +26,4 @@ skills-lock.json
 .DS_Store
 Thumbs.db
 desktop.ini
-test/
+/test/
