@@ -53,6 +53,11 @@ const state = {
   // 重建 state.chain 时不能把它冲掉
   chainImporting: false,
   activeProxyTab: 'access',
+  // 校园配置（设置 → 核心）：/cloud-config 权威状态。enabled+count>0 时出口
+  // 由校园节点直接负责，不再需要 WARP 接入凭据。
+  cloud: { enabled: false, count: 0, names: [], portalHost: '', entryMasked: '', updatedAt: '', error: '' },
+  // 拉取进行中（校园网内一次往返，通常 <2s；校外会等超时）
+  cloudBusy: false,
 
   // Runtime
   runtimePresent: false,
@@ -555,8 +560,8 @@ async function runAutoStart() {
   if (!state.helperOnline) { autoRunRetry('helper 未连接'); return; }
   if (!navigator.onLine) { autoRunRetry('等待网络恢复', true); return; }
   // /proxy/start 依赖 state/warp.json：凭据注册失败（多因网络未就绪）时按重试兜底，
-  // 但只自动补注册有限次，避免反复打 Cloudflare
-  if (!state.warpRegistered) {
+  // 但只自动补注册有限次，避免反复打 Cloudflare。校园配置可用时不吃这条依赖。
+  if (!state.warpRegistered && !cloudReady()) {
     if (!state.warpRegistering && autoRun.regTries < AUTO_RUN_MAX_REG_TRIES) {
       autoRun.regTries += 1;
       registerWarp(true); // 不阻塞等待，成败交给下一轮
@@ -1107,7 +1112,7 @@ function persistSettings() {
   };
   if (!state.helperOnline) return fail('helper 未连接，设置未保存');
   settingsWriteGen += 1;
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, chainEnabled: state.chain.enabled }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, chainEnabled: state.chain.enabled, cloudEnabled: state.cloud.enabled }) })
     .then(() => { settingsWriteGen += 1; addLog('设置已保存'); return true; })
     .catch((e) => { settingsWriteGen += 1; return fail(`保存设置失败: ${e.message}`); });
 }
@@ -1705,7 +1710,9 @@ async function registerWarp(isAuto) {
 // 第一次使用且 helper 报告未注册 WARP → 自动注册一次。每次启动最多尝试一次，
 // 失败交给「注册」按钮或下次启动，避免轮询反复请求 Cloudflare。
 function maybeAutoRegisterWarp() {
-  if (state.warpRegistered || state.warpAutoTried) return;
+  // 校园配置可用时不需要 WARP 凭据：别多打一次 Cloudflare，也别让学生
+  // 看到"正在自动注册接入凭据"这种与当前出口无关的日志。
+  if (state.warpRegistered || state.warpAutoTried || cloudReady()) return;
   state.warpAutoTried = true;
   addLog('未注册接入凭据，正在自动注册…');
   registerWarp(true);
@@ -1743,6 +1750,7 @@ async function refreshBackendState() {
     } catch (_) { /* ignore */ }
     // 链式代理状态：拿不到不影响主流程（helper 刚回过 /status，这里基本必成）
     await refreshChainStatus();
+    await refreshCloudStatus();
     if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
 
     updateConnectionChip(true);
@@ -2625,6 +2633,106 @@ async function clearChain() {
   }
 }
 
+/* ── 校园配置（设置 → 核心） ─────────────────────────────────────
+ * 授权判据在服务端（请求源 IP 段），客户端只负责"问"：拿不到就明确说
+ * "请连校园网"，绝不降级成裸 WARP 出口。详见 docs/cloud-profile.md。 */
+
+// 校园配置可用 = 已启用且本地有节点：此时 WARP 凭据不再必需。
+function cloudReady() {
+  return state.cloud.enabled && state.cloud.count > 0;
+}
+
+async function refreshCloudStatus() {
+  try {
+    const cloud = await api('/cloud-config');
+    state.cloud = {
+      enabled: Boolean(cloud.enabled),
+      count: cloud.count || 0,
+      names: cloud.names || [],
+      portalHost: cloud.portalHost || '',
+      entryMasked: cloud.entryMasked || '',
+      updatedAt: cloud.updatedAt || '',
+      error: cloud.error || '',
+    };
+  } catch (_) { /* helper offline: keep previous */ }
+  updateCloudUI();
+}
+
+function updateCloudUI() {
+  const sw = $('#cloudEnabledSwitch');
+  if (sw) sw.selected = state.cloud.enabled;
+  const input = $('#cloudPortalInput');
+  if (input) {
+    // 有了门户地址就回填，刷新不用重输；用户正在输入时不抢。
+    if (!input.value && state.cloud.portalHost) input.value = state.cloud.portalHost;
+    input.disabled = state.cloudBusy;
+  }
+  const fetchBtn = $('#cloudFetch');
+  if (fetchBtn) {
+    fetchBtn.disabled = state.cloudBusy;
+    fetchBtn.textContent = state.cloudBusy ? '获取中…' : (state.cloud.count > 0 ? '刷新' : '获取');
+  }
+  const clearBtn = $('#cloudClear');
+  if (clearBtn) {
+    clearBtn.hidden = state.cloud.count === 0;
+    clearBtn.disabled = state.cloudBusy;
+  }
+  const line = $('#cloudStatusLine');
+  if (line) {
+    if (state.cloud.error) {
+      line.textContent = `内容异常: ${state.cloud.error}`;
+    } else if (state.cloud.count === 0) {
+      line.textContent = '尚未获取';
+    } else {
+      const parts = [`${state.cloud.count} 个节点`, state.cloud.entryMasked || '入口已保存'];
+      if (state.cloud.updatedAt) parts.push(new Date(state.cloud.updatedAt).toLocaleString());
+      // 云端 tun/rules 等骨架字段按设计不生效，属于实现细节，不向用户回报。
+      line.textContent = parts.join(' · ');
+    }
+  }
+}
+
+async function submitCloudProfile() {
+  if (state.cloudBusy) return;
+  const portalHost = $('#cloudPortalInput')?.value?.trim() || state.cloud.portalHost;
+  if (!portalHost) {
+    showToast('请先填写校园网登录页 IP', 'error');
+    return;
+  }
+  state.cloudBusy = true;
+  updateCloudUI();
+  try {
+    const result = await api('/cloud-config', { method: 'PUT', body: JSON.stringify({ portalHost }) });
+    addLog(`校园配置获取成功：${result.count} 个节点`);
+    showToast(`已获取 ${result.count} 个校园节点`);
+    await refreshCloudStatus();
+    fetchProxies();
+  } catch (e) {
+    // campus-only 是学生最常撞到的分支，必须直白，否则只会看到"获取失败"
+    const message = e.code === 'campus-only'
+      ? '仅限校园网内获取，请连接校园网后重试'
+      : `获取校园配置失败: ${e.message}`;
+    addLog(message, true);
+    showToast(message, 'error');
+  } finally {
+    state.cloudBusy = false;
+    updateCloudUI();
+  }
+}
+
+async function clearCloud() {
+  try {
+    await api('/cloud-config', { method: 'DELETE' });
+    addLog('校园配置已清除');
+    showToast('校园配置已清除');
+    await refreshCloudStatus();
+    clearProxyList();
+    fetchProxies();
+  } catch (e) {
+    addLog(`清除校园配置失败: ${e.message}`, true);
+  }
+}
+
 function wireSettingsEvents() {
   // Theme select（切换走色彩渐变过渡）
   $('#themeSelect')?.addEventListener('change', (e) => {
@@ -2685,6 +2793,29 @@ function wireSettingsEvents() {
   };
   wireSubPage('#cidrSettingItem', '#cidrPage', '#cidrBack');
   wireSubPage('#chainSettingItem', '#chainPage', '#chainBack');
+  wireSubPage('#cloudSettingItem', '#cloudPage', '#cloudBack');
+
+  // 校园配置子页：获取/刷新、清除、开关
+  $('#cloudFetch')?.addEventListener('click', submitCloudProfile);
+  $('#cloudPortalInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCloudProfile(); });
+  $('#cloudClear')?.addEventListener('click', clearCloud);
+  $('#cloudEnabledSwitch')?.addEventListener('change', (e) => {
+    const next = Boolean(e.target.selected);
+    if (next && state.cloud.count === 0) {
+      e.target.selected = false; // 程序化复位会再次触发 change，下面的 guard 拦住
+      addLog('尚未获取校园配置，无法开启', true);
+      return;
+    }
+    if (next === state.cloud.enabled) return;
+    if (next && state.chain.enabled) {
+      e.target.selected = false; // 复位开关，否则界面显示"已开"但状态没变
+      addLog('链式代理已启用，请先关闭链式代理再启用校园配置', true);
+      showToast('请先关闭链式代理', 'error');
+      return;
+    }
+    state.cloud.enabled = next;
+    persistSettings(); // 主 PUT 携带 cloudEnabled 当前值
+  });
 
   // Add whitelist entries
   $('#addCidr')?.addEventListener('click', addCidr);
@@ -2701,6 +2832,13 @@ function wireSettingsEvents() {
     if (next && state.chain.count === 0) {
       e.target.selected = false; // 程序化复位会再次触发 change，下面的 guard 拦住
       addLog('尚未导入链式代理内容，无法开启', true);
+      return;
+    }
+    // 两者改的是同一个出口，同时开会变成"到底走的哪条"不可解释
+    if (next && cloudReady()) {
+      e.target.selected = false;
+      addLog('校园配置已启用，请先关闭校园配置再启用链式代理', true);
+      showToast('请先关闭校园配置', 'error');
       return;
     }
     if (next === state.chain.enabled) return;

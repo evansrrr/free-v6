@@ -411,6 +411,16 @@
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
             <md-divider></md-divider>
+            <div class="setting-item clickable" id="cloudSettingItem">
+              <div class="setting-icon">
+                <md-icon>school</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">校园配置</div>
+              </div>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
+            </div>
+            <md-divider></md-divider>
             <div class="setting-item">
               <div class="setting-icon">
                 <md-icon>memory</md-icon>
@@ -557,6 +567,38 @@
               <div class="setting-desc" id="chainStatusLine">尚未导入</div>
             </div>
             <md-filled-button id="chainClear" hidden>清除</md-filled-button>
+          </div>
+        </div>
+
+        <div class="cidr-page" id="cloudPage" style="display:none">
+          <div class="cidr-page-header">
+            <md-icon-button id="cloudBack" aria-label="返回">
+              <md-icon>arrow_back</md-icon>
+            </md-icon-button>
+            <h2>校园配置</h2>
+          </div>
+          <p class="cidr-hint">由学校服务端下发的节点，仅校园网内可以获取。填入校园网登录页地址后由软件自行拼接入口</p>
+          <div class="cidr-input-row">
+            <md-outlined-text-field id="cloudPortalInput" label="校园网登录页 IP" autocomplete="off"></md-outlined-text-field>
+            <md-filled-button id="cloudFetch">获取</md-filled-button>
+          </div>
+          <div class="setting-item">
+            <div class="setting-icon">
+              <md-icon>toggle_on</md-icon>
+            </div>
+            <div class="setting-text">
+              <div class="setting-label">启用校园配置</div>
+              <div class="setting-desc">启用后由校园节点直接出网，无需注册接入凭据</div>
+            </div>
+            <button class="glass-switch" id="cloudEnabledSwitch" role="switch" aria-checked="false" aria-label="启用校园配置"><span class="gs-handle"></span></button>
+          </div>
+          <md-divider></md-divider>
+          <div class="setting-item">
+            <div class="setting-text">
+              <div class="setting-label">当前状态</div>
+              <div class="setting-desc" id="cloudStatusLine">尚未获取</div>
+            </div>
+            <md-filled-button id="cloudClear" hidden>清除</md-filled-button>
           </div>
         </div>
       </section>
