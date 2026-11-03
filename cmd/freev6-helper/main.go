@@ -57,6 +57,15 @@ type settings struct {
 	ChainEnabled    bool   `json:"chainEnabled"`
 	ChainSourceType string `json:"chainSourceType"`
 	ChainSourceURL  string `json:"chainSourceUrl"`
+	// 校园配置（设置 → 核心）：来源与更新时间由 /api/v1/cloud-config 端点
+	// 维护，开关由 GUI 主 PUT 携带。与链式代理同理「省略即保留」，否则
+	// 一次普通保存就会把学生刚取到的配置悄悄关掉、退回裸 WARP 出口。
+	CloudEnabled   bool   `json:"cloudEnabled"`
+	CloudSourceURL string `json:"cloudSourceUrl"`
+	CloudUpdatedAt string `json:"cloudUpdatedAt"`
+	// PortalHost 是校园网登录页地址（学生只输一次，之后用来派生入口）。
+	// 存的是归一化后的裸 host，不是派生的完整入口。
+	PortalHost string `json:"portalHost"`
 }
 
 type proxyRequest struct {
@@ -112,6 +121,7 @@ func main() {
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
 	mux.HandleFunc("/api/v1/notice", h.notice)
 	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
+	mux.HandleFunc("/api/v1/cloud-config", h.cloudConfig)
 	// Per-launch bearer token minted by the desktop shell: without it the
 	// helper must not serve an unauthenticated loopback API (any browser
 	// page could drive proxy start/stop and settings otherwise).
@@ -306,8 +316,12 @@ func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	// 清除已导入的链式代理（文件不存在不算错误）
+	// 清除已导入的链式代理与校园配置（文件不存在不算错误）
 	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.Remove(h.cloudProfilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -399,6 +413,20 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if !jsonKeyPresent(body, "chainSourceUrl") {
 			current.ChainSourceURL = persisted.ChainSourceURL
 		}
+		// 校园配置同理：sourceUrl/updatedAt 只由 cloud-config 端点维护，
+		// cloudEnabled 由主 PUT 携带；三者省略即保留。
+		if !jsonKeyPresent(body, "cloudEnabled") {
+			current.CloudEnabled = persisted.CloudEnabled
+		}
+		if !jsonKeyPresent(body, "cloudSourceUrl") {
+			current.CloudSourceURL = persisted.CloudSourceURL
+		}
+		if !jsonKeyPresent(body, "cloudUpdatedAt") {
+			current.CloudUpdatedAt = persisted.CloudUpdatedAt
+		}
+		if !jsonKeyPresent(body, "portalHost") {
+			current.PortalHost = persisted.PortalHost
+		}
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
 			if err := mihomo.ValidateDomain(entry); err != nil {
@@ -478,6 +506,30 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 		chainProxies = parsed
 	}
+	// 校园配置：节点即出口，启用时不套 WARP、也就不需要 WARP 凭据。与链式
+	// 代理互斥——两者改的是同一个出口，同时开会变成"到底走的哪条"不可解释。
+	var cloudNodes []mihomo.ChainProxy
+	if storedForChain.CloudEnabled {
+		if storedForChain.ChainEnabled {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置与链式代理不能同时启用，请在设置中关闭其中一个"})
+			return
+		}
+		cloudData, readErr := os.ReadFile(h.cloudProfilePath())
+		if readErr != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置已启用但本地内容缺失，请在设置中重新获取"})
+			return
+		}
+		profile, parseErr := mihomo.ParseCloudProfile(cloudData)
+		if parseErr != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "解析校园配置失败: " + parseErr.Error()})
+			return
+		}
+		if len(profile.Nodes) == 0 {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置里没有可用节点，请重新获取"})
+			return
+		}
+		cloudNodes = profile.Nodes
+	}
 	if err := mihomo.CheckListenPorts(); err != nil {
 		// code 供前端精准提示（toast），error 文本保留给日志排障。
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error() + "; please close other proxy/DNS software first", "code": "port-conflict"})
@@ -496,11 +548,17 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	device, err := readDevice(filepath.Join(h.root, "state", "warp.json"))
-	if err != nil {
-		// code 供前端弹「重试注册」引导（凭据缺失/损坏时重新注册即可覆盖重建）
-	writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", err), "code": "warp-missing"})
-		return
+	// 校园模式下凭据完全用不上（网关由云端节点自带），此时不能因为没注册
+	// WARP 就拦人启动——那会让"导入配置即用"的学生永远启不了免流。
+	var device warp.Device
+	if len(cloudNodes) == 0 {
+		storedDevice, readErr := readDevice(filepath.Join(h.root, "state", "warp.json"))
+		if readErr != nil {
+			// code 供前端弹「重试注册」引导（凭据缺失/损坏时重新注册即可覆盖重建）
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("read WARP state: %v", readErr), "code": "warp-missing"})
+			return
+		}
+		device = storedDevice
 	}
 	// Default blacklist is compiled into the binary (blacklist.txt embedded
 	// at build time); a non-empty settings.json blacklist overrides it.
@@ -528,6 +586,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		DevMode:          input.DevMode,
 		ControllerSecret: controllerSecret,
 		ChainProxies:     chainProxies,
+		CloudNodes:       cloudNodes,
 	})
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -562,7 +621,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// 链式启用时用真实 -t 校验合并产物：未知 type/非法字段等只有 mihomo 能
 	// 发现的问题，必须在残留自愈与网络快照（接下来的副作用）之前暴露。
-	if len(chainProxies) > 0 {
+	if len(chainProxies) > 0 || len(cloudNodes) > 0 {
 		chainBinary, discoverErr := mihomo.DiscoverBinary(h.root)
 		if discoverErr != nil {
 			writeJSON(writer, http.StatusNotFound, map[string]string{"error": discoverErr.Error()})
