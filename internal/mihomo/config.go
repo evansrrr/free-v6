@@ -63,6 +63,10 @@ type RenderOptions struct {
 	// dialed through the selected MASQUE node and targeted by MATCH.
 	// Empty keeps the rendered config byte-identical to non-chain builds.
 	ChainProxies []ChainProxy
+	// CloudNodes: 校园配置下发的出口节点。非空时不再渲染内置 28 个 WARP
+	// 接入点，也不再要求 warp.Device（校园节点本身就是出口），分组全部由
+	// 这些节点构成；规则、TUN、DNS、端口等骨架仍按本地生成。
+	CloudNodes []ChainProxy
 }
 
 const configHeader = `# Cloudflare WARP over MASQUE - mihomo config
@@ -155,9 +159,14 @@ func Render(w warp.Device) (string, error) {
 }
 
 func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
-	for name, value := range map[string]string{"private key": w.PrivateKey, "peer public key": w.PeerPublicKey, "IPv4": w.IPv4, "IPv6": w.IPv6} {
-		if strings.TrimSpace(value) == "" {
-			return "", fmt.Errorf("missing %s", name)
+	cloud := len(options.CloudNodes) > 0
+	// 校园模式下设备凭据完全用不上：网关由云端节点自己带，本地不需要
+	// WARP 注册结果。空 Device 在校验阶段必须放行，否则学生永远启不了。
+	if !cloud {
+		for name, value := range map[string]string{"private key": w.PrivateKey, "peer public key": w.PeerPublicKey, "IPv4": w.IPv4, "IPv6": w.IPv6} {
+			if strings.TrimSpace(value) == "" {
+				return "", fmt.Errorf("missing %s", name)
+			}
 		}
 	}
 	if options.Mode == "" {
@@ -187,15 +196,24 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	// 按名识别 FreeV6 的虚拟网卡，不依赖 mihomo 默认名。
 	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  device: FreeV6TUN\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
 	var names []string
-	for _, endpoint := range endpoints {
-		name := endpointName(endpoint.Server, endpoint.Port)
-		names = append(names, name)
-		fmt.Fprintf(&b, "  - name: %s\n    type: masque\n    server: \"%s\"\n    port: %d\n    private-key: %s\n    public-key: %s\n    ip: %s\n    ipv6: %s\n    mtu: 1280\n    udp: true\n    remote-dns-resolve: true\n    dns: [1.1.1.1, 2606:4700:4700::1111]\n", name, endpoint.Server, endpoint.Port, w.PrivateKey, w.PeerPublicKey, w.IPv4, w.IPv6)
-	}
-	// 链式代理：自带 dialer-proxy 的重发射块追加进同一 proxies 列表
-	// （缩进对齐既有 2 空格项，混缩进是 YAML 解析错误）
-	for _, chain := range options.ChainProxies {
-		writeChainProxyBlock(&b, chain.YAML)
+	if cloud {
+		// 校园模式：云端节点即出口，不渲染内置接入点，也不叠链式代理
+		// （两种模式改的是同一个出口，叠加只会让"到底走的哪条"不可解释）。
+		for _, node := range options.CloudNodes {
+			names = append(names, node.Name)
+			writeChainProxyBlock(&b, node.YAML)
+		}
+	} else {
+		for _, endpoint := range endpoints {
+			name := endpointName(endpoint.Server, endpoint.Port)
+			names = append(names, name)
+			fmt.Fprintf(&b, "  - name: %s\n    type: masque\n    server: \"%s\"\n    port: %d\n    private-key: %s\n    public-key: %s\n    ip: %s\n    ipv6: %s\n    mtu: 1280\n    udp: true\n    remote-dns-resolve: true\n    dns: [1.1.1.1, 2606:4700:4700::1111]\n", name, endpoint.Server, endpoint.Port, w.PrivateKey, w.PeerPublicKey, w.IPv4, w.IPv6)
+		}
+		// 链式代理：自带 dialer-proxy 的重发射块追加进同一 proxies 列表
+		// （缩进对齐既有 2 空格项，混缩进是 YAML 解析错误）
+		for _, chain := range options.ChainProxies {
+			writeChainProxyBlock(&b, chain.YAML)
+		}
 	}
 
 	b.WriteString("\nproxy-groups:\n")

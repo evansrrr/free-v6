@@ -40,14 +40,21 @@ func ParseChainProxies(content []byte) ([]ChainProxy, error) {
 	if len(document.Proxies) == 0 {
 		return nil, fmt.Errorf("yaml 中没有 proxies 列表（需要 Clash/mihomo 格式的订阅或配置）")
 	}
-	reserved := reservedChainNames()
-	seen := make(map[string]bool, len(document.Proxies))
-	result := make([]ChainProxy, 0, len(document.Proxies))
-	// direct 类型 = 把流量原样从本机真实网卡送出去：混进链式分组后
-	// “看起来在链上、实际真实 IP 直通”，是明确的泄露向量，直接拒绝。
+	return normalizeProxyEntries(document.Proxies, reservedChainNames(), chainDialer)
+}
+
+// normalizeProxyEntries 是链式代理与校园配置共用的节点校验/重发射逻辑。
+// dialer 非空时无条件写入 dialer-proxy（链式语义：所有导入节点都必须挂在
+// MASQUE 接入点后面）；为空时剥掉配置自带的 dialer-proxy（校园配置：节点
+// 就是出口本身，指向未知名字会让 mihomo 启动失败）。
+func normalizeProxyEntries(entries []map[string]any, reserved map[string]bool, dialer string) ([]ChainProxy, error) {
+	seen := make(map[string]bool, len(entries))
+	result := make([]ChainProxy, 0, len(entries))
+	// direct 类型 = 把流量原样从本机真实网卡送出去：混进分组后
+	// “看起来在代理上、实际真实 IP 直通”，是明确的泄露向量，直接拒绝。
 	// dns 类型与代理无关，同样拒绝。
 	forbiddenTypes := map[string]bool{"direct": true, "dns": true}
-	for index, entry := range document.Proxies {
+	for index, entry := range entries {
 		name, _ := entry["name"].(string)
 		name = strings.TrimSpace(name)
 		kind, _ := entry["type"].(string)
@@ -55,8 +62,11 @@ func ParseChainProxies(content []byte) ([]ChainProxy, error) {
 		if name == "" || kind == "" {
 			return nil, fmt.Errorf("第 %d 个代理缺少 name 或 type 字段", index+1)
 		}
+		if len(name) > cloudMaxNameLen {
+			return nil, fmt.Errorf("第 %d 个代理名称过长（上限 %d 字符）", index+1, cloudMaxNameLen)
+		}
 		if forbiddenTypes[kind] {
-			return nil, fmt.Errorf("第 %d 个代理类型 %q 不允许导入（%s 类型会绕过接入点直连，泄露真实出口 IP）", index+1, kind, kind)
+			return nil, fmt.Errorf("第 %d 个代理类型 %q 不允许导入（%s 类型会让流量直连真实出口 IP）", index+1, kind, kind)
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("代理名称重复: %q", name)
@@ -65,9 +75,13 @@ func ParseChainProxies(content []byte) ([]ChainProxy, error) {
 			return nil, fmt.Errorf("代理名称与内置分组/接入点冲突: %q", name)
 		}
 		seen[name] = true
-		// Overwrite unconditionally: the contract is local→masque→own proxy,
-		// and a user-set dialer would silently leave the免流 path.
-		entry["dialer-proxy"] = chainDialer
+		if dialer != "" {
+			// Overwrite unconditionally: the contract is local→masque→own proxy,
+			// and a user-set dialer would silently leave the免流 path.
+			entry["dialer-proxy"] = dialer
+		} else {
+			delete(entry, "dialer-proxy")
+		}
 		block, err := yaml.Marshal([]map[string]any{entry})
 		if err != nil {
 			return nil, fmt.Errorf("重新发射代理 %q 失败: %w", name, err)
