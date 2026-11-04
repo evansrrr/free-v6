@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -129,7 +132,8 @@ func TestFetchCloudProfileMapsGateToCampusOnly(t *testing.T) {
 		writer.WriteHeader(http.StatusForbidden)
 	}))
 	defer server.Close()
-	_, err := fetchCloudProfile(server.URL)
+	h := &helper{root: t.TempDir()}
+	_, err := h.fetchCloudProfile(server.URL)
 	if err == nil {
 		t.Fatal("expected gate error")
 	}
@@ -146,7 +150,8 @@ func TestFetchCloudProfileReadsBody(t *testing.T) {
 		_, _ = writer.Write([]byte(cloudTestYAML))
 	}))
 	defer server.Close()
-	data, err := fetchCloudProfile(server.URL)
+	h := &helper{root: t.TempDir()}
+	data, err := h.fetchCloudProfile(server.URL)
 	if err != nil {
 		t.Fatalf("fetchCloudProfile: %v", err)
 	}
@@ -247,5 +252,47 @@ func TestStartProxyBlockedWhenCloudLocked(t *testing.T) {
 	unlocked := runStart()
 	if strings.Contains(unlocked.Body.String(), "cloud-locked") {
 		t.Fatalf("unlocked start still locked: %s", unlocked.Body.String())
+	}
+}
+
+// 失败分类与"是否值得重试"是弹窗文案与重试策略的唯一依据，单测锁住。
+func TestFetchFailureClassification(t *testing.T) {
+	refused := errors.New("dial tcp 1.2.3.4:443: connect: connection refused")
+	reset := errors.New("read tcp 1.2.3.4:443: connection reset by peer")
+	dns := &net.DNSError{Err: "no such host", Name: "x.freev6.cc.cd"}
+
+	cases := []struct {
+		name   string
+		err    error
+		reason string
+		retry  bool
+	}{
+		{"deadline", context.DeadlineExceeded, "请求超时，请稍后重试", true},
+		{"dns", dns, "域名解析失败，请检查网络或 DNS", false},
+		{"refused", refused, "连接被拒绝", false},
+		{"reset", reset, "网络请求失败，请稍后重试", true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := describeFetchFailure(testCase.err); got != testCase.reason {
+				t.Fatalf("reason = %q, want %q", got, testCase.reason)
+			}
+			if got := isRetryableFetch(testCase.err); got != testCase.retry {
+				t.Fatalf("retryable = %v, want %v", got, testCase.retry)
+			}
+		})
+	}
+}
+
+// 失败日志落 state/cloud-config.log：弹窗不给地址，排障要能查。
+func TestLogCloudFetchWritesFile(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	h.logCloudFetch("do: dial failed")
+	data, err := os.ReadFile(filepath.Join(h.root, "state", "cloud-config.log"))
+	if err != nil {
+		t.Fatalf("log file missing: %v", err)
+	}
+	if !strings.Contains(string(data), "do: dial failed") {
+		t.Fatalf("log content = %q", string(data))
 	}
 }

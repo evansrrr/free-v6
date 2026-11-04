@@ -192,7 +192,7 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		}
 		// 先拉取后落盘：失败的刷新绝不能覆盖上一份可用快照（服务端维护
 		// 中/网络抖动时，已缓存配置仍要能启动）。
-		fetched, fetchErr := fetchCloudProfile(parsed.String())
+		fetched, fetchErr := h.fetchCloudProfile(parsed.String())
 		if fetchErr != nil {
 			writeJSON(writer, http.StatusBadGateway, map[string]string{"error": fetchErr.Error(), "code": cloudErrorCode(fetchErr)})
 			return
@@ -289,24 +289,63 @@ func cloudErrorCode(err error) string {
 	return "fetch-failed"
 }
 
-// fetchCloudProfile downloads the backup profile. Only plain http(s) reaches
-// here; the response is size-capped like a file import.
+// cloudHTTPClient 是取备用配置专用客户端，和 DefaultClient 相比有三处刻意不同：
+//
+//  1. Proxy: nil —— 强制直连。用户机器上往往有系统代理（本机的 clash/mihomo），
+//     DefaultClient 会继承它：请求绕回代理链甚至走 WARP，源 IP 不再是校园网，
+//     结果要么 403，要么卡到超时。取配置必须是"本机 → 服务端"这一跳。
+//  2. ForceAttemptHTTP2: false —— 部分校园网 v6 链路存在 PMTU 黑洞，h2 握手
+//     会一直挂着；降到 HTTP/1.1 能过去。
+//  3. 明确的分段超时 —— 握手/响应头各自限时，失败能早点变成可读错误。
+var cloudHTTPClient = &http.Client{
+	Timeout: cloudFetchTimeout,
+	Transport: &http.Transport{
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     false,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	},
+}
+
+// fetchCloudProfile 取备用配置。超时/不可达会立刻重试一次：校园网 v6 链路
+// 抖一下很常见，让学生为此再点一遍「刷新」没必要。
 //
 // 错误文案一律不带入口地址：这些字符串会原样出现在 toast / 弹窗里，而
-// 弹窗是"会被截图发群里"的东西。完整 err（含 URL）只写 stderr 留作排障。
-func fetchCloudProfile(rawURL string) ([]byte, error) {
+// 弹窗是"会被截图发群里"的东西。完整 err（含 URL）只写本地日志。
+func (h *helper) fetchCloudProfile(rawURL string) ([]byte, error) {
+	data, err := h.cloudAttempt(rawURL)
+	if err != nil {
+		var fetchErr *cloudFetchError
+		if errors.As(err, &fetchErr) && fetchErr.retryable {
+			h.logCloudFetch("retry once after: " + fetchErr.reason)
+			data, err = h.cloudAttempt(rawURL)
+		}
+	}
+	if err != nil {
+		h.logCloudFetch("failed: " + err.Error())
+		return nil, err
+	}
+	return data, nil
+}
+
+func (h *helper) cloudAttempt(rawURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cloudFetchTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cloud-config: bad request: %v\n", err)
+		h.logCloudFetch("bad request: " + err.Error())
 		return nil, &cloudFetchError{reason: "入口地址无效"}
 	}
 	request.Header.Set("User-Agent", "FreeV6")
-	response, err := http.DefaultClient.Do(request)
+	response, err := cloudHTTPClient.Do(request)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cloud-config: fetch failed: %v\n", err)
-		return nil, &cloudFetchError{reason: describeFetchFailure(err)}
+		// 完整错误（含投递到的地址、对端 IP）只落本地日志，不进弹窗。
+		h.logCloudFetch("do: " + err.Error())
+		return nil, &cloudFetchError{reason: describeFetchFailure(err), retryable: isRetryableFetch(err)}
 	}
 	defer response.Body.Close()
 	switch {
@@ -317,8 +356,8 @@ func fetchCloudProfile(rawURL string) ([]byte, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxCloudProfileBytes+1))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cloud-config: read body failed: %v\n", err)
-		return nil, &cloudFetchError{reason: "响应读取中断"}
+		h.logCloudFetch("read body: " + err.Error())
+		return nil, &cloudFetchError{reason: "响应读取中断", retryable: true}
 	}
 	if len(data) > maxCloudProfileBytes {
 		return nil, fmt.Errorf("备用配置超过 2MB 上限")
@@ -326,8 +365,48 @@ func fetchCloudProfile(rawURL string) ([]byte, error) {
 	return data, nil
 }
 
+// logCloudFetch 把一次失败写进 state/cloud-config.log（单文件、超 64KiB 重来）。
+// 弹窗里不给地址，但排障时必须能看到"到底连的是谁、报了什么"。
+func (h *helper) logCloudFetch(message string) {
+	path := filepath.Join(h.root, "state", "cloud-config.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > 64<<10 {
+		_ = os.Remove(path)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	fmt.Fprintf(file, "%s %s\n", time.Now().Format(time.RFC3339), message)
+}
+
+// isRetryableFetch 判定"再试一次有意义"：超时、连接被重置、网络不可达。
+// 证书错误、DNS 不存在这类重试也不会变，直接放弃以免白等两个 20 秒。
+func isRetryableFetch(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{"connection reset", "unexpected eof", "network is unreachable", "no route to host", "broken pipe"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // cloudFetchError 是"网络层失败"的脱敏错误：只给原因类别，不给地址。
-type cloudFetchError struct{ reason string }
+type cloudFetchError struct {
+	reason    string
+	retryable bool
+}
 
 func (e *cloudFetchError) Error() string {
 	return "获取备用配置失败：" + e.reason
