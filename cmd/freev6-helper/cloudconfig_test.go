@@ -215,7 +215,7 @@ func TestCloudImportBlockedWhenNoticeSaysFalse(t *testing.T) {
 	}
 }
 
-// 已启用校园配置但公告关闭时，启动必须被拦在端口/权限检查之前。
+// 已启用备用配置但公告关闭时，启动必须被拦在端口/权限检查之前。
 func TestStartProxyBlockedWhenCloudLocked(t *testing.T) {
 	h := &helper{root: t.TempDir()}
 	stored := defaultSettings()

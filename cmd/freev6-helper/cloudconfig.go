@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,7 +18,7 @@ import (
 	"github.com/yourname/freev6/internal/mihomo"
 )
 
-// 校园配置（cloud profile）：校内服务端下发的出口节点。
+// 备用配置（cloud profile）：校内服务端下发的出口节点。
 //
 // 与链式代理共用同一套"拉取 → 校验 → 落盘 → 启动时合并"管线，区别只有两点：
 //  1. 校园节点是出口本身，不套 WARP 接入点，因此启动时也不再要求 WARP 凭据；
@@ -125,7 +126,7 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 	// 总开关：维护者在公告里关闭 / 公告没拿到 → 连拉取都不允许，
 	// 免得学生反复点「获取」只看到网络错误。
 	if !h.cloudProfileUnlocked(time.Now()) {
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": "校园配置当前未开放（维护者已在公告中关闭或未获取到公告）", "code": "cloud-locked"})
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "备用配置当前未开放（维护者已在公告中关闭或未获取到公告）", "code": "cloud-locked"})
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, maxCloudProfileBytes+1))
@@ -276,7 +277,7 @@ func (h *helper) cloudClear(writer http.ResponseWriter) {
 type cloudGateError struct{ status string }
 
 func (e *cloudGateError) Error() string {
-	return "校园配置仅对校园网开放（" + e.status + "），请连接校园网后重试"
+	return "备用配置仅对校园网开放（" + e.status + "），请连接校园网后重试"
 }
 
 // cloudErrorCode 把错误映射成前端可判别的 code。
@@ -288,35 +289,74 @@ func cloudErrorCode(err error) string {
 	return "fetch-failed"
 }
 
-// fetchCloudProfile downloads the campus profile. Only plain http(s) reaches
+// fetchCloudProfile downloads the backup profile. Only plain http(s) reaches
 // here; the response is size-capped like a file import.
+//
+// 错误文案一律不带入口地址：这些字符串会原样出现在 toast / 弹窗里，而
+// 弹窗是"会被截图发群里"的东西。完整 err（含 URL）只写 stderr 留作排障。
 func fetchCloudProfile(rawURL string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cloudFetchTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(os.Stderr, "cloud-config: bad request: %v\n", err)
+		return nil, &cloudFetchError{reason: "入口地址无效"}
 	}
 	request.Header.Set("User-Agent", "FreeV6")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("获取校园配置失败: %w", err)
+		fmt.Fprintf(os.Stderr, "cloud-config: fetch failed: %v\n", err)
+		return nil, &cloudFetchError{reason: describeFetchFailure(err)}
 	}
 	defer response.Body.Close()
 	switch {
 	case response.StatusCode == http.StatusForbidden, response.StatusCode == http.StatusUnauthorized:
 		return nil, &cloudGateError{status: response.Status}
 	case response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices:
-		return nil, fmt.Errorf("获取校园配置失败: HTTP %s", response.Status)
+		return nil, fmt.Errorf("获取备用配置失败：服务端返回 HTTP %s", response.Status)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxCloudProfileBytes+1))
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(os.Stderr, "cloud-config: read body failed: %v\n", err)
+		return nil, &cloudFetchError{reason: "响应读取中断"}
 	}
 	if len(data) > maxCloudProfileBytes {
-		return nil, fmt.Errorf("校园配置超过 2MB 上限")
+		return nil, fmt.Errorf("备用配置超过 2MB 上限")
 	}
 	return data, nil
+}
+
+// cloudFetchError 是"网络层失败"的脱敏错误：只给原因类别，不给地址。
+type cloudFetchError struct{ reason string }
+
+func (e *cloudFetchError) Error() string {
+	return "获取备用配置失败：" + e.reason
+}
+
+// describeFetchFailure 把 net/http 的错误归成人类可读的类别。
+// 绝不能直接 %w 透出：Go 的错误里带着完整 URL（Get "https://<slug>.…"）。
+func describeFetchFailure(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "请求超时，请稍后重试"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "请求超时，请稍后重试"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "域名解析失败，请检查网络或 DNS"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "connection refused"):
+		return "连接被拒绝"
+	case strings.Contains(text, "certificate"):
+		return "证书校验失败"
+	case strings.Contains(text, "no route to host"), strings.Contains(text, "network is unreachable"):
+		return "网络不可达"
+	}
+	return "网络请求失败，请稍后重试"
 }
 
 // maskCloudEntry 只保留子域名前 4 位用于界面回显：完整入口不该出现在

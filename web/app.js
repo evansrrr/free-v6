@@ -2650,6 +2650,15 @@ function cloudReady() {
   return state.cloud.enabled && state.cloud.count > 0;
 }
 
+// 兜底脱敏：进入 toast / 日志的文本一律不带入口地址。
+// helper 侧的文案已经不带地址，这里防的是以后新增错误路径又漏回来——
+// 弹窗会被截图外带，入口不该出现在那种地方。
+function redactEntry(text) {
+  return String(text ?? '')
+    .replace(/https?:\/\/[^\s"'）)]+/gi, '入口')
+    .replace(/[0-9a-z]{8,}\.freev6\.cc\.cd/gi, '入口');
+}
+
 async function refreshCloudStatus() {
   try {
     const cloud = await api('/cloud-config');
@@ -2694,7 +2703,7 @@ function updateCloudUI() {
   const line = $('#cloudStatusLine');
   if (line) {
     if (state.cloud.error) {
-      line.textContent = `内容异常: ${state.cloud.error}`;
+      line.textContent = `内容异常: ${redactEntry(state.cloud.error)}`;
     } else if (locked) {
       // 总开关在公告里，客户端无法自行解除；说清楚是"维护者关闭"而不是"你操作错了"
       line.textContent = state.cloud.count > 0
@@ -2735,7 +2744,7 @@ async function submitCloudProfile() {
     } else if (e.code === 'cloud-locked') {
       message = '备用配置当前未开放';
     } else {
-      message = `获取备用配置失败: ${e.message}`;
+      message = `获取备用配置失败: ${redactEntry(e.message)}`;
     }
     addLog(message, true);
     showToast(message, 'error');
@@ -2754,7 +2763,7 @@ async function clearCloud() {
     clearProxyList();
     fetchProxies();
   } catch (e) {
-    addLog(`清除备用配置失败: ${e.message}`, true);
+    addLog(`清除备用配置失败: ${redactEntry(e.message)}`, true);
   }
 }
 

@@ -63,7 +63,7 @@ type noticeItem struct {
 type noticePayload struct {
 	Updated string       `json:"updated"`
 	Items   []noticeItem `json:"items"`
-	// CloudProfile 是校园配置的总开关：只有显式 true 才开放。
+	// CloudProfile 是备用配置的总开关：只有显式 true 才开放。
 	// 用指针区分「没写」与「写了 false」——两者都锁定，但排障时要能看出
 	// 是维护者主动关闭还是公告文件压根没有这个字段。
 	CloudProfile *bool `json:"cloudProfile,omitempty"`

@@ -63,7 +63,7 @@ type RenderOptions struct {
 	// dialed through the selected MASQUE node and targeted by MATCH.
 	// Empty keeps the rendered config byte-identical to non-chain builds.
 	ChainProxies []ChainProxy
-	// CloudNodes: 校园配置下发的出口节点。非空时不再渲染内置 28 个 WARP
+	// CloudNodes: 备用配置下发的出口节点。非空时不再渲染内置 28 个 WARP
 	// 接入点，也不再要求 warp.Device（校园节点本身就是出口），分组全部由
 	// 这些节点构成；规则、TUN、DNS、端口等骨架仍按本地生成。
 	CloudNodes []ChainProxy

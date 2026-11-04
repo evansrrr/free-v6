@@ -1,4 +1,4 @@
-# 校园配置（cloud profile）
+# 备用配置（cloud profile）
 
 云端下发节点，仅本校学生可取。本文记录设计约束与已知风险，避免后续维护者
 按错误的心智模型改动。
@@ -110,5 +110,5 @@
 2. 校内实测 v4 / v6 出口地址，收敛 `ALLOWED_PREFIXES`。
 3. 用 `wrangler kv key put` 写入节点 yaml（只含 `proxies`）。
 4. `wrangler deploy`，`curl -6 https://<slug>.freev6.cc.cd/p` 验证 200。
-5. 客户端：设置 → 校园配置 → 填门户地址 → 获取 → 启动免流。
+5. 客户端：设置 → 备用配置 → 填门户地址 → 获取 → 启动免流。
 6. 改节点只动 KV，不需要发版。

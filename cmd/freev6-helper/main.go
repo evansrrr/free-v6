@@ -57,7 +57,7 @@ type settings struct {
 	ChainEnabled    bool   `json:"chainEnabled"`
 	ChainSourceType string `json:"chainSourceType"`
 	ChainSourceURL  string `json:"chainSourceUrl"`
-	// 校园配置（设置 → 核心）：来源与更新时间由 /api/v1/cloud-config 端点
+	// 备用配置（设置 → 核心）：来源与更新时间由 /api/v1/cloud-config 端点
 	// 维护，开关由 GUI 主 PUT 携带。与链式代理同理「省略即保留」，否则
 	// 一次普通保存就会把学生刚取到的配置悄悄关掉、退回裸 WARP 出口。
 	CloudEnabled   bool   `json:"cloudEnabled"`
@@ -316,7 +316,7 @@ func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	// 清除已导入的链式代理与校园配置（文件不存在不算错误）
+	// 清除已导入的链式代理与备用配置（文件不存在不算错误）
 	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -413,7 +413,7 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if !jsonKeyPresent(body, "chainSourceUrl") {
 			current.ChainSourceURL = persisted.ChainSourceURL
 		}
-		// 校园配置同理：sourceUrl/updatedAt 只由 cloud-config 端点维护，
+		// 备用配置同理：sourceUrl/updatedAt 只由 cloud-config 端点维护，
 		// cloudEnabled 由主 PUT 携带；三者省略即保留。
 		if !jsonKeyPresent(body, "cloudEnabled") {
 			current.CloudEnabled = persisted.CloudEnabled
@@ -492,10 +492,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if chainSettingsErr != nil {
 		storedForChain = defaultSettings()
 	}
-	// 公告总开关：维护者关掉校园配置后，即使本地还留着上次的节点也不许用。
+	// 公告总开关：维护者关掉备用配置后，即使本地还留着上次的节点也不许用。
 	// 放在端口/权限/网络快照之前——纯读校验，失败不产生任何副作用。
 	if storedForChain.CloudEnabled && !h.cloudProfileUnlocked(time.Now()) {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置当前未开放（公告中已关闭或未获取到公告），请在设置中改用其他出口", "code": "cloud-locked"})
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置当前未开放（公告中已关闭或未获取到公告），请在设置中改用其他出口", "code": "cloud-locked"})
 		return
 	}
 	var chainProxies []mihomo.ChainProxy
@@ -512,26 +512,26 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 		chainProxies = parsed
 	}
-	// 校园配置：节点即出口，启用时不套 WARP、也就不需要 WARP 凭据。与链式
+	// 备用配置：节点即出口，启用时不套 WARP、也就不需要 WARP 凭据。与链式
 	// 代理互斥——两者改的是同一个出口，同时开会变成"到底走的哪条"不可解释。
 	var cloudNodes []mihomo.ChainProxy
 	if storedForChain.CloudEnabled {
 		if storedForChain.ChainEnabled {
-			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置与链式代理不能同时启用，请在设置中关闭其中一个"})
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置与链式代理不能同时启用，请在设置中关闭其中一个"})
 			return
 		}
 		cloudData, readErr := os.ReadFile(h.cloudProfilePath())
 		if readErr != nil {
-			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置已启用但本地内容缺失，请在设置中重新获取"})
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置已启用但本地内容缺失，请在设置中重新获取"})
 			return
 		}
 		profile, parseErr := mihomo.ParseCloudProfile(cloudData)
 		if parseErr != nil {
-			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "解析校园配置失败: " + parseErr.Error()})
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "解析备用配置失败: " + parseErr.Error()})
 			return
 		}
 		if len(profile.Nodes) == 0 {
-			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置里没有可用节点，请重新获取"})
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置里没有可用节点，请重新获取"})
 			return
 		}
 		cloudNodes = profile.Nodes

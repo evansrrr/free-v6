@@ -7,11 +7,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 校园配置（cloud profile）：由校内服务端下发的出口节点集合。
+// 备用配置（cloud profile）：由校内服务端下发的出口节点集合。
 //
 // 与「链式代理」的差别是语义而不是格式，两者解析器共用同一套校验：
 //   - 链式代理 = 本机 → WARP 接入点 → 自有代理（dialer-proxy 强制指向 MASQUE）
-//   - 校园配置 = 本机 → 校园节点直出（不套娃，也不再需要 WARP 凭据）
+//   - 备用配置 = 本机 → 校园节点直出（不套娃，也不再需要 WARP 凭据）
 //
 // 之所以只取 proxies 而不整份覆盖：TUN 命名（ICS 热点共享按名识别网卡）、
 // external-controller 的 per-install secret、校园网 DIRECT 绕过、geodata
@@ -26,7 +26,7 @@ const (
 	cloudMaxNameLen = 64
 )
 
-// CloudProfile 是解析后的校园配置。
+// CloudProfile 是解析后的备用配置。
 type CloudProfile struct {
 	Nodes []ChainProxy
 	// Ignored 列出被忽略的顶层字段，用于在 UI 上如实告知"你的 tun/rules

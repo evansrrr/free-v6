@@ -8,7 +8,7 @@ import (
 )
 
 const sampleCloudProfile = `
-# 校园配置：只取 proxies，骨架字段以本地为准
+# 备用配置：只取 proxies，骨架字段以本地为准
 port: 7890
 mode: rule
 tun:

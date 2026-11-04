@@ -43,9 +43,9 @@ func ParseChainProxies(content []byte) ([]ChainProxy, error) {
 	return normalizeProxyEntries(document.Proxies, reservedChainNames(), chainDialer)
 }
 
-// normalizeProxyEntries 是链式代理与校园配置共用的节点校验/重发射逻辑。
+// normalizeProxyEntries 是链式代理与备用配置共用的节点校验/重发射逻辑。
 // dialer 非空时无条件写入 dialer-proxy（链式语义：所有导入节点都必须挂在
-// MASQUE 接入点后面）；为空时剥掉配置自带的 dialer-proxy（校园配置：节点
+// MASQUE 接入点后面）；为空时剥掉配置自带的 dialer-proxy（备用配置：节点
 // 就是出口本身，指向未知名字会让 mihomo 启动失败）。
 func normalizeProxyEntries(entries []map[string]any, reserved map[string]bool, dialer string) ([]ChainProxy, error) {
 	seen := make(map[string]bool, len(entries))
