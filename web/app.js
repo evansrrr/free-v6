@@ -53,8 +53,8 @@ const state = {
   // 重建 state.chain 时不能把它冲掉
   chainImporting: false,
   activeProxyTab: 'access',
-  // 校园配置（设置 → 核心）：/cloud-config 权威状态。enabled+count>0 时出口
-  // 由校园节点直接负责，不再需要 WARP 接入凭据。
+  // 备用配置（设置 → 核心）：/cloud-config 权威状态。enabled+count>0 时出口
+  // 由备用节点直接负责，不再需要 WARP 接入凭据。
   // locked = 公告里的总开关；默认 true（fail-closed），公告检查完才可能放行。
   cloud: { enabled: false, count: 0, names: [], portalHost: '', entryMasked: '', updatedAt: '', error: '', locked: true },
   // 拉取进行中（校园网内一次往返，通常 <2s；校外会等超时）
@@ -450,9 +450,9 @@ function reportStartFailure(res) {
       showToast('接入凭据注册失败', 'error');
       openWarpFailDialog(res.message);
     }
-    // 公告把校园配置关了（或没拿到公告）：出口不可用，引导去关掉校园配置
+    // 公告把备用配置关了（或没拿到公告）：出口不可用，引导去关掉备用配置
     if (res.code === 'cloud-locked') {
-      showToast('校园配置当前未开放，请在设置中改用其他出口', 'error');
+      showToast('备用配置当前未开放，请在设置中改用其他出口', 'error');
     }
   }
 }
@@ -565,7 +565,7 @@ async function runAutoStart() {
   if (!state.helperOnline) { autoRunRetry('helper 未连接'); return; }
   if (!navigator.onLine) { autoRunRetry('等待网络恢复', true); return; }
   // /proxy/start 依赖 state/warp.json：凭据注册失败（多因网络未就绪）时按重试兜底，
-  // 但只自动补注册有限次，避免反复打 Cloudflare。校园配置可用时不吃这条依赖。
+  // 但只自动补注册有限次，避免反复打 Cloudflare。备用配置可用时不吃这条依赖。
   if (!state.warpRegistered && !cloudReady()) {
     if (!state.warpRegistering && autoRun.regTries < AUTO_RUN_MAX_REG_TRIES) {
       autoRun.regTries += 1;
@@ -1468,7 +1468,7 @@ async function checkNotice() {
     state.notices = list.filter((item) => item && typeof item.id === 'string' && typeof item.title === 'string');
     state.noticeStale = !!res?.stale;
     state.noticeChecked = true; // 拿到 200 就算检查完成；空公告（含 404）≠失败
-    // 公告同时承担校园配置的总开关（notice.json 的 cloudProfile）。helper 在
+    // 公告同时承担备用配置的总开关（notice.json 的 cloudProfile）。helper 在
     // 这次拉取后已把开关写进本机缓存，这里重读一次，UI 才能立刻反映锁定状态。
     refreshCloudStatus();
   } catch (_) {
@@ -1718,7 +1718,7 @@ async function registerWarp(isAuto) {
 // 第一次使用且 helper 报告未注册 WARP → 自动注册一次。每次启动最多尝试一次，
 // 失败交给「注册」按钮或下次启动，避免轮询反复请求 Cloudflare。
 function maybeAutoRegisterWarp() {
-  // 校园配置可用时不需要 WARP 凭据：别多打一次 Cloudflare，也别让学生
+  // 备用配置可用时不需要 WARP 凭据：别多打一次 Cloudflare，也别让学生
   // 看到"正在自动注册接入凭据"这种与当前出口无关的日志。
   if (state.warpRegistered || state.warpAutoTried || cloudReady()) return;
   state.warpAutoTried = true;
@@ -2641,11 +2641,11 @@ async function clearChain() {
   }
 }
 
-/* ── 校园配置（设置 → 核心） ─────────────────────────────────────
+/* ── 备用配置（设置 → 核心） ─────────────────────────────────────
  * 授权判据在服务端（请求源 IP 段），客户端只负责"问"：拿不到就明确说
  * "请连校园网"，绝不降级成裸 WARP 出口。详见 docs/cloud-profile.md。 */
 
-// 校园配置可用 = 已启用且本地有节点：此时 WARP 凭据不再必需。
+// 备用配置可用 = 已启用且本地有节点：此时 WARP 凭据不再必需。
 function cloudReady() {
   return state.cloud.enabled && state.cloud.count > 0;
 }
@@ -2698,8 +2698,8 @@ function updateCloudUI() {
     } else if (locked) {
       // 总开关在公告里，客户端无法自行解除；说清楚是"维护者关闭"而不是"你操作错了"
       line.textContent = state.cloud.count > 0
-        ? `维护者已关闭校园配置（${state.cloud.count} 个节点已缓存，暂不可用）`
-        : '维护者已关闭校园配置，或未能获取到公告';
+        ? `开发者已关闭备用配置（${state.cloud.count} 个节点已缓存，暂不可用）`
+        : '开发者已关闭备用配置，或未能获取到公告';
     } else if (state.cloud.count === 0) {
       line.textContent = '尚未获取';
     } else {
@@ -2722,8 +2722,8 @@ async function submitCloudProfile() {
   updateCloudUI();
   try {
     const result = await api('/cloud-config', { method: 'PUT', body: JSON.stringify({ portalHost }) });
-    addLog(`校园配置获取成功：${result.count} 个节点`);
-    showToast(`已获取 ${result.count} 个校园节点`);
+    addLog(`备用配置获取成功：${result.count} 个节点`);
+    showToast(`已获取 ${result.count} 个备用节点`);
     await refreshCloudStatus();
     fetchProxies();
   } catch (e) {
@@ -2731,11 +2731,11 @@ async function submitCloudProfile() {
     // 否则只会看到"获取失败"
     let message;
     if (e.code === 'campus-only') {
-      message = '仅限校园网内获取，请连接校园网后重试';
+      message = '仅限部分高校校园网内获取，请重试';
     } else if (e.code === 'cloud-locked') {
-      message = '校园配置当前未开放';
+      message = '备用配置当前未开放';
     } else {
-      message = `获取校园配置失败: ${e.message}`;
+      message = `获取备用配置失败: ${e.message}`;
     }
     addLog(message, true);
     showToast(message, 'error');
@@ -2748,13 +2748,13 @@ async function submitCloudProfile() {
 async function clearCloud() {
   try {
     await api('/cloud-config', { method: 'DELETE' });
-    addLog('校园配置已清除');
-    showToast('校园配置已清除');
+    addLog('备用配置已清除');
+    showToast('备用配置已清除');
     await refreshCloudStatus();
     clearProxyList();
     fetchProxies();
   } catch (e) {
-    addLog(`清除校园配置失败: ${e.message}`, true);
+    addLog(`清除备用配置失败: ${e.message}`, true);
   }
 }
 
@@ -2820,7 +2820,7 @@ function wireSettingsEvents() {
   wireSubPage('#chainSettingItem', '#chainPage', '#chainBack');
   wireSubPage('#cloudSettingItem', '#cloudPage', '#cloudBack');
 
-  // 校园配置子页：获取/刷新、清除、开关
+  // 备用配置子页：获取/刷新、清除、开关
   $('#cloudFetch')?.addEventListener('click', submitCloudProfile);
   $('#cloudPortalInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCloudProfile(); });
   $('#cloudClear')?.addEventListener('click', clearCloud);
@@ -2828,19 +2828,19 @@ function wireSettingsEvents() {
     const next = Boolean(e.target.selected);
     if (state.cloud.locked) {
       e.target.selected = false;
-      addLog('校园配置当前未开放（公告中已关闭或未获取到公告）', true);
-      showToast('校园配置当前未开放', 'error');
+      addLog('备用配置当前未开放', true);
+      showToast('备用配置当前未开放', 'error');
       return;
     }
     if (next && state.cloud.count === 0) {
       e.target.selected = false; // 程序化复位会再次触发 change，下面的 guard 拦住
-      addLog('尚未获取校园配置，无法开启', true);
+      addLog('尚未获取备用配置，无法开启', true);
       return;
     }
     if (next === state.cloud.enabled) return;
     if (next && state.chain.enabled) {
       e.target.selected = false; // 复位开关，否则界面显示"已开"但状态没变
-      addLog('链式代理已启用，请先关闭链式代理再启用校园配置', true);
+      addLog('链式代理已启用，请先关闭链式代理再启用备用配置', true);
       showToast('请先关闭链式代理', 'error');
       return;
     }
@@ -2868,8 +2868,8 @@ function wireSettingsEvents() {
     // 两者改的是同一个出口，同时开会变成"到底走的哪条"不可解释
     if (next && cloudReady()) {
       e.target.selected = false;
-      addLog('校园配置已启用，请先关闭校园配置再启用链式代理', true);
-      showToast('请先关闭校园配置', 'error');
+      addLog('备用配置已启用，请先关闭备用配置再启用链式代理', true);
+      showToast('请先关闭备用配置', 'error');
       return;
     }
     if (next === state.chain.enabled) return;

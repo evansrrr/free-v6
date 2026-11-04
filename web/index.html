@@ -416,7 +416,7 @@
                 <md-icon><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M2.6 9.3 12 4.8l9.4 4.5L12 13.8z"/><path d="M6.8 11.4v4.8c0 1.4 2.3 2.5 5.2 2.5s5.2-1.1 5.2-2.5v-4.8"/></svg></md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">校园配置</div>
+                <div class="setting-label">备用配置</div>
               </div>
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
@@ -575,9 +575,9 @@
             <md-icon-button id="cloudBack" aria-label="返回">
               <md-icon>arrow_back</md-icon>
             </md-icon-button>
-            <h2>校园配置</h2>
+            <h2>备用配置</h2>
           </div>
-          <p class="cidr-hint">由学校服务端下发的节点，仅校园网内可以获取。填入校园网登录页地址后由软件自行拼接入口</p>
+          <p class="cidr-hint">仅支持部分高校校园网内获取。</p>
           <div class="cidr-input-row">
             <md-outlined-text-field id="cloudPortalInput" label="校园网登录页 IP" autocomplete="off"></md-outlined-text-field>
             <md-filled-button id="cloudFetch">获取</md-filled-button>
@@ -587,10 +587,9 @@
               <md-icon>toggle_on</md-icon>
             </div>
             <div class="setting-text">
-              <div class="setting-label">启用校园配置</div>
-              <div class="setting-desc">启用后由校园节点直接出网，无需注册接入凭据</div>
+              <div class="setting-label">启用备用配置</div>
             </div>
-            <button class="glass-switch" id="cloudEnabledSwitch" role="switch" aria-checked="false" aria-label="启用校园配置"><span class="gs-handle"></span></button>
+            <button class="glass-switch" id="cloudEnabledSwitch" role="switch" aria-checked="false" aria-label="启用备用配置"><span class="gs-handle"></span></button>
           </div>
           <md-divider></md-divider>
           <div class="setting-item">
@@ -784,7 +783,6 @@
   </div>
 
   <script src="app.js"></script>
-  <!-- 万圣节彩蛋：仅 10/31 当天生效，其余日期零开销（详见 halloween.js） -->
   <script src="halloween.js"></script>
 </body>
 </html>
