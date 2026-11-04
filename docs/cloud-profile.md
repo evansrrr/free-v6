@@ -55,6 +55,7 @@
 | **文件转发**：配置落到 `config/cloud-profile.yaml` 后被贴群 | 校外可用 | 无法用门禁解决。只能给每人发不同节点密码 + 定期轮换（可定位泄漏者） |
 | **入口变更**：域名/段改了，旧客户端不会自己知道 | 老版本全员失效 | 通过已公开的 `notice.json` 下发新门户地址；停用前先公告 |
 | **订阅持久化**：mihomo 把 provider URL 写进配置与日志 | 入口出现在学生磁盘 | 接受；门禁在服务端，入口泄漏不等于可用 |
+| **UDP 绕过**：下发的节点是 VLESS+WS（`udp=false`），mihomo 对不支持的 UDP 会跳过 MATCH 落到 DIRECT | 浏览器用 HTTP/3(QUIC) 访问时直连，网站看到本机 IP——"开了免流但出口没变" | 在 MATCH 之后补 `NETWORK,UDP,REJECT`：UDP 被干净拒绝，浏览器自动回落 TCP 走节点。实测未加规则时 `chains=['DIRECT']`，加了之后 UDP 无响应而 TCP 仍走节点 |
 
 ## 5. 能不能让配置"全程不可提取"
 

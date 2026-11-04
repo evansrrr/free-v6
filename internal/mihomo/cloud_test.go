@@ -141,3 +141,37 @@ func TestRenderCloudProfileWithoutWarpDevice(t *testing.T) {
 		t.Fatalf("rule-providers missing in cloud mode")
 	}
 }
+
+// 备用配置的节点是 VLESS+WS（不支持 UDP）。缺了这条兜底，浏览器对 CF 系
+// 站点的 HTTP/3(QUIC) 请求会绕过节点落到 DIRECT，用户看到的就是
+// "开了免流但出口仍是本机 IP"。规则必须排在 MATCH 之后：支持 UDP 的节点
+// 会先命中 MATCH，走不到这里。
+func TestRenderCloudProfileRejectsUdpAfterMatch(t *testing.T) {
+	profile, err := ParseCloudProfile([]byte(sampleCloudProfile))
+	if err != nil {
+		t.Fatalf("ParseCloudProfile: %v", err)
+	}
+	config, err := RenderWithOptions(warp.Device{}, RenderOptions{
+		Mode:       ModeRule,
+		CloudNodes: profile.Nodes,
+	})
+	if err != nil {
+		t.Fatalf("RenderWithOptions: %v", err)
+	}
+	matchIdx := strings.Index(config, "MATCH,🚀 节点选择")
+	catchIdx := strings.Index(config, "NETWORK,UDP,REJECT")
+	if matchIdx < 0 || catchIdx < 0 {
+		t.Fatalf("cloud config missing MATCH or UDP catch rule (match=%d catch=%d)", matchIdx, catchIdx)
+	}
+	if catchIdx < matchIdx {
+		t.Fatal("UDP REJECT catch must come AFTER MATCH so UDP-capable nodes still work")
+	}
+	// 未启用备用配置（纯 WARP MASQUE）时不需要这条：MASQUE 本身支持 UDP。
+	plain, err := RenderWithOptions(chainTestDevice(), RenderOptions{Mode: ModeRule})
+	if err != nil {
+		t.Fatalf("RenderWithOptions(warp): %v", err)
+	}
+	if strings.Contains(plain, "NETWORK,UDP,REJECT") {
+		t.Fatal("WARP-only config should not contain the UDP catch rule")
+	}
+}

@@ -270,16 +270,20 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		matchTarget = ChainGroup
 	}
 	fmt.Fprintf(&b, "  - MATCH,%s\n", matchTarget)
-	if len(options.ChainProxies) > 0 {
+	if len(options.ChainProxies) > 0 || cloud {
 		// UDP 泄露兜底（能力自适应，依赖 mihomo match() 的 skip-continue 语义）：
-		// 命中 MATCH→链式 后，若所选链式节点不支持 UDP（如 VLESS+WS），
-		// mihomo 会跳过该规则继续向后找，最终落到 DIRECT —— 这正是真实
-		// IP 经 QUIC/WebRTC 泄露的路径。把本规则放在 MATCH 之后：
-		//   · 节点支持 UDP → MATCH 直接返回链式，根本走不到这里 → UDP
-		//     照常经自有代理转发（兼容导入 hysteria/tuic 等支持 UDP 的用户）；
-		//   · 节点不支持 UDP → MATCH 被跳过 → 此处 REJECT 干净拒绝，
-		//     浏览器 QUIC 失败自动回落 TCP 走链 —— 底线：绝不直连泄露。
+		// 命中 MATCH 后，若所选节点不支持 UDP（如 VLESS+WS，备用配置下发的
+		// CF Worker 节点正是这种），mihomo 会跳过该规则继续向后找，最终落到
+		// DIRECT —— 这正是真实 IP 经 QUIC/WebRTC 泄露的路径。把本规则放在
+		// MATCH 之后：
+		//   · 节点支持 UDP → MATCH 直接返回，根本走不到这里 → UDP 照常转发
+		//     （兼容 hysteria/tuic 等支持 UDP 的节点）；
+		//   · 节点不支持 UDP → MATCH 被跳过 → 此处 REJECT 干净拒绝，浏览器
+		//     QUIC 失败自动回落 TCP 走节点 —— 底线：绝不直连泄露。
 		// REJECT 适配器本身支持 UDP，不会再被 skip。
+		//
+		// 校园/备用配置同样需要这条：没有它，Chrome 对 CF 系站点的 HTTP/3
+		// 请求会绕过节点直连，用户看到的就是"开了免流但出口还是本机 IP"。
 		b.WriteString("  - NETWORK,UDP,REJECT\n")
 	}
 	return b.String(), nil
