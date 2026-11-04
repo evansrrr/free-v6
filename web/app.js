@@ -2744,7 +2744,8 @@ async function submitCloudProfile() {
     } else if (e.code === 'cloud-locked') {
       message = '备用配置当前未开放';
     } else {
-      message = `获取备用配置失败: ${redactEntry(e.message)}`;
+      // helper 的文案已经自带「获取备用配置失败：」前缀，这里不再叠加
+      message = redactEntry(e.message || '获取备用配置失败');
     }
     addLog(message, true);
     showToast(message, 'error');
