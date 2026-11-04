@@ -1,7 +1,7 @@
 {
   "_comment": "维护者公告板：此处将显示维护通知、服务变更等信息。每次启动软件会自动检查一次，也可以点右上角的刷新按钮手动重查。",
   "_cloudProfile": "备用配置开关：true/false",
-  "cloudProfile": true,
+  "cloudProfile": false,
   "updated": "2026-11-01T00:51:00+08:00",
   "items": [
     {
