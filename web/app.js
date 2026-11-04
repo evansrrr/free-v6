@@ -246,7 +246,7 @@ function showView(view) {
     $('#pageTitle').textContent = VIEW_TITLES[view] || view;
     // FABs are window-anchored: proxy toggle on dashboard, delay test on proxies
     $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
-    $('#delayTestFab')?.classList.toggle('visible', view === 'proxies');
+    syncDelayFab();
     // 刚显示出来的 FAB 尺寸从 0 变成实际值，库只会重设 canvas 尺寸、不会重绘，
     // 必须主动标脏，否则要等鼠标悬停（button 模式）才会出现玻璃
     if (bgState.liquidGlass) kickGlassRefresh();
@@ -298,6 +298,14 @@ function setRunning(running) {
   // 停止后 mihomo 已退出，接入点列表再无数据来源 → 立即清空回空态
   //（覆盖 FAB 停止、停止并退出、轮询检测到已停止、helper 断开四条路径）
   if (!running) clearProxyList();
+  // 延迟测试只在运行时可点：停止后 :9090 已退出，无节点可测
+  syncDelayFab();
+}
+
+// 延迟测试 FAB 的可见性 = 接入点页 + 免流运行中。
+// 停止免流后隐藏，避免点了只得到「无节点可测」的空转。
+function syncDelayFab() {
+  $('#delayTestFab')?.classList.toggle('visible', state.activeView === 'proxies' && state.proxyRunning);
 }
 
 // FAB 过渡态文案（检测中…/启动中…）。手动路径由点击处理器驱动，自动启动
