@@ -387,29 +387,6 @@ a { color: var(--md-primary); text-decoration: none; }
   gap: 8px;
 }
 
-.connection-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-full);
-  background: var(--md-surface-container-high);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--md-on-surface-variant);
-  transition: all 250ms;
-}
-.connection-chip.connected { background: var(--green-container); color: var(--green); }
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--md-outline);
-  transition: all 250ms;
-}
-.status-dot.live { background: var(--green); box-shadow: 0 0 0 3px rgba(92,216,154,.15); }
-
 md-icon-button {
   color: var(--md-on-surface-variant);
 }
@@ -1379,13 +1356,6 @@ md-filled-button.danger {
      是半透明覆盖而不是实心块 */
   background-color: color-mix(in srgb, var(--md-on-surface) 7%, transparent);
   background-image: none;
-}
-
-/* 连接状态芯片（未连接态） */
-:root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .connection-chip {
-  background: color-mix(in srgb, var(--md-surface-container-high) 68%, transparent);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
 }
 
 /* 抽屉 / 对话框 / 引导 / 提示 toast（更强调的玻璃） */

@@ -318,23 +318,6 @@ function fabDone() {
   if (fab) setFabLabel(state.proxyRunning ? '停止免流' : '启动免流');
 }
 
-function updateConnectionChip(online) {
-  const chip = $('#connectionChip');
-  const dot = $('#headerDot');
-  const headerStatus = $('#headerStatus');
-  if (!chip) return;
-  const ready = online && state.runtimePresent;
-  chip.classList.toggle('connected', ready);
-  dot.classList.toggle('live', ready);
-  if (!online) {
-    headerStatus.textContent = '核心未连接';
-  } else if (!state.runtimePresent) {
-    headerStatus.textContent = '需要下载核心';
-  } else {
-    headerStatus.textContent = '核心已就绪';
-  }
-}
-
 /* ── start ── */
 
 // core detect → IPv6 gatekeeper → /proxy/start。
@@ -362,7 +345,6 @@ async function startProxyFlow(auto = false) {
       state.runtimePresent = Boolean(runtime.present);
       state.runtimeChecked = true;
     } catch (_) { /* 保持上次已知状态 */ }
-    updateConnectionChip(state.helperOnline);
     if (!state.runtimePresent) return { ok: false, reason: 'core', message: '未检测到运行核心' };
 
     // IPv6 gate: only works on campus IPv6. Developer mode skips it.
@@ -1687,7 +1669,6 @@ async function downloadCore(btn) {
     renderCoreDownloadProgress(0, false);
     if (btn) { btn.disabled = false; btn.textContent = '下载'; }
     updateSettingsUI();
-    updateConnectionChip(state.helperOnline);
   }
 }
 
@@ -1761,8 +1742,6 @@ async function refreshBackendState() {
     await refreshCloudStatus();
     if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
 
-    updateConnectionChip(true);
-
     state.warpRegistered = status.warp?.registered || false;
     updateSettingsUI();
     // 首次拉到状态：未注册则自动注册（每会话仅一次）
@@ -1775,7 +1754,6 @@ async function refreshBackendState() {
     state.helperOnline = false;
     state.runtimePresent = false;
     state.runtimeChecked = false;
-    updateConnectionChip(false);
     updateSettingsUI();
     addLog(`helper 不可用: ${error.message}`, true);
   }
@@ -1862,12 +1840,9 @@ async function pollStatus() {
       if (firstConnect || !state.runtimeChecked || state.runtimePresent !== present) {
         state.runtimePresent = present;
         state.runtimeChecked = true;
-        updateConnectionChip(true);
         updateSettingsUI();
       }
-    } catch (_) {
-      if (firstConnect) updateConnectionChip(true);
-    }
+    } catch (_) { /* 保持上次已知状态 */ }
     if (firstConnect) {
       addLog('已连接 freev6 helper');
       // Helper is up: retry a dynamic-color seed fetch that failed at load
@@ -1924,7 +1899,6 @@ async function pollStatus() {
       state.helperOnline = false;
       state.runtimePresent = false;
       state.runtimeChecked = false;
-      updateConnectionChip(false);
       updateSettingsUI();
       setRunning(false);
       addLog('helper 连接断开', true);
