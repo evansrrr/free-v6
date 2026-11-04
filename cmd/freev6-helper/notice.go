@@ -63,13 +63,24 @@ type noticeItem struct {
 type noticePayload struct {
 	Updated string       `json:"updated"`
 	Items   []noticeItem `json:"items"`
+	// CloudProfile 是校园配置的总开关：只有显式 true 才开放。
+	// 用指针区分「没写」与「写了 false」——两者都锁定，但排障时要能看出
+	// 是维护者主动关闭还是公告文件压根没有这个字段。
+	CloudProfile *bool `json:"cloudProfile,omitempty"`
+}
+
+// cloudProfileAllowed 判定公告里的开关。缺省/缺失一律视为关闭（fail-closed）：
+// 拿不到维护者的明确许可，就不该允许使用需要服务端资源的功能。
+func cloudProfileAllowed(flag *bool) bool {
+	return flag != nil && *flag
 }
 
 // noticeCache 落 state/notice-cache.json，只在拉取全线失败时回退使用。
 type noticeCache struct {
-	FetchedAt time.Time    `json:"fetchedAt"`
-	Updated   string       `json:"updated"`
-	Items     []noticeItem `json:"items"`
+	FetchedAt    time.Time    `json:"fetchedAt"`
+	Updated      string       `json:"updated"`
+	Items        []noticeItem `json:"items"`
+	CloudProfile *bool        `json:"cloudProfile,omitempty"`
 }
 
 var noticeLevels = map[string]bool{"info": true, "warning": true, "critical": true}
@@ -228,7 +239,7 @@ func filterLiveNotices(items []noticeItem, now time.Time) []noticeItem {
 // saveNoticeCache 原子写入（临时文件 + rename），半截文件永远不会被读到。
 // 写失败只影响离线回退，调用方无需处理。
 func (h *helper) saveNoticeCache(payload noticePayload, now time.Time) {
-	cache := noticeCache{FetchedAt: now, Updated: payload.Updated, Items: payload.Items}
+	cache := noticeCache{FetchedAt: now, Updated: payload.Updated, Items: payload.Items, CloudProfile: payload.CloudProfile}
 	data, err := json.Marshal(cache)
 	if err != nil {
 		return
@@ -286,12 +297,13 @@ func (h *helper) notice(writer http.ResponseWriter, request *http.Request) {
 		// 全线失败（或响应是空对象）：能回退缓存就回退，并如实标注 stale。
 		if cache, ok := h.loadNoticeCache(now); ok {
 			writeJSON(writer, http.StatusOK, map[string]any{
-				"ok":        true,
-				"notices":   cache.Items,
-				"updated":   cache.Updated,
-				"fetchedAt": cache.FetchedAt.Format(time.RFC3339),
-				"stale":     true,
-				"error":     errorText(lastErr),
+				"ok":           true,
+				"notices":      cache.Items,
+				"updated":      cache.Updated,
+				"fetchedAt":    cache.FetchedAt.Format(time.RFC3339),
+				"stale":        true,
+				"cloudProfile": cloudProfileAllowed(cache.CloudProfile),
+				"error":        errorText(lastErr),
 			})
 			return
 		}
@@ -299,17 +311,20 @@ func (h *helper) notice(writer http.ResponseWriter, request *http.Request) {
 			"ok":      true,
 			"notices": []noticeItem{},
 			"stale":   false,
-			"error":   errorText(lastErr),
+			// 公告拿不到且没有缓存 → 不知道维护者是否开放，按关闭处理。
+			"cloudProfile": false,
+			"error":        errorText(lastErr),
 		})
 		return
 	}
 
 	h.saveNoticeCache(payload, now)
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok":        true,
-		"notices":   payload.Items,
-		"updated":   payload.Updated,
-		"fetchedAt": now.Format(time.RFC3339),
-		"stale":     false,
+		"ok":           true,
+		"notices":      payload.Items,
+		"updated":      payload.Updated,
+		"fetchedAt":    now.Format(time.RFC3339),
+		"stale":        false,
+		"cloudProfile": cloudProfileAllowed(payload.CloudProfile),
 	})
 }

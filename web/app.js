@@ -55,7 +55,8 @@ const state = {
   activeProxyTab: 'access',
   // 校园配置（设置 → 核心）：/cloud-config 权威状态。enabled+count>0 时出口
   // 由校园节点直接负责，不再需要 WARP 接入凭据。
-  cloud: { enabled: false, count: 0, names: [], portalHost: '', entryMasked: '', updatedAt: '', error: '' },
+  // locked = 公告里的总开关；默认 true（fail-closed），公告检查完才可能放行。
+  cloud: { enabled: false, count: 0, names: [], portalHost: '', entryMasked: '', updatedAt: '', error: '', locked: true },
   // 拉取进行中（校园网内一次往返，通常 <2s；校外会等超时）
   cloudBusy: false,
 
@@ -448,6 +449,10 @@ function reportStartFailure(res) {
     if (res.code === 'warp-missing') {
       showToast('接入凭据注册失败', 'error');
       openWarpFailDialog(res.message);
+    }
+    // 公告把校园配置关了（或没拿到公告）：出口不可用，引导去关掉校园配置
+    if (res.code === 'cloud-locked') {
+      showToast('校园配置当前未开放，请在设置中改用其他出口', 'error');
     }
   }
 }
@@ -1463,6 +1468,9 @@ async function checkNotice() {
     state.notices = list.filter((item) => item && typeof item.id === 'string' && typeof item.title === 'string');
     state.noticeStale = !!res?.stale;
     state.noticeChecked = true; // 拿到 200 就算检查完成；空公告（含 404）≠失败
+    // 公告同时承担校园配置的总开关（notice.json 的 cloudProfile）。helper 在
+    // 这次拉取后已把开关写进本机缓存，这里重读一次，UI 才能立刻反映锁定状态。
+    refreshCloudStatus();
   } catch (_) {
     // 请求失败（helper 中途重启等偶发）：保留已显示内容，留待下次补查
     state.noticeChecked = false;
@@ -2653,14 +2661,20 @@ async function refreshCloudStatus() {
       entryMasked: cloud.entryMasked || '',
       updatedAt: cloud.updatedAt || '',
       error: cloud.error || '',
+      // helper 没给这个字段（旧版本）也按锁定处理
+      locked: cloud.locked !== false,
     };
   } catch (_) { /* helper offline: keep previous */ }
   updateCloudUI();
 }
 
 function updateCloudUI() {
+  const locked = state.cloud.locked;
   const sw = $('#cloudEnabledSwitch');
-  if (sw) sw.selected = state.cloud.enabled;
+  if (sw) {
+    sw.selected = state.cloud.enabled;
+    sw.disabled = locked;
+  }
   const input = $('#cloudPortalInput');
   if (input) {
     // 有了门户地址就回填，刷新不用重输；用户正在输入时不抢。
@@ -2669,7 +2683,7 @@ function updateCloudUI() {
   }
   const fetchBtn = $('#cloudFetch');
   if (fetchBtn) {
-    fetchBtn.disabled = state.cloudBusy;
+    fetchBtn.disabled = state.cloudBusy || locked;
     fetchBtn.textContent = state.cloudBusy ? '获取中…' : (state.cloud.count > 0 ? '刷新' : '获取');
   }
   const clearBtn = $('#cloudClear');
@@ -2681,6 +2695,11 @@ function updateCloudUI() {
   if (line) {
     if (state.cloud.error) {
       line.textContent = `内容异常: ${state.cloud.error}`;
+    } else if (locked) {
+      // 总开关在公告里，客户端无法自行解除；说清楚是"维护者关闭"而不是"你操作错了"
+      line.textContent = state.cloud.count > 0
+        ? `维护者已关闭校园配置（${state.cloud.count} 个节点已缓存，暂不可用）`
+        : '维护者已关闭校园配置，或未能获取到公告';
     } else if (state.cloud.count === 0) {
       line.textContent = '尚未获取';
     } else {
@@ -2708,10 +2727,16 @@ async function submitCloudProfile() {
     await refreshCloudStatus();
     fetchProxies();
   } catch (e) {
-    // campus-only 是学生最常撞到的分支，必须直白，否则只会看到"获取失败"
-    const message = e.code === 'campus-only'
-      ? '仅限校园网内获取，请连接校园网后重试'
-      : `获取校园配置失败: ${e.message}`;
+    // campus-only / cloud-locked 是学生最常撞到的两个分支，必须直白，
+    // 否则只会看到"获取失败"
+    let message;
+    if (e.code === 'campus-only') {
+      message = '仅限校园网内获取，请连接校园网后重试';
+    } else if (e.code === 'cloud-locked') {
+      message = '校园配置当前未开放';
+    } else {
+      message = `获取校园配置失败: ${e.message}`;
+    }
     addLog(message, true);
     showToast(message, 'error');
   } finally {
@@ -2801,6 +2826,12 @@ function wireSettingsEvents() {
   $('#cloudClear')?.addEventListener('click', clearCloud);
   $('#cloudEnabledSwitch')?.addEventListener('change', (e) => {
     const next = Boolean(e.target.selected);
+    if (state.cloud.locked) {
+      e.target.selected = false;
+      addLog('校园配置当前未开放（公告中已关闭或未获取到公告）', true);
+      showToast('校园配置当前未开放', 'error');
+      return;
+    }
     if (next && state.cloud.count === 0) {
       e.target.selected = false; // 程序化复位会再次触发 change，下面的 guard 拦住
       addLog('尚未获取校园配置，无法开启', true);

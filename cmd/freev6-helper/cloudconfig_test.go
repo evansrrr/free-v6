@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const cloudTestYAML = `port: 7890
@@ -30,8 +31,32 @@ func cloudRequest(t *testing.T, h *helper, method, body string) *httptest.Respon
 	return recorder
 }
 
+// seedNoticeGate 写入一份「本机公告缓存」，模拟启动时检查过 notice.json。
+// nil 表示公告里没有 cloudProfile 字段。
+func seedNoticeGate(t *testing.T, h *helper, allowed *bool) {
+	t.Helper()
+	stateDir := filepath.Join(h.root, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache := map[string]any{"fetchedAt": time.Now().Format(time.RFC3339)}
+	if allowed != nil {
+		cache["cloudProfile"] = *allowed
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "notice-cache.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
+
 func TestCloudImportFromContent(t *testing.T) {
 	h := &helper{root: t.TempDir()}
+	seedNoticeGate(t, h, boolPtr(true))
 	put := cloudRequest(t, h, http.MethodPut, `{"content":`+"\""+jsonEscape(cloudTestYAML)+"\""+`}`)
 	if put.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, body = %s", put.Code, put.Body.String())
@@ -78,6 +103,7 @@ func TestCloudImportFromContent(t *testing.T) {
 // 不带 url 也不带门户地址：必须明确报错，不能静默使用某个内置地址。
 func TestCloudImportRequiresEntry(t *testing.T) {
 	h := &helper{root: t.TempDir()}
+	seedNoticeGate(t, h, boolPtr(true))
 	put := cloudRequest(t, h, http.MethodPut, `{}`)
 	if put.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", put.Code)
@@ -90,6 +116,7 @@ func TestCloudImportRequiresEntry(t *testing.T) {
 // 门户地址非法时必须在发请求之前失败（不产生无意义的 DNS 查询）。
 func TestCloudImportRejectsBadPortalHost(t *testing.T) {
 	h := &helper{root: t.TempDir()}
+	seedNoticeGate(t, h, boolPtr(true))
 	put := cloudRequest(t, h, http.MethodPut, `{"portalHost":"不是地址"}`)
 	if put.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body = %s", put.Code, put.Body.String())
@@ -135,5 +162,90 @@ func TestMaskCloudEntry(t *testing.T) {
 	}
 	if strings.Contains(masked, "31cf1f09ea10") {
 		t.Fatal("mask must not leak the full slug")
+	}
+}
+
+// 公告总开关：显式 true 才开放，缺失 / false / 拿不到公告 一律锁定。
+func TestCloudProfileAllowedParsing(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{"enabled", `{"cloudProfile":true,"items":[]}`, true},
+		{"disabled", `{"cloudProfile":false,"items":[]}`, false},
+		{"absent", `{"items":[]}`, false},
+		{"empty doc", `{}`, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload, err := parseNoticePayload([]byte(testCase.payload), now)
+			if err != nil {
+				t.Fatalf("parseNoticePayload: %v", err)
+			}
+			if got := cloudProfileAllowed(payload.CloudProfile); got != testCase.want {
+				t.Fatalf("cloudProfileAllowed = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCloudImportBlockedWithoutNotice(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	// 没有任何公告缓存：不知道维护者是否开放 → 锁定
+	put := cloudRequest(t, h, http.MethodPut, `{"content":`+"\""+jsonEscape(cloudTestYAML)+"\""+`}`)
+	if put.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body = %s", put.Code, put.Body.String())
+	}
+	if !strings.Contains(put.Body.String(), "cloud-locked") {
+		t.Fatalf("body = %s", put.Body.String())
+	}
+	if _, err := os.Stat(h.cloudProfilePath()); err == nil {
+		t.Fatal("locked import must not write a snapshot")
+	}
+}
+
+func TestCloudImportBlockedWhenNoticeSaysFalse(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	seedNoticeGate(t, h, boolPtr(false))
+	put := cloudRequest(t, h, http.MethodPut, `{"content":`+"\""+jsonEscape(cloudTestYAML)+"\""+`}`)
+	if put.Code != http.StatusConflict || !strings.Contains(put.Body.String(), "cloud-locked") {
+		t.Fatalf("status = %d body = %s, want 409 cloud-locked", put.Code, put.Body.String())
+	}
+}
+
+// 已启用校园配置但公告关闭时，启动必须被拦在端口/权限检查之前。
+func TestStartProxyBlockedWhenCloudLocked(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	stored := defaultSettings()
+	stored.CloudEnabled = true
+	if err := h.saveSettings(stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(h.cloudProfilePath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.cloudProfilePath(), []byte(cloudTestYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runStart := func() *httptest.ResponseRecorder {
+		body := `{"mode":"rule","campusCidrs":["edu.cn"],"devMode":false}`
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/start", strings.NewReader(body))
+		recorder := httptest.NewRecorder()
+		h.startProxy(recorder, request)
+		return recorder
+	}
+
+	locked := runStart()
+	if locked.Code != http.StatusBadRequest || !strings.Contains(locked.Body.String(), "cloud-locked") {
+		t.Fatalf("locked start = %d %s, want 400 cloud-locked", locked.Code, locked.Body.String())
+	}
+
+	// 解锁后应越过这道闸门（后面可能因端口/权限失败，但不再是 cloud-locked）
+	seedNoticeGate(t, h, boolPtr(true))
+	unlocked := runStart()
+	if strings.Contains(unlocked.Body.String(), "cloud-locked") {
+		t.Fatalf("unlocked start still locked: %s", unlocked.Body.String())
 	}
 }

@@ -42,6 +42,22 @@ func (h *helper) cloudProfilePath() string {
 	return filepath.Join(h.root, "config", "cloud-profile.yaml")
 }
 
+// cloudProfileUnlocked 读取「公告里维护者开关」的最近一次结果。
+//
+// 语义与 notice.json 的 cloudProfile 一致：显式 true 才开放；公告拉不到、
+// 没写这个字段、缓存超过 7 天，一律锁定（fail-closed）。
+//
+// 读缓存而不是当场联网：启动免流不该再多一次网络往返，且离线时缓存仍能
+// 反映维护者最近一次的决定。公告本身由前端启动时的 /api/v1/notice 拉取
+// 并写入同一个缓存文件。
+func (h *helper) cloudProfileUnlocked(now time.Time) bool {
+	cache, ok := h.loadNoticeCache(now)
+	if !ok {
+		return false
+	}
+	return cloudProfileAllowed(cache.CloudProfile)
+}
+
 // cloudConfig serves GET/PUT/DELETE /api/v1/cloud-config. Every method sits
 // behind withCORS(guardLocalOnly(requireAuth(...))) registered in main().
 func (h *helper) cloudConfig(writer http.ResponseWriter, request *http.Request) {
@@ -71,6 +87,8 @@ func (h *helper) cloudStatus(writer http.ResponseWriter) {
 		"updatedAt":  current.CloudUpdatedAt,
 		"ignored":    []string{},
 		"portalHost": current.PortalHost,
+		// 公告开关：前端据此禁用「获取」与开关，而不是点下去才报错。
+		"locked": !h.cloudProfileUnlocked(time.Now()),
 	}
 	// 只回显打码后的入口：完整地址一旦出现在界面上，截图/日志就会把它
 	// 带出去，白白抵消派生的意义。
@@ -104,6 +122,12 @@ func (h *helper) cloudStatus(writer http.ResponseWriter) {
 }
 
 func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) {
+	// 总开关：维护者在公告里关闭 / 公告没拿到 → 连拉取都不允许，
+	// 免得学生反复点「获取」只看到网络错误。
+	if !h.cloudProfileUnlocked(time.Now()) {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "校园配置当前未开放（维护者已在公告中关闭或未获取到公告）", "code": "cloud-locked"})
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(request.Body, maxCloudProfileBytes+1))
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid body"})

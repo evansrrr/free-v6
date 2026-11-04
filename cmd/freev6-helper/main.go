@@ -492,6 +492,12 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if chainSettingsErr != nil {
 		storedForChain = defaultSettings()
 	}
+	// 公告总开关：维护者关掉校园配置后，即使本地还留着上次的节点也不许用。
+	// 放在端口/权限/网络快照之前——纯读校验，失败不产生任何副作用。
+	if storedForChain.CloudEnabled && !h.cloudProfileUnlocked(time.Now()) {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "校园配置当前未开放（公告中已关闭或未获取到公告），请在设置中改用其他出口", "code": "cloud-locked"})
+		return
+	}
 	var chainProxies []mihomo.ChainProxy
 	if storedForChain.ChainEnabled {
 		chainData, readErr := os.ReadFile(h.chainPath())
