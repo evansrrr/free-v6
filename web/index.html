@@ -368,6 +368,17 @@
               </div>
               <button class="glass-switch" id="hotspotShareSwitch" role="switch" aria-checked="false" aria-label="共享移动热点"><span class="gs-handle"></span></button>
             </div>
+            <md-divider></md-divider>
+            <div class="setting-item clickable" id="resetSettingsItem">
+              <div class="setting-icon">
+                <md-icon>autorenew</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">重置设置</div>
+                <div class="setting-desc">恢复全部设置到默认值</div>
+              </div>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
+            </div>
             
           </div>
 
@@ -451,35 +462,14 @@
 
           <div class="settings-group">
             <div class="settings-group-title">关于</div>
-            <div class="setting-item" id="versionItem">
+            <div class="setting-item clickable" id="readmeItem">
               <div class="setting-icon">
-                <md-icon>info</md-icon>
+                <md-icon>menu_book</md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">软件版本</div>
+                <div class="setting-label">使用说明</div>
               </div>
-              <span class="setting-value"><span id="versionValue">FreeV6 v0.5.2</span><span class="setting-badge" id="updateBadge" hidden></span></span>
-            </div>
-            <md-divider></md-divider>
-            <div class="setting-item clickable" id="githubItem">
-              <div class="setting-icon">
-                <md-icon>code</md-icon>
-              </div>
-              <div class="setting-text">
-                <div class="setting-label">Github</div>
-              </div>
-              <span class="setting-value">@evansrrr/free-v6</span>
-              <md-icon class="setting-arrow">open_in_new</md-icon>
-            </div>
-            <md-divider></md-divider>
-            <div class="setting-item">
-              <div class="setting-icon">
-                <md-icon>description</md-icon>
-              </div>
-              <div class="setting-text">
-                <div class="setting-label">开源许可证</div>
-              </div>
-              <span class="setting-value">MIT License</span>
+              <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
             <md-divider></md-divider>
             <div class="setting-item clickable" id="feedbackItem">
@@ -492,26 +482,37 @@
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
             <md-divider></md-divider>
-            <div class="setting-item clickable" id="readmeItem">
+            <div class="setting-item" id="versionItem">
               <div class="setting-icon">
-                <md-icon>menu_book</md-icon>
+                <md-icon>info</md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">使用说明</div>
+                <div class="setting-label">软件版本</div>
               </div>
-              <md-icon class="setting-arrow">chevron_right</md-icon>
+              <span class="setting-value"><span id="versionValue">FreeV6 v0.5.3</span><span class="setting-badge" id="updateBadge" hidden></span></span>
             </div>
             <md-divider></md-divider>
-            <div class="setting-item clickable" id="resetSettingsItem">
+            <div class="setting-item">
               <div class="setting-icon">
-                <md-icon>autorenew</md-icon>
+                <md-icon>description</md-icon>
               </div>
               <div class="setting-text">
-                <div class="setting-label">重置设置</div>
-                <div class="setting-desc">恢复全部设置到默认值</div>
+                <div class="setting-label">开源许可证</div>
               </div>
-              <md-icon class="setting-arrow">chevron_right</md-icon>
-            </div>          </div>
+              <span class="setting-value">MIT License</span>
+            </div>
+            <md-divider></md-divider>
+            <div class="setting-item clickable" id="githubItem">
+              <div class="setting-icon">
+                <md-icon>code</md-icon>
+              </div>
+              <div class="setting-text">
+                <div class="setting-label">Github</div>
+              </div>
+              <span class="setting-value">@evansrrr/free-v6</span>
+              <md-icon class="setting-arrow">open_in_new</md-icon>
+            </div>
+          </div>
 
         </div>
 
