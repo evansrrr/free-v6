@@ -74,16 +74,23 @@ func LoadSnapshot(path string) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func BuildRestoreCommands(snapshot Snapshot) []RestoreCommand {
-	commands := make([]RestoreCommand, 0, len(snapshot.Interfaces)*2)
+// buildDNSRestorePlans 按接口分组构建 DNS 还原命令：每个接口内部的命令序列
+// （set dnsservers 在前、add dnsservers 在后）有顺序依赖，但接口之间互不相干，
+// 可并行执行。停止免流时用它把串行的 netsh 还原并行化，缩短停止耗时。
+func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
+	plans := make([][]RestoreCommand, 0, len(snapshot.Interfaces))
 	for _, interfaceSnapshot := range snapshot.Interfaces {
 		if interfaceSnapshot.Alias == "" {
 			continue
 		}
+		var commands []RestoreCommand
 		commands = append(commands, buildDNSRestoreCommand("ipv4", interfaceSnapshot.Alias, interfaceSnapshot.IPv4DNSServers)...)
 		commands = append(commands, buildDNSRestoreCommand("ipv6", interfaceSnapshot.Alias, interfaceSnapshot.IPv6DNSServers)...)
+		if len(commands) > 0 {
+			plans = append(plans, commands)
+		}
 	}
-	return commands
+	return plans
 }
 
 func buildDNSRestoreCommand(protocol, alias string, servers []string) []RestoreCommand {

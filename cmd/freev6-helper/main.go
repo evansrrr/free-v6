@@ -805,16 +805,19 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	defer h.mu.Unlock()
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
 	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
-	// 先还原再停进程：ICS/WinRT 还原要在 TUN 适配器仍在时完成（FreeV6TUN
-	// 连接存在才能显式禁用其共享角色）。还原失败时快照保留、mihomo 照常
-	// 停止，下次启动免流前会先按它自愈还原。
+	// 阶段化还原：热点上游（ICS/WinRT）必须在 TUN 适配器仍在时还原——
+	// FreeV6TUN 连接存在才能显式禁用其共享角色。DNS 还原不依赖 TUN，放到
+	// mihomo 退出之后并行执行。这样 mihomo 尽快退出（/status 立刻回到
+	// running=false），慢的 netsh 还原不再挡住"停止"的感知时延。
 	var restoreErr error
 	var restoreSkipped string
+	var snapshotLoaded bool
 	snapshot, err := network.LoadSnapshot(snapshotPath)
 	switch {
 	case err == nil:
+		snapshotLoaded = true
 		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		restoreErr = network.RestoreSnapshot(ctx, snapshot)
+		restoreErr = network.RestoreHotspot(ctx, snapshot)
 		cancel()
 	case errors.Is(err, network.ErrCorruptSnapshot):
 		// 坏文件没有可还原基线：跳过还原，但停止 mihomo 优先——快照问题
@@ -824,12 +827,19 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	default:
 		restoreSkipped = err.Error()
 	}
-	if restoreErr == nil {
-		_ = os.Remove(snapshotPath)
-	}
+	// 热点还原（若有）完成后立即停 mihomo，再还原 DNS。DNS 与热点独立：
+	// 即使热点还原失败也照做（失败仅告警，不改变 restoreErr 语义）。
 	if stopErr := mihomo.Stop(pidPath); stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
 		return
+	}
+	if snapshotLoaded {
+		dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		network.RestoreDNS(dnsCtx, snapshot)
+		dnsCancel()
+	}
+	if restoreErr == nil {
+		_ = os.Remove(snapshotPath)
 	}
 	if restoreErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
