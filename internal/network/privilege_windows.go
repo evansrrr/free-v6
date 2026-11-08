@@ -4,18 +4,30 @@ package network
 
 import (
 	"context"
-	"fmt"
-	"os/exec"
-	"strings"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-const administratorCheckCommand = `$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'true' } else { 'false' }`
-
-func IsAdministrator(ctx context.Context) (bool, error) {
-	command := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", administratorCheckCommand)
-	output, err := command.Output()
+// IsAdministrator reports whether the current process runs elevated (UAC).
+// It reads TokenElevation from the process token in-process via
+// GetTokenInformation — no powershell.exe subprocess, so it costs microseconds
+// instead of the ~1s cold start the old PowerShell check added to every
+// /proxy/start and /status call. Fail-closed: a token read error returns false
+// so TUN startup is refused rather than attempted without privileges.
+func IsAdministrator(_ context.Context) (bool, error) {
+	token := windows.GetCurrentProcessToken()
+	var elevated uint32
+	var returned uint32
+	err := windows.GetTokenInformation(
+		token,
+		windows.TokenElevation,
+		(*byte)(unsafe.Pointer(&elevated)),
+		uint32(unsafe.Sizeof(elevated)),
+		&returned,
+	)
 	if err != nil {
-		return false, fmt.Errorf("check Windows administrator privilege: %w", err)
+		return false, err
 	}
-	return strings.EqualFold(strings.TrimSpace(string(output)), "true"), nil
+	return returned == uint32(unsafe.Sizeof(elevated)) && elevated != 0, nil
 }
