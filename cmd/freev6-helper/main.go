@@ -641,7 +641,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
 	healLeftoverSnapshot(snapshotPath)
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
-	snapshot, err := network.CaptureSnapshot(snapshotCtx)
+	// ICS 共享基线只在热点共享开启时需要：跳过它的 COM 枚举能省掉一次
+	// powershell.exe 冷启动（默认关闭热点共享时，启动免流只做一次 GetAdaptersAddresses
+	// 系统调用，不再为用不上的基线 spawn 子进程）。
+	snapshot, err := network.CaptureSnapshot(snapshotCtx, storedForChain.HotspotShare)
 	snapshotCancel()
 	if err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})

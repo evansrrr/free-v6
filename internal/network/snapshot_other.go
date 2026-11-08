@@ -9,6 +9,6 @@ import (
 
 var ErrWindowsOnly = errors.New("Windows network snapshot is only available on Windows")
 
-func CaptureSnapshot(context.Context) (Snapshot, error) {
+func CaptureSnapshot(context.Context, bool) (Snapshot, error) {
 	return Snapshot{}, ErrWindowsOnly
 }

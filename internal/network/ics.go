@@ -91,7 +91,7 @@ foreach ($c in $m.EnumEveryConnection) {
 ConvertTo-Json -InputObject $o -Compress`
 
 // ParsePowerShellSharing 解析共享状态抓取输出。PowerShell 对单元素数组
-// 也会输出对象，两种形状都要接受（与 ParsePowerShellSnapshot 同一约定）。
+// 也会输出对象，两种形状都要接受（对象或数组都按同一逻辑展开）。
 func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {

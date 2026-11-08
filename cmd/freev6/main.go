@@ -152,7 +152,8 @@ func startMihomo(args []string) error {
 		return fmt.Errorf("write mihomo config: %w", err)
 	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	snapshot, err := network.CaptureSnapshot(snapshotCtx)
+	// 独立 CLI 不切换热点：跳过 ICS 共享基线枚举。
+	snapshot, err := network.CaptureSnapshot(snapshotCtx, false)
 	snapshotCancel()
 	if err != nil {
 		return err
