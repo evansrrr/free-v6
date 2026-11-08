@@ -168,6 +168,7 @@ async function api(path, options = {}) {
 // 停止免流。快照损坏/读不出来时 helper 仍会成功停止、只跳过网络状态还原
 // （restoreSkipped）——记进日志提示用户，不能静默吞掉。
 async function stopProxyApi() {
+  proxyOpGen += 1;
   const payload = await api('/proxy/stop', { method: 'POST' });
   if (payload.restoreSkipped) {
     addLog(`网络状态还原已跳过（快照不可用）: ${payload.restoreSkipped}`, true);
@@ -338,10 +339,17 @@ function fabDone() {
 // auto=true
 let startFlowBusy = false;
 let startFlowSettled = Promise.resolve(); // 上一次启动流程结束的信号（手动接管等待用）
+// 启停操作代数。每次主动启动/停止（startProxyFlow / stopProxyApi）自增；
+// pollStatus 在发出 /status 前快照、响应回来后比对，代数变了说明期间发生过
+// 启停操作，其携带的 running 是操作前的陈旧值，丢弃——否则停止免流慢时，
+// 一个停止前发出、停止完成后才返回的 /status 会把 running=true 回灌，按钮
+// 短暂跳回「停止免流」又落回「启动免流」。
+let proxyOpGen = 0;
 async function startProxyFlow(auto = false) {
   if (startFlowBusy) return { ok: false, reason: 'busy', message: '启动流程正在进行' };
   if (!state.helperOnline) return { ok: false, reason: 'helper', message: 'helper 未连接' };
   startFlowBusy = true;
+  proxyOpGen += 1;
   let release;
   startFlowSettled = new Promise((resolve) => { release = resolve; });
   try {
@@ -1836,6 +1844,7 @@ function resetTrafficDisplay(clearCounters) {
 
 async function pollStatus() {
   const genAtStart = settingsWriteGen;
+  const opGenAtStart = proxyOpGen;
   try {
     const status = await api('/status');
     const firstConnect = !state.helperOnline;
@@ -1864,7 +1873,8 @@ async function pollStatus() {
     }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
-    if (wasRunning !== isRunning) {
+    // 启停操作期间（opGen 变化）不回灌 running：见 proxyOpGen 声明处的说明。
+    if (opGenAtStart === proxyOpGen && wasRunning !== isRunning) {
       setRunning(isRunning);
       addLog(isRunning ? '免流模式已启动' : '免流模式已停止');
       if (isRunning) autoDelayTestAfterStart();
