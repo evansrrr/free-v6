@@ -254,6 +254,8 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentThreadId() -> u32;
+    fn CreateMutexW(attributes: *mut u8, initial_owner: i32, name: *const u16) -> *mut u8;
+    fn GetLastError() -> u32;
 }
 
 // Runs on its own thread: registers `vk` (when initially_enabled) and pumps
@@ -386,12 +388,66 @@ fn set_background(app: tauri::AppHandle, mode: String, dark: Option<bool>) -> Re
     Ok(applied.to_string())
 }
 
+/* ── Single instance ────────────────────────────────────────────── */
+
+const ERROR_ALREADY_EXISTS: u32 = 183;
+
+// Every launch spawns its own helper and mints its own bearer token, so a
+// second copy can never share :13335: its helper dies on the bind error (the
+// "FreeV6 组件异常" dialog) while its webview keeps hammering the first
+// helper's API with the wrong token (`helper 不可用: unauthorized`). Users hit
+// this by clicking the shortcut again while the window sits in the tray.
+// A named mutex makes the second copy a no-op before anything is spawned.
+//
+// "Local\\" = per logon session, matching the install modes (another user on
+// the same machine needs their own helper, not a busy dialog). The handle is
+// deliberately never closed: it has to outlive everything else in the process
+// and the kernel releases it on exit.
+fn claim_single_instance() -> bool {
+    let name: Vec<u16> = "Local\\freev6-desktop-single-instance\0"
+        .encode_utf16()
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return true; // 创建失败：宁可放行，也不能把用户关在门外
+    }
+    unsafe { GetLastError() != ERROR_ALREADY_EXISTS }
+}
+
+fn warn_already_running() {
+    let title: Vec<u16> = "FreeV6 已在运行".encode_utf16().chain(std::iter::once(0)).collect();
+    let body: Vec<u16> = "freev6 已经在运行，无需重复打开。\n\n\
+        窗口可能收在系统托盘里：单击任务栏右下角的 freev6 图标即可打开。"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            0,
+            body.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
+    }
+}
+
 fn main() {
+    let autostart = std::env::args().any(|arg| arg.as_str() == "--autostart");
     // Launched by the autostart logon task: honor Task Manager's Startup tab
     // toggle before any window or tray icon exists. Manual launches have no
     // --autostart flag and always run.
-    if std::env::args().any(|arg| arg.as_str() == "--autostart") && !task_manager_allows_autostart()
-    {
+    if autostart && !task_manager_allows_autostart() {
+        return;
+    }
+    // 第二个副本拿到什么 token 都对不上第一个实例的 helper：helper 抢不到
+    // 13335 会直接退出（弹"组件异常"），前端则对着旧 helper 刷 unauthorized。
+    // 在最小化启动、托盘驻留的场景下用户很容易重复点图标，所以这一步必须
+    // 在任何窗口/子进程之前。开机自启撞上已在运行的实例时静默退出——登录
+    // 瞬间弹一个"已在运行"的模态框纯属噪音。
+    if !claim_single_instance() {
+        if !autostart {
+            warn_already_running();
+        }
         return;
     }
     tauri::Builder::default()
@@ -528,10 +584,13 @@ fn warn_helper_blocked(detail: &str) {
         .chain(std::iter::once(0))
         .collect();
     let body = format!(
-        "freev6 的核心组件（freev6-helper.exe）无法正常运行，很可能是被杀毒软件误判为病毒并隔离或删除。\n\n\
-        请尝试：\n\
-        1. 打开 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录，恢复被隔离的文件；\n\
-        2. 或将 FreeV6 安装目录加入杀毒软件的排除项，然后重新安装。\n\n\
+        "freev6 的核心组件（freev6-helper.exe）没有正常运行。\n\n\
+        常见原因：\n\
+        1. 已经有一个 freev6（或上次没退干净的 freev6-helper.exe）占着本地端口；\n\
+        2. 杀毒软件把未签名的组件误判并隔离；\n\
+        3. 安装目录被移动，组件文件缺失。\n\n\
+        可以先试：任务管理器里结束所有 freev6-helper.exe，再重新打开软件。\n\
+        仍不行就把下面的详细信息发给我们。\n\n\
         详细信息：{detail}"
     );
     let body: Vec<u16> = body.encode_utf16().chain(std::iter::once(0)).collect();
@@ -545,10 +604,12 @@ fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std
         .parent()
         .ok_or("freev6 executable has no parent directory")?
         .to_path_buf();
+    // helper 的 stderr 落盘位置：<安装目录>\state\helper.log
+    let log_path = root.join("state").join("helper.log");
     let (mut events, child) = app
         .shell()
         .sidecar("freev6-helper")?
-        .env("FREEV6_ROOT", root)
+        .env("FREEV6_ROOT", root.clone())
         .env("FREEV6_API_TOKEN", api_token)
         .spawn()?;
     let stopping = Arc::new(AtomicBool::new(false));
@@ -558,17 +619,36 @@ fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std
     });
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
+        // 只留最后 20 行给弹窗，足够看出 bind 失败 / 401 这类原因
+        let mut recent: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         while let Some(event) = events.recv().await {
             match event {
                 CommandEvent::Stderr(line) => {
-                    eprintln!("[freev6-helper] {}", String::from_utf8_lossy(&line))
+                    let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                    eprintln!("[freev6-helper] {text}");
+                    if !text.is_empty() {
+                        append_helper_log(&log_path, &text);
+                        if recent.len() == 20 {
+                            recent.pop_front();
+                        }
+                        recent.push_back(text);
+                    }
                 }
                 CommandEvent::Terminated(status) => {
                     eprintln!("freev6-helper exited: {status:?}");
                     if !stopping.load(Ordering::Acquire) {
-                        // 非主动停止：helper 被外部杀死（最可能是杀软隔离了
-                        // 文件并终止进程）。弹窗提示，而不是静默 exit(1)。
-                        warn_helper_blocked("freev6-helper 进程被异常终止，疑似被杀毒软件隔离。");
+                        // 非主动停止：helper 自己退出了。端口被占、被 WFP/杀软
+                        // 拦、组件缺失三种情况都落到这里，文案不再"一律归因
+                        // 杀软"，并把 stderr 原样带出来。
+                        let tail = if recent.is_empty() {
+                            "（无输出）".to_string()
+                        } else {
+                            recent.iter().cloned().collect::<Vec<_>>().join("\n")
+                        };
+                        warn_helper_blocked(&format!(
+                            "freev6-helper 已退出（{status:?}）。\n日志：{}\n最近输出：\n{tail}",
+                            log_path.display()
+                        ));
                         app_handle.exit(1);
                     }
                     break;
@@ -578,6 +658,33 @@ fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std
         }
     });
     Ok(())
+}
+
+// helper 的 stderr 以前只进 eprintln，而 release 是 windows_subsystem =
+// "windows"，根本没有控制台——等于整段丢弃。用户只剩"组件异常" + 前端日志
+// 里一句 unauthorized，无法定位真正原因（bind 失败、端口被占、被拦截）。
+// 这里追加到 <安装目录>\state\helper.log，超过 256KB 只保留后半段。
+fn append_helper_log(path: &std::path::Path, line: &str) {
+    const MAX_LOG_BYTES: u64 = 256 * 1024;
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > MAX_LOG_BYTES {
+            if let Ok(body) = std::fs::read(path) {
+                let keep = (body.len() / 2).max(1);
+                let _ = std::fs::write(path, &body[body.len() - keep..]);
+            }
+        }
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 fn stop_helper(app: &tauri::AppHandle) {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -31,7 +30,7 @@ func listenOrTakeOver(addr string) (net.Listener, error) {
 		return nil, err
 	}
 	// The holder is an orphaned helper — kill it and poll for the port.
-	_ = exec.Command("taskkill", "/F", "/PID", strconv.Itoa(owner)).Run()
+	_ = killProcess(owner)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(150 * time.Millisecond)
@@ -70,30 +69,9 @@ func listeningPID(output, addr string) int {
 	return 0
 }
 
-// isHelperPID confirms the port holder is one of ours before killing it —
-// never terminate an unrelated process squatting the port. The substring
-// covers both the installed (freev6-helper.exe) and the dev sidecar
-// (freev6-helper-<triple>.exe) image names; tasklist's image column is the
-// file name and never localized.
-func isHelperPID(pid int) bool {
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH").Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(string(out)), "freev6-helper")
-}
-
-// isOrphaned reports whether the holder's desktop parent is gone (the Task
-// Manager kill scenario). A live parent means another running instance — the
-// new helper must not steal its port. Errors mean "unknown" → don't kill.
-func isOrphaned(pid int) bool {
-	script := fmt.Sprintf(
-		`$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%d'; if ($null -eq $p) { 'gone' } elseif (Get-Process -Id $p.ParentProcessId -ErrorAction SilentlyContinue) { 'live' } else { 'orphan' }`,
-		pid)
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", script).Output()
-	if err != nil {
-		return false
-	}
-	// 'live' → running instance; 'orphan'/'gone' → safe to reclaim.
-	return strings.TrimSpace(string(out)) != "live"
-}
+// isHelperPID / isOrphaned / killProcess are platform hooks implemented in
+// port_windows.go (Win32) and port_other.go (stubs). They used to live here as
+// `powershell Get-CimInstance` + `tasklist` calls, which failed closed — any
+// policy, trimmed Windows image or security product that blocks those two
+// binaries turned the takeover off, and the stale helper kept :13335 while the
+// UI 401'd against it with a token from the previous launch.

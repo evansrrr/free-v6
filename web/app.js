@@ -1771,7 +1771,16 @@ async function refreshBackendState() {
     state.runtimePresent = false;
     state.runtimeChecked = false;
     updateSettingsUI();
-    addLog(`helper 不可用: ${error.message}`, true);
+    // 401 不是"helper 没起来"，而是 13335 上活着另一个 token 不同的 helper
+    // （重复启动/上次遗留的进程）。把它说清楚，别让用户去杀软里找文件。
+    if (error.message === 'unauthorized') {
+      addLog(
+        'helper 不可用: unauthorized（13335 端口被另一个 freev6 实例或遗留的 freev6-helper.exe 占用，请在任务管理器结束后重开）',
+        true,
+      );
+    } else {
+      addLog(`helper 不可用: ${error.message}`, true);
+    }
   }
 }
 
