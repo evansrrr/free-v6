@@ -24,6 +24,10 @@ struct HelperState {
 // to the web UI through the get_api_token command; never persisted to disk.
 struct ApiToken(String);
 
+// Loopback port the helper was told to bind this launch. 0 means "the shell
+// couldn't reserve one" and the helper fell back to its default port.
+struct HelperPort(u16);
+
 // Set when the app is exiting for real (tray 退出 → app.exit). Close requests
 // arriving during teardown must not be swallowed by the close-to-tray handler.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -109,6 +113,24 @@ fn generate_api_token() -> String {
 #[tauri::command]
 fn get_api_token(state: tauri::State<ApiToken>) -> String {
     state.0.clone()
+}
+
+#[tauri::command]
+fn get_helper_port(state: tauri::State<HelperPort>) -> u16 {
+    state.0
+}
+
+// Ask the OS for a free loopback port and hand it to the helper. A fixed port
+// means any stale helper — or any unrelated program — can stop the app from
+// starting, and the browser side then has to guess which helper it is talking
+// to. Reserving per launch removes that whole class of failure; the listener
+// is dropped immediately, so there is a tiny window where something else could
+// grab it, which the helper's bind-error path and helper.log still cover.
+fn reserve_helper_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or(0)
 }
 
 // In-app update: spawn the downloaded NSIS package detached (/S = silent,
@@ -458,10 +480,14 @@ fn main() {
             // and the webview always share the same value from first boot.
             let api_token = generate_api_token();
             app.manage(ApiToken(api_token.clone()));
+            // 端口也随启动分配：固定 13335 时，任何残留进程都能让新 helper
+            // 绑定失败（见 claim_single_instance / listenOrTakeOver）。
+            let helper_port = reserve_helper_port();
+            app.manage(HelperPort(helper_port));
             // Spawn 失败（helper 被杀软隔离/删除）→ 弹窗告知用户并退出。
             // 不能 `?`：那会一路传播成 panic（release panic=abort，用户只
             // 看到"打不开"）。return Ok(()) 跳过后续热键/托盘初始化。
-            if let Err(err) = start_helper(app, &api_token) {
+            if let Err(err) = start_helper(app, &api_token, helper_port) {
                 warn_helper_blocked(&format!("启动 freev6-helper 失败: {err}"));
                 app.handle().exit(1);
                 return Ok(());
@@ -536,6 +562,7 @@ fn main() {
             window_show,
             app_quit,
             get_api_token,
+            get_helper_port,
             hotkey_set,
             set_background,
             update_apply
@@ -599,19 +626,27 @@ fn warn_helper_blocked(detail: &str) {
     }
 }
 
-fn start_helper(app: &mut tauri::App, api_token: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn start_helper(
+    app: &mut tauri::App,
+    api_token: &str,
+    helper_port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::current_exe()?
         .parent()
         .ok_or("freev6 executable has no parent directory")?
         .to_path_buf();
     // helper 的 stderr 落盘位置：<安装目录>\state\helper.log
     let log_path = root.join("state").join("helper.log");
-    let (mut events, child) = app
+    let mut command = app
         .shell()
         .sidecar("freev6-helper")?
         .env("FREEV6_ROOT", root.clone())
-        .env("FREEV6_API_TOKEN", api_token)
-        .spawn()?;
+        .env("FREEV6_API_TOKEN", api_token);
+    // 0 = 预留失败，helper 自己回落到默认端口。
+    if helper_port > 0 {
+        command = command.env("FREEV6_API_PORT", helper_port.to_string());
+    }
+    let (mut events, child) = command.spawn()?;
     let stopping = Arc::new(AtomicBool::new(false));
     app.manage(HelperState {
         child: Mutex::new(Some(child)),

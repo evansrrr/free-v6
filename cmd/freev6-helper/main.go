@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +22,24 @@ import (
 	"github.com/yourname/freev6/internal/warp"
 )
 
-const listenAddress = "127.0.0.1:13335"
+const defaultListenAddress = "127.0.0.1:13335"
+
+// listenAddress honours FREEV6_API_PORT — the desktop shell reserves a free
+// port per launch and passes it down, so a leftover helper (or any other
+// program) can never make the new helper fail to bind. Without the variable
+// (manual `go run`, older shell) it falls back to the historical fixed port.
+func listenAddress() string {
+	raw := strings.TrimSpace(os.Getenv("FREEV6_API_PORT"))
+	if raw == "" {
+		return defaultListenAddress
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > 65535 {
+		fmt.Fprintf(os.Stderr, "helper: ignoring invalid FREEV6_API_PORT %q\n", raw)
+		return defaultListenAddress
+	}
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
 
 // icsOpTimeout 覆盖 WinRT tethering 异步操作的最坏情况（Stop/Start 各
 // 最多 Wait-Op 60s），正常几百毫秒完成；探测单独给短超时。
@@ -129,11 +148,14 @@ func main() {
 	if apiToken == "" {
 		fmt.Fprintln(os.Stderr, "helper: FREEV6_API_TOKEN is not set; all API requests will be rejected")
 	}
-	server := &http.Server{Addr: listenAddress, Handler: withCORS(guardLocalOnly(requireAuth(apiToken, mux))), ReadHeaderTimeout: 5 * time.Second}
+	addr := listenAddress()
+	server := &http.Server{Addr: addr, Handler: withCORS(guardLocalOnly(requireAuth(apiToken, mux))), ReadHeaderTimeout: 5 * time.Second}
 	// Bind with orphan takeover: killing the desktop via Task Manager leaves
 	// its helper child alive (Windows doesn't cascade-kill), and that orphan
-	// otherwise holds :13335 forever — every relaunch died on the bind error.
-	listener, err := listenOrTakeOver(listenAddress)
+	// otherwise keeps our address busy forever — every relaunch died on the
+	// bind error. The shell now hands out a free port per launch, so this is
+	// the second line of defence rather than the only one.
+	listener, err := listenOrTakeOver(addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper: %v\n", err)
 		os.Exit(1)

@@ -71,7 +71,22 @@ const state = {
   logs: [],
 };
 
-const API_BASE = 'http://127.0.0.1:13335/api/v1';
+// Helper API base. The port is reserved per launch by the desktop shell
+// (get_helper_port) so no leftover process can keep it pinned; the historical
+// 13335 is only the fallback for a browser preview or an older shell.
+const DEFAULT_API_BASE = 'http://127.0.0.1:13335/api/v1';
+let apiBase = null;
+
+async function loadApiBase() {
+  const tauri = window.__TAURI_INTERNALS__;
+  if (!tauri || typeof tauri.invoke !== 'function') return null;
+  try {
+    const port = await tauri.invoke('get_helper_port');
+    return typeof port === 'number' && port > 0 ? `http://127.0.0.1:${port}/api/v1` : null;
+  } catch (_) {
+    return null;
+  }
+}
 const MAX_LOG = 100;
 const TRAFFIC_POINTS = 60;
 
@@ -136,8 +151,9 @@ async function loadApiToken() {
 
 async function api(path, options = {}) {
   if (apiToken === null) apiToken = await loadApiToken();
+  if (apiBase === null) apiBase = (await loadApiBase()) || DEFAULT_API_BASE;
   const doFetch = (token) =>
-    fetch(`${API_BASE}${path}`, {
+    fetch(`${apiBase}${path}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -1771,11 +1787,11 @@ async function refreshBackendState() {
     state.runtimePresent = false;
     state.runtimeChecked = false;
     updateSettingsUI();
-    // 401 不是"helper 没起来"，而是 13335 上活着另一个 token 不同的 helper
-    // （重复启动/上次遗留的进程）。把它说清楚，别让用户去杀软里找文件。
+    // 401 不是"helper 没起来"，而是端口上活着另一个 token 不同的 helper
+    // （重复启动/上次遗留的进程，多见于固定端口的老版本壳）。
     if (error.message === 'unauthorized') {
       addLog(
-        'helper 不可用: unauthorized（13335 端口被另一个 freev6 实例或遗留的 freev6-helper.exe 占用，请在任务管理器结束后重开）',
+        'helper 不可用: unauthorized（端口被另一个 freev6 实例或遗留的 freev6-helper.exe 占用，请在任务管理器结束后重开）',
         true,
       );
     } else {

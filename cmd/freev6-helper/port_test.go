@@ -20,3 +20,18 @@ func TestListeningPIDPicksOnlyTheListener(t *testing.T) {
 		t.Fatalf("empty netstat output must yield 0, got %d", pid)
 	}
 }
+
+// The shell reserves a free port per launch; anything unusable must fall back
+// to the historical fixed address instead of binding port 0 or a bad port.
+func TestListenAddressHonoursEnvPort(t *testing.T) {
+	t.Setenv("FREEV6_API_PORT", "23456")
+	if got := listenAddress(); got != "127.0.0.1:23456" {
+		t.Fatalf("valid port: got %q", got)
+	}
+	for _, raw := range []string{"", "0", "-1", "65536", "nope", "  "} {
+		t.Setenv("FREEV6_API_PORT", raw)
+		if got := listenAddress(); got != defaultListenAddress {
+			t.Fatalf("port %q: want fallback %q, got %q", raw, defaultListenAddress, got)
+		}
+	}
+}
