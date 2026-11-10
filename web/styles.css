@@ -394,6 +394,10 @@ md-icon-button > md-icon {
   color: inherit;
 }
 
+/* 刷新按钮：点击时转一圈作为"已在刷新"的即时反馈 */
+#refreshButton.spinning md-icon { animation: refresh-spin 600ms ease-in-out; }
+@keyframes refresh-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
 /* ── View Transitions ── */
 
 .view {

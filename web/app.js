@@ -2143,12 +2143,24 @@ function wireEvents() {
   $('#closeLogs')?.addEventListener('click', closeLogs);
   $('#scrim')?.addEventListener('click', closeLogs);
 
-  // Refresh
-  $('#refreshButton')?.addEventListener('click', () => {
+  // Refresh：先拉后端状态，再重绘当前界面。原先只同步数据、不重绘，
+  // 界面在数据没变化时看起来像"点了没反应"。
+  $('#refreshButton')?.addEventListener('click', async () => {
+    const btn = $('#refreshButton');
+    btn?.classList.add('spinning');
     addLog('手动刷新');
-    refreshBackendState();
-    fetchProxies();
-    checkNotice();
+    try {
+      await refreshBackendState();
+      await fetchProxies();
+      checkNotice();
+    } finally {
+      // 数据到齐后按最新 state 重绘：接入点、统计环、设置行、FAB 可见性
+      renderNodeGrid();
+      updateStatsRing();
+      updateSettingsUI();
+      syncDelayFab();
+      setTimeout(() => btn?.classList.remove('spinning'), 600);
+    }
   });
 
   // 流量统计卡：点击 / 回车弹出「本月 + 累计」详情提示卡
