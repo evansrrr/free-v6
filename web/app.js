@@ -1300,10 +1300,14 @@ function drawChart() {
 /* ── Stats Ring Chart ─────────────────────────────────────────── */
 
 function updateStatsRing() {
-  const total = state.totalUpload + state.totalDownload;
   const circumference = 2 * Math.PI * 13.5; // ≈ 84.8
-  const uploadLen = total > 0 ? (state.totalUpload / total) * circumference : 0;
-  const downloadLen = total > 0 ? (state.totalDownload / total) * circumference : 0;
+  // 下载量常比上传量大 2–3 个数量级，线性占比会把上传压成看不见的一小段。
+  // 改用对数权重 log10(1+x) 归一化：比例保留「谁多谁少」，但不再被字节数碾压。
+  const uploadWeight = Math.log10(1 + state.totalUpload);
+  const downloadWeight = Math.log10(1 + state.totalDownload);
+  const weightSum = uploadWeight + downloadWeight;
+  const uploadLen = weightSum > 0 ? (uploadWeight / weightSum) * circumference : 0;
+  const downloadLen = weightSum > 0 ? (downloadWeight / weightSum) * circumference : 0;
 
   const uploadRing = $('#ringUpload');
   const downloadRing = $('#ringDownload');
