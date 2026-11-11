@@ -77,6 +77,11 @@ func LoadSnapshot(path string) (Snapshot, error) {
 // buildDNSRestorePlans 按接口分组构建 DNS 还原命令：每个接口内部的命令序列
 // （set dnsservers 在前、add dnsservers 在后）有顺序依赖，但接口之间互不相干，
 // 可并行执行。停止免流时用它把串行的 netsh 还原并行化，缩短停止耗时。
+//
+// 只为「启动前有静态 DNS」的协议生成还原命令：mihomo 的 TUN + dns-hijack
+// 不改系统 DNS 配置，dhcp/无 DNS 的接口（虚拟网卡、Loopback、蓝牙等）没有
+// 还原点，跳过 —— 否则每个接口都跑一条 source=dhcp 的 netsh（几十条串行/
+// 并发 spawn），是停止免流「还要三秒」的主因。
 func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 	plans := make([][]RestoreCommand, 0, len(snapshot.Interfaces))
 	for _, interfaceSnapshot := range snapshot.Interfaces {
@@ -84,8 +89,12 @@ func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 			continue
 		}
 		var commands []RestoreCommand
-		commands = append(commands, buildDNSRestoreCommand("ipv4", interfaceSnapshot.Alias, interfaceSnapshot.IPv4DNSServers)...)
-		commands = append(commands, buildDNSRestoreCommand("ipv6", interfaceSnapshot.Alias, interfaceSnapshot.IPv6DNSServers)...)
+		if len(interfaceSnapshot.IPv4DNSServers) > 0 {
+			commands = append(commands, buildDNSRestoreCommand("ipv4", interfaceSnapshot.Alias, interfaceSnapshot.IPv4DNSServers)...)
+		}
+		if len(interfaceSnapshot.IPv6DNSServers) > 0 {
+			commands = append(commands, buildDNSRestoreCommand("ipv6", interfaceSnapshot.Alias, interfaceSnapshot.IPv6DNSServers)...)
+		}
 		if len(commands) > 0 {
 			plans = append(plans, commands)
 		}
@@ -94,12 +103,10 @@ func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 }
 
 func buildDNSRestoreCommand(protocol, alias string, servers []string) []RestoreCommand {
-	args := []string{"interface", protocol, "set", "dnsservers", "name=" + alias}
 	if len(servers) == 0 {
-		args = append(args, "source=dhcp")
-		return []RestoreCommand{{Executable: "netsh", Args: args}}
+		return nil
 	}
-	args = append(args, "source=static", "address="+servers[0], "validate=no")
+	args := []string{"interface", protocol, "set", "dnsservers", "name=" + alias, "source=static", "address=" + servers[0], "validate=no"}
 	commands := []RestoreCommand{{Executable: "netsh", Args: args}}
 	for index, server := range servers[1:] {
 		commands = append(commands, RestoreCommand{

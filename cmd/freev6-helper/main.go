@@ -856,9 +856,15 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if snapshotLoaded {
-		dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		network.RestoreDNS(dnsCtx, snapshot)
-		dnsCancel()
+		// DNS 还原放后台执行：mihomo 已停、/status 已回到 running=false，不必
+		// 让 netsh 还原阻塞「停止」响应。还原失败本就非致命（RestoreDNS 只记
+		// 警告），且下次启动免流前会按残留快照自愈。快照按值捕获副本，与
+		// 主流程删除快照文件解耦。
+		go func(snapshot network.Snapshot) {
+			dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer dnsCancel()
+			network.RestoreDNS(dnsCtx, snapshot)
+		}(snapshot)
 	}
 	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)

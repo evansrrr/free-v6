@@ -92,11 +92,12 @@ func TestSaveSnapshotHealsCorruptFile(t *testing.T) {
 func TestBuildDNSRestorePlans(t *testing.T) {
 	plans := buildDNSRestorePlans(Snapshot{Interfaces: []InterfaceSnapshot{
 		{Alias: "Wi-Fi", IPv4DNSServers: []string{"192.0.2.53"}, IPv6DNSServers: []string{"2001:db8::1", "2001:db8::2"}},
-		{Alias: "Ethernet"},
+		{Alias: "Ethernet"}, // 无静态 DNS → 跳过，不生成 dhcp 还原命令
+		{Alias: "Wired", IPv4DNSServers: []string{"198.51.100.1"}}, // 只有 IPv4 → 只还原 IPv4
 	}})
-	// 每个接口一个 plan：接口内串行、接口间可并行。
+	// 三个接口：Ethernet 无 DNS 被跳过，Wi-Fi 与 Wired 各一个 plan。
 	if len(plans) != 2 {
-		t.Fatalf("expected 2 plans, got %d", len(plans))
+		t.Fatalf("expected 2 plans (Ethernet skipped), got %d", len(plans))
 	}
 	wifi := plans[0]
 	if len(wifi) != 3 {
@@ -111,11 +112,11 @@ func TestBuildDNSRestorePlans(t *testing.T) {
 	if wifi[2].Args[2] != "add" || wifi[2].Args[5] != "address=2001:db8::2" {
 		t.Fatalf("unexpected secondary DNS restore command: %+v", wifi[2])
 	}
-	eth := plans[1]
-	if len(eth) != 2 {
-		t.Fatalf("expected 2 Ethernet commands, got %d", len(eth))
+	wired := plans[1]
+	if len(wired) != 1 {
+		t.Fatalf("expected 1 Wired command (IPv4 only), got %d", len(wired))
 	}
-	if eth[0].Args[5] != "source=dhcp" || eth[1].Args[5] != "source=dhcp" {
-		t.Fatalf("expected DHCP restore commands: %+v", eth)
+	if wired[0].Args[1] != "ipv4" || wired[0].Args[4] != "name=Wired" || wired[0].Args[6] != "address=198.51.100.1" {
+		t.Fatalf("unexpected Wired restore command: %+v", wired[0])
 	}
 }
