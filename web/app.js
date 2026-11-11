@@ -184,8 +184,11 @@ async function api(path, options = {}) {
 // 停止免流。快照损坏/读不出来时 helper 仍会成功停止、只跳过网络状态还原
 // （restoreSkipped）——记进日志提示用户，不能静默吞掉。
 async function stopProxyApi() {
-  proxyOpGen += 1;
   const payload = await api('/proxy/stop', { method: 'POST' });
+  // 停止请求已落定（mihomo 已停）后再递增：让 pollStatus 能区分「停止前
+  // 发出的陈旧 /status」与「停止后发出的」——若在发起时递增，停止前发出的
+  // 请求会在发起后才快照到新代数，其 running=true 不会被丢弃。
+  proxyOpGen += 1;
   if (payload.restoreSkipped) {
     addLog(`网络状态还原已跳过（快照不可用）: ${payload.restoreSkipped}`, true);
   }
@@ -355,17 +358,17 @@ function fabDone() {
 // auto=true
 let startFlowBusy = false;
 let startFlowSettled = Promise.resolve(); // 上一次启动流程结束的信号（手动接管等待用）
-// 启停操作代数。每次主动启动/停止（startProxyFlow / stopProxyApi）自增；
-// pollStatus 在发出 /status 前快照、响应回来后比对，代数变了说明期间发生过
-// 启停操作，其携带的 running 是操作前的陈旧值，丢弃——否则停止免流慢时，
-// 一个停止前发出、停止完成后才返回的 /status 会把 running=true 回灌，按钮
-// 短暂跳回「停止免流」又落回「启动免流」。
+// 启停操作代数。在主动启停「落定」时自增（启动在 setRunning(true) 后、停止在
+// /proxy/stop 完成后），而非「发起」时——若在发起时自增，一个在停止发起后、
+// 停止完成前发出的 /status 会快照到新代数，其携带的 running=true 就不会被
+// 丢弃（表现为按钮停止后闪回「停止免流」再落回「启动免流」）。pollStatus 在
+// 发出 /status 前快照、响应回来后比对，代数变了说明期间有状态落定，丢弃其
+// 陈旧的 running 回灌。
 let proxyOpGen = 0;
 async function startProxyFlow(auto = false) {
   if (startFlowBusy) return { ok: false, reason: 'busy', message: '启动流程正在进行' };
   if (!state.helperOnline) return { ok: false, reason: 'helper', message: 'helper 未连接' };
   startFlowBusy = true;
-  proxyOpGen += 1;
   let release;
   startFlowSettled = new Promise((resolve) => { release = resolve; });
   try {
@@ -411,6 +414,8 @@ async function startProxyFlow(auto = false) {
       return { ok: false, reason: 'api', message: e.message, code: e.code };
     }
     setRunning(true);
+    // 启动落定：标记状态变更，供 pollStatus 丢弃陈旧 /status。
+    proxyOpGen += 1;
     // 启动响应携带本轮渲染所用的 controller secret，先于下一次 /status
     // 轮询就位，紧随其后的流量/节点请求即可带上 Bearer
     if (typeof started.controllerSecret === 'string') state.controllerSecret = started.controllerSecret;
