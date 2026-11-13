@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 )
 
 // Autostart is two cooperating pieces:
@@ -28,7 +30,7 @@ import (
 //     requester, no UAC, no on-demand run permissions.
 //
 // The helper always runs elevated (sidecar of the requireAdministrator
-// desktop app), which creating the /RL HIGHEST task requires.
+// desktop app), which registering a HighestAvailable task requires.
 const (
 	autostartTaskName  = "FreeV6 Autostart"
 	autostartRunKey    = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
@@ -64,15 +66,8 @@ func applyAutoStart(root string) error {
 	// /F replaces an existing task (also refreshes the path after updates
 	// move the install dir). A failure surfaces to the PUT handler so the GUI
 	// switch reverts instead of claiming a state that never took effect.
-	output, err := exec.Command(
-		"schtasks", "/Create", "/F",
-		"/TN", autostartTaskName,
-		"/TR", fmt.Sprintf(`"%s" --minimized --autostart`, exe),
-		"/SC", "ONLOGON",
-		"/RL", "HIGHEST",
-	).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("schtasks create failed: %s", strings.TrimSpace(string(output)))
+	if err := createLogonTask(exe); err != nil {
+		return err
 	}
 	regOutput, regErr := exec.Command(
 		"reg", "add", autostartRunKey,
@@ -88,6 +83,149 @@ func applyAutoStart(root string) error {
 		return fmt.Errorf("reg add failed: %s", strings.TrimSpace(string(regOutput)))
 	}
 	return nil
+}
+
+// createLogonTask registers the ONLOGON task from Task Scheduler's own XML.
+//
+// `/TR ... /SC ONLOGON /RL HIGHEST` cannot express the settings that decide
+// whether the task actually fires on the *next* logon, and its defaults are
+// harmful in exactly the reported case — 免流 still running when the machine
+// goes down:
+//
+//   - MultipleInstancesPolicy defaults to IgnoreNew. Shutting down with the
+//     app alive (免流 running → 直接关机, not a tray 退出) kills the instance
+//     without Task Scheduler recording the stop — Fast Startup makes it worse
+//     by hibernating the Scheduler service instead of ending the instance.
+//     The stale "instance already running" record then swallows the logon
+//     trigger (0x41301, event 322 NEW_INSTANCE_IGNORED) and the app never
+//     starts. Parallel starts a new instance regardless of the stale record;
+//     the desktop shell's single-instance mutex already makes a real
+//     duplicate a silent no-op.
+//   - DisallowStartIfOnBatteries / StopIfGoingOnBatteries default to true, so
+//     a laptop task is skipped at logon while unplugged.
+//   - StartWhenAvailable defaults to false, which drops a logon start that
+//     was delayed instead of running it late.
+//   - ExecutionTimeLimit defaults to 72h — wrong for a tray-resident app that
+//     is expected to live until the next shutdown.
+//
+// If the XML form is rejected (unresolvable user name, unusual policy), fall
+// back to the /TR form so the switch still works and only the hardening is
+// lost.
+func createLogonTask(exe string) error {
+	if user := currentWindowsUser(); user != "" {
+		if path, writeErr := writeTaskXML(autostartTaskXML(exe, user)); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "helper: cannot stage autostart task XML: %v\n", writeErr)
+		} else {
+			output, createErr := exec.Command(
+				"schtasks", "/Create", "/F", "/TN", autostartTaskName, "/XML", path,
+			).CombinedOutput()
+			_ = os.Remove(path)
+			if createErr == nil {
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "helper: autostart task XML rejected (%s); falling back to /TR\n",
+				strings.TrimSpace(string(output)))
+		}
+	}
+	output, err := exec.Command(
+		"schtasks", "/Create", "/F",
+		"/TN", autostartTaskName,
+		"/TR", fmt.Sprintf(`"%s" --minimized --autostart`, exe),
+		"/SC", "ONLOGON",
+		"/RL", "HIGHEST",
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("schtasks create failed: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// autostartTaskXML renders the task definition. The principal is the current
+// interactive user (LogonType InteractiveToken), so the ONLOGON trigger fires
+// only for the account that owns the install and the task can use the user's
+// own token — no stored password, no UAC prompt.
+func autostartTaskXML(exe, user string) string {
+	escape := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	// Element order follows the Task Scheduler schema (Settings is a strict
+	// sequence, not a set) and only the values that differ from the defaults
+	// are spelled out — a rejected document would silently fall back to /TR.
+	// The task URI is left out on purpose: /TN already fixes the path, and a
+	// mismatching URI is one more way for schtasks to reject the document.
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Launches the freev6 shell at logon (elevated, no UAC prompt).</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>%s</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>%s</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%s</Command>
+      <Arguments>--minimized --autostart</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`, escape.Replace(user), escape.Replace(user), escape.Replace(exe))
+}
+
+// writeTaskXML stages the definition in %TEMP%: schtasks /XML only accepts
+// Unicode input, so the file is UTF-16LE with a BOM regardless of the API's
+// UTF-8 strings. The caller removes it.
+func writeTaskXML(document string) (string, error) {
+	file, err := os.CreateTemp("", "freev6-autostart-*.xml")
+	if err != nil {
+		return "", err
+	}
+	units := utf16.Encode([]rune(document))
+	data := make([]byte, 2+len(units)*2)
+	data[0], data[1] = 0xFF, 0xFE
+	for i, unit := range units {
+		binary.LittleEndian.PutUint16(data[2+i*2:], unit)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(file.Name())
+		return "", err
+	}
+	return file.Name(), nil
+}
+
+// currentWindowsUser returns DOMAIN\user for the elevated helper. Empty when
+// the environment does not carry it (service-like contexts), which makes the
+// caller use the /TR fallback.
+func currentWindowsUser() string {
+	user := os.Getenv("USERNAME")
+	domain := os.Getenv("USERDOMAIN")
+	switch {
+	case user == "":
+		return ""
+	case domain == "":
+		return user
+	default:
+		return domain + `\` + user
+	}
 }
 
 // removeAutoStart deletes the logon task, the Task Manager marker entry and
