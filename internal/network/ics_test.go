@@ -39,55 +39,45 @@ func mihomoTunDevice(t *testing.T) string {
 	return strings.TrimSpace(rest)
 }
 
-// 解析共享状态数组（正常形态）。
-func TestParsePowerShellSharingArray(t *testing.T) {
-	data := `[
-	  {"name":"WLAN","guid":"{AAA}","device":"Intel Wi-Fi","enabled":true,"kind":"public"},
-	  {"name":"Local Area Connection* 3","guid":"{BBB}","device":"Microsoft Wi-Fi Direct Virtual Adapter","enabled":true,"kind":"private"},
-	  {"name":"Ethernet","guid":"{CCC}","device":"Realtek","enabled":false,"kind":"public"}
-	]`
-	sharing, err := ParsePowerShellSharing([]byte(data))
-	if err != nil {
-		t.Fatal(err)
+// restoreActions：按基线恢复连接角色，规则与原还原脚本一致。
+func TestRestoreActions(t *testing.T) {
+	baseline := []SharingSnapshot{
+		{Name: "WLAN", Guid: "{AAA}", Enabled: true, Kind: "public"},
+		{Name: "Ethernet", Guid: "{CCC}", Enabled: false, Kind: "public"},
+		{Name: "Private", Guid: "{BBB}", Enabled: true, Kind: "private"},
 	}
-	if len(sharing) != 3 {
-		t.Fatalf("expected 3 entries, got %d", len(sharing))
-	}
-	if sharing[0].Name != "WLAN" || !sharing[0].Enabled || sharing[0].Kind != "public" {
-		t.Fatalf("unexpected first entry: %+v", sharing[0])
-	}
-	if sharing[1].Kind != "private" || sharing[1].Guid != "{BBB}" {
-		t.Fatalf("unexpected second entry: %+v", sharing[1])
-	}
-}
 
-// PowerShell 对单元素数组输出对象 —— 单对象形态也要能解析。
-func TestParsePowerShellSharingSingleObject(t *testing.T) {
-	sharing, err := ParsePowerShellSharing([]byte(`{"name":"WLAN","guid":"{AAA}","enabled":true,"kind":"public"}`))
-	if err != nil {
-		t.Fatal(err)
+	// 基线 public，当前已 public → 无操作
+	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 0 {
+		t.Fatalf("already matching must be no-op, got %v", got)
 	}
-	if len(sharing) != 1 || sharing[0].Name != "WLAN" {
-		t.Fatalf("unexpected result: %+v", sharing)
+	// 基线 public，当前 private → 禁用再启用 public
+	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: true, kind: "private"}, baseline, TunDeviceName); len(got) != 2 || got[0] != restoreDisable || got[1] != restoreEnablePublic {
+		t.Fatalf("kind change must disable+enable, got %v", got)
 	}
-}
-
-// 空输出（无共享连接）→ 空列表而不是错误。
-func TestParsePowerShellSharingEmpty(t *testing.T) {
-	sharing, err := ParsePowerShellSharing([]byte("[]"))
-	if err != nil {
-		t.Fatal(err)
+	// 基线 public，当前未共享 → 启用 public
+	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: false}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreEnablePublic {
+		t.Fatalf("disabled must re-enable public, got %v", got)
 	}
-	if len(sharing) != 0 {
-		t.Fatalf("expected empty, got %+v", sharing)
+	// 基线未共享，当前共享 → 禁用
+	if got := restoreActions(hnshareConn{guid: "{CCC}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreDisable {
+		t.Fatalf("enabled must disable, got %v", got)
 	}
-	// kind 非法的条目被丢弃，不让坏数据进入还原脚本
-	sharing, err = ParsePowerShellSharing([]byte(`{"name":"X","guid":"{X}","enabled":true,"kind":"weird"}`))
-	if err != nil {
-		t.Fatal(err)
+	// 基线 private，当前 public → 禁用再启用 private
+	if got := restoreActions(hnshareConn{guid: "{BBB}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 2 || got[0] != restoreDisable || got[1] != restoreEnablePrivate {
+		t.Fatalf("private restore must disable+enable private, got %v", got)
 	}
-	if len(sharing) != 0 {
-		t.Fatalf("entry with invalid kind must be dropped, got %+v", sharing)
+	// 基线无此 guid 且是 TUN 且当前共享 → 禁用
+	if got := restoreActions(hnshareConn{guid: "{TUN}", name: TunDeviceName, enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreDisable {
+		t.Fatalf("stray TUN must disable, got %v", got)
+	}
+	// 基线无此 guid 且非 TUN 且当前共享 → 不动
+	if got := restoreActions(hnshareConn{guid: "{OTHER}", name: "Other", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 0 {
+		t.Fatalf("unrelated connection must be untouched, got %v", got)
+	}
+	// 基线无此 guid 且是 TUN 但未共享 → 不动
+	if got := restoreActions(hnshareConn{guid: "{TUN2}", name: TunDeviceName, enabled: false}, baseline, TunDeviceName); len(got) != 0 {
+		t.Fatalf("disabled stray TUN must be no-op, got %v", got)
 	}
 }
 
@@ -109,51 +99,6 @@ func TestFindHotspotPrivate(t *testing.T) {
 	// 空基线
 	if got := FindHotspotPrivate(nil); got != "" {
 		t.Fatalf("expected empty for nil baseline, got %q", got)
-	}
-}
-
-// 经典切换脚本：TUN 设 PUBLIC、热点私有侧设 PRIVATE，参数正确引用。
-func TestBuildICSSwitchScript(t *testing.T) {
-	script := BuildICSSwitchScript("Local Area Connection* 3")
-	for _, expected := range []string{
-		"New-Object -ComObject HNetCfg.HNetShare",
-		"$tc.EnableSharing(0)",
-		"$pc.EnableSharing(1)",
-		"'Local Area Connection* 3'",
-		"'" + TunDeviceName + "'",
-		"$ErrorActionPreference='Stop'",
-	} {
-		if !strings.Contains(script, expected) {
-			t.Errorf("switch script missing %q:\n%s", expected, script)
-		}
-	}
-	// 单引号注入防护：别名里的单引号被翻倍
-	script = BuildICSSwitchScript("it's-a-conn")
-	if !strings.Contains(script, "'it''s-a-conn'") {
-		t.Fatalf("single quote must be escaped:\n%s", script)
-	}
-}
-
-// 还原脚本：每个基线条目按 guid 恢复角色；FreeV6TUN 不在基线里 → 禁用共享。
-func TestBuildICSRestoreScript(t *testing.T) {
-	sharing := []SharingSnapshot{
-		{Name: "WLAN", Guid: "{AAA}", Enabled: true, Kind: "public"},
-		{Name: "Ethernet", Guid: "{CCC}", Enabled: false, Kind: "public"},
-	}
-	script := BuildICSRestoreScript(sharing, TunDeviceName)
-	for _, expected := range []string{
-		"'{AAA}'", // guid 条目
-		"e=$true", // 原 PUBLIC
-		"t=0",
-		"'{CCC}'",
-		"e=$false", // 原未共享
-		"'" + TunDeviceName + "'",
-		"$s.DisableSharing()",
-		"$errors +=", // 单连接失败要汇总
-	} {
-		if !strings.Contains(script, expected) {
-			t.Errorf("restore script missing %q:\n%s", expected, script)
-		}
 	}
 }
 

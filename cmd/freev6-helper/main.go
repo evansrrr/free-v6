@@ -859,7 +859,7 @@ func wifiAdapterPresent(name string) bool {
 func switchHotspotTopology(ctx context.Context, privateAlias string, snapshot network.Snapshot) (*network.HotspotMeta, error) {
 	var icsErr error
 	if privateAlias != "" {
-		if _, err := network.SwitchICS(ctx, privateAlias); err == nil {
+		if err := network.SwitchICS(ctx, privateAlias); err == nil {
 			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: network.DefaultHotspotGateway}, nil
 		} else {
 			icsErr = err
