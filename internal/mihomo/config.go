@@ -194,7 +194,7 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	}
 	// device: 固定 TUN 适配器显示名，供 ICS 热点共享（internal/network/ics）
 	// 按名识别 FreeV6 的虚拟网卡，不依赖 mihomo 默认名。
-	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  device: FreeV6TUN\n  stack: mixed\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
+	fmt.Fprintf(&b, "mode: %s\n\ntun:\n  enable: true\n  device: FreeV6TUN\n  stack: mixed\n  mtu: 1280\n  auto-route: true\n  auto-detect-interface: true\n  strict-route: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n\nproxies:\n", options.Mode)
 	var names []string
 	if cloud {
 		// 校园模式：云端节点即出口，不渲染内置接入点，也不叠链式代理
