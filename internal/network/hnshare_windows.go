@@ -232,8 +232,27 @@ func hnshareSetByName(mgr *ole.IDispatch, name string, sharingType int) error {
 	return nil
 }
 
-// CaptureSharing 枚举所有连接的共享状态作为基线（COM 直调，无子进程）。
-func CaptureSharing(_ context.Context) ([]SharingSnapshot, error) {
+// CaptureSharing 枚举所有连接的共享状态作为基线。先走进程内 COM 直调
+// （快、无子进程）；COM 失败或返回空（健康机器必有多个连接，空即说明 COM
+// 路径在这台机器上坏了）时退回 PowerShell 脚本兜底，保证热点共享的基线抓取
+// 不再因为 COM 环境差异而失效。
+func CaptureSharing(ctx context.Context) ([]SharingSnapshot, error) {
+	result, comErr := captureSharingCOM()
+	if comErr == nil && len(result) > 0 {
+		return result, nil
+	}
+	ps, psErr := captureSharingPowerShell(ctx)
+	if psErr != nil {
+		if comErr != nil {
+			return nil, fmt.Errorf("capture ICS sharing state (COM: %v; PowerShell: %v)", comErr, psErr)
+		}
+		return nil, fmt.Errorf("capture ICS sharing state (COM returned empty; PowerShell: %v)", psErr)
+	}
+	return ps, nil
+}
+
+// captureSharingCOM 进程内枚举共享基线（快路径）。
+func captureSharingCOM() ([]SharingSnapshot, error) {
 	var result []SharingSnapshot
 	err := withHnshare(func(mgr *ole.IDispatch) error {
 		return hnshareEnumerate(mgr, func(_ *ole.IDispatch, c hnshareConn) error {
@@ -248,15 +267,25 @@ func CaptureSharing(_ context.Context) ([]SharingSnapshot, error) {
 		})
 	})
 	if err != nil {
-		return nil, fmt.Errorf("capture ICS sharing state: %w", err)
+		return nil, err
 	}
 	return result, nil
 }
 
-// SwitchICS 经典路径：FreeV6TUN=PUBLIC、热点私有侧=PRIVATE（COM 直调）。
+// captureSharingPowerShell 用脚本枚举共享基线（兜底路径）。
+func captureSharingPowerShell(ctx context.Context) ([]SharingSnapshot, error) {
+	output, err := runPowerShell(ctx, PowerShellSharingCaptureCommand)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePowerShellSharing(output)
+}
+
+// SwitchICS 经典路径：FreeV6TUN=PUBLIC、热点私有侧=PRIVATE。
 // 先切 TUN 再切私有侧：TUN 不存在时立即失败，不把热点私有侧留在半切换态。
-func SwitchICS(_ context.Context, privateAlias string) error {
-	return withHnshare(func(mgr *ole.IDispatch) error {
+// COM 直调失败时退回 PowerShell 脚本重试（脚本幂等，已处于目标角色则跳过）。
+func SwitchICS(ctx context.Context, privateAlias string) error {
+	comErr := withHnshare(func(mgr *ole.IDispatch) error {
 		if err := hnshareSetByName(mgr, TunDeviceName, 0); err != nil {
 			return fmt.Errorf("switch ICS topology (TUN): %w", err)
 		}
@@ -265,10 +294,30 @@ func SwitchICS(_ context.Context, privateAlias string) error {
 		}
 		return nil
 	})
+	if comErr == nil {
+		return nil
+	}
+	if _, err := runPowerShell(ctx, BuildICSSwitchScript(privateAlias)); err != nil {
+		return fmt.Errorf("switch ICS topology (COM: %v; PowerShell: %w)", comErr, err)
+	}
+	return nil
 }
 
 // RestoreICSSharing 把 ICS 共享状态还原到基线；单连接失败汇总在错误里。
-func RestoreICSSharing(_ context.Context, snapshot Snapshot) error {
+// COM 直调失败时退回 PowerShell 脚本兜底。
+func RestoreICSSharing(ctx context.Context, snapshot Snapshot) error {
+	comErr := restoreICSSharingCOM(snapshot)
+	if comErr == nil {
+		return nil
+	}
+	if psErr := restoreICSSharingPowerShell(ctx, snapshot); psErr != nil {
+		return fmt.Errorf("restore ICS sharing (COM: %v; PowerShell: %v)", comErr, psErr)
+	}
+	return nil
+}
+
+// restoreICSSharingCOM 进程内按基线还原共享角色（快路径）。
+func restoreICSSharingCOM(snapshot Snapshot) error {
 	var issues []string
 	err := withHnshare(func(mgr *ole.IDispatch) error {
 		return hnshareEnumerate(mgr, func(conn *ole.IDispatch, c hnshareConn) error {
@@ -295,10 +344,28 @@ func RestoreICSSharing(_ context.Context, snapshot Snapshot) error {
 		})
 	})
 	if err != nil {
-		return fmt.Errorf("restore ICS sharing: %w", err)
+		return err
 	}
 	if len(issues) > 0 {
-		return fmt.Errorf("restore ICS sharing: %s", strings.Join(issues, "; "))
+		return fmt.Errorf("%s", strings.Join(issues, "; "))
+	}
+	return nil
+}
+
+// restoreICSSharingPowerShell 用脚本按基线还原共享角色（兜底路径）。
+func restoreICSSharingPowerShell(ctx context.Context, snapshot Snapshot) error {
+	output, err := runPowerShell(ctx, BuildICSRestoreScript(snapshot.Sharing, TunDeviceName))
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Errors []string `json:"errors"`
+	}
+	if err := jsonUnmarshalFlexible(output, &result); err != nil {
+		return err
+	}
+	if len(result.Errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(result.Errors, "; "))
 	}
 	return nil
 }

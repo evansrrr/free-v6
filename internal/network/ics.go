@@ -96,6 +96,76 @@ func jsonUnmarshalFlexible(output []byte, target any) error {
 
 const psHeader = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
 
+// firstString 从解析出的 JSON 值里取字符串字段（容错：非字符串返回空）。
+func firstString(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+// PowerShellSharingCaptureCommand 枚举全部 HNetShare 连接的共享状态，
+// 输出 UTF-8 JSON 数组（中文网卡名依赖首行的编码设置）。它是 CaptureSharing
+// 的兜底：COM 直调（hnshare_windows.go）失败或返回空时用它恢复基线抓取。
+const PowerShellSharingCaptureCommand = psHeader + `
+$m = New-Object -ComObject HNetCfg.HNetShare
+$o = @()
+foreach ($c in $m.EnumEveryConnection) {
+  $p = $m.NetConnectionProps($c)
+  $s = $m.INetSharingConfigurationForINetConnection($c)
+  $o += [pscustomobject]@{
+    name = $p.Name; guid = $p.Guid; device = $p.DeviceName;
+    enabled = [bool]$s.SharingEnabled;
+    kind = $(if ([int]$s.SharingType -eq 0) { 'public' } else { 'private' })
+  }
+}
+ConvertTo-Json -InputObject $o -Compress`
+
+// ParsePowerShellSharing 解析共享状态抓取输出。PowerShell 对单元素数组
+// 也会输出对象，两种形状都要接受（对象或数组都按同一逻辑展开）。
+func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return nil, nil
+	}
+	var raw any
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode ICS sharing snapshot: %w", err)
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		if object, objectOK := raw.(map[string]any); objectOK {
+			items = []any{object}
+		} else {
+			return nil, fmt.Errorf("ICS sharing snapshot must be an object or array")
+		}
+	}
+	sharing := make([]SharingSnapshot, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ICS sharing snapshot item must be an object")
+		}
+		kind, _ := object["kind"].(string)
+		if kind != "public" && kind != "private" {
+			continue
+		}
+		entry := SharingSnapshot{
+			Name: firstString(object["name"]),
+			Guid: firstString(object["guid"]),
+		}
+		if entry.Name == "" && entry.Guid == "" {
+			continue
+		}
+		entry.Device = firstString(object["device"])
+		entry.Kind = kind
+		entry.Enabled, _ = object["enabled"].(bool)
+		sharing = append(sharing, entry)
+	}
+	return sharing, nil
+}
+
 // hnshareConn 是一次 HNetShare 连接枚举读到的共享状态（纯数据，与 COM 解耦，
 // 便于还原计划计算的单测）。
 type hnshareConn struct {
@@ -180,6 +250,67 @@ $already = ([string]$band.DisplayValue -eq $five)
 if (-not $already) { Set-NetAdapterAdvancedProperty -Name $wifi.Name -DisplayName $band.DisplayName -DisplayValue $five }
 ConvertTo-Json -InputObject ([pscustomobject]@{supported=$true; applied=(-not $already); already=$already; value=$five; adapter=[string]$wifi.Name}) -Compress
 `
+
+// BuildICSSwitchScript 构造经典路径（HNetShare COM）的拓扑切换脚本：
+// FreeV6TUN → PUBLIC（上游，自动取消原 PUBLIC），热点私有侧网卡 → PRIVATE。
+// 任何一步失败都以非零退出码抛错，由调用方回滚。它是 SwitchICS 的兜底，
+// 当 COM 直调失败时用脚本重试（脚本内部幂等：已处于目标角色则跳过）。
+func BuildICSSwitchScript(privateAlias string) string {
+	var b strings.Builder
+	b.WriteString(psHeader)
+	b.WriteString("\n$ErrorActionPreference='Stop'\n")
+	b.WriteString("$m = New-Object -ComObject HNetCfg.HNetShare\n")
+	b.WriteString("function Find([string]$name) { foreach ($c in $m.EnumEveryConnection) { if ($m.NetConnectionProps($c).Name -eq $name) { return $c } }; return $null }\n")
+	fmt.Fprintf(&b, "$tun = Find %s\n", psQuote(TunDeviceName))
+	fmt.Fprintf(&b, "if ($null -eq $tun) { throw %s }\n", psQuote("TUN connection "+TunDeviceName+" not found"))
+	b.WriteString("$tc = $m.INetSharingConfigurationForINetConnection($tun)\n")
+	b.WriteString("if (-not $tc.SharingEnabled -or [int]$tc.SharingType -ne 0) { if ($tc.SharingEnabled) { $tc.DisableSharing() }; $tc.EnableSharing(0) }\n")
+	fmt.Fprintf(&b, "$priv = Find %s\n", psQuote(privateAlias))
+	fmt.Fprintf(&b, "if ($null -eq $priv) { throw %s }\n", psQuote("hotspot connection '"+privateAlias+"' not found"))
+	b.WriteString("$pc = $m.INetSharingConfigurationForINetConnection($priv)\n")
+	b.WriteString("if (-not $pc.SharingEnabled -or [int]$pc.SharingType -ne 1) { if ($pc.SharingEnabled) { $pc.DisableSharing() }; $pc.EnableSharing(1) }\n")
+	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{path='ics'}) -Compress\n")
+	return b.String()
+}
+
+// BuildICSRestoreScript 构造还原脚本：按快照把每个连接恢复到原角色；
+// 快照里没有的连接只有 FreeV6TUN 会被禁用共享（会话中途新建的其他共享不碰）。
+// 单连接失败收集后以非零退出码退出，输出还原结果 JSON。它是 RestoreICSSharing
+// 的兜底，COM 直调失败时用它重试。
+func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
+	var b strings.Builder
+	b.WriteString(psHeader)
+	b.WriteString("\n$ErrorActionPreference='Stop'\n")
+	b.WriteString("$m = New-Object -ComObject HNetCfg.HNetShare\n")
+	b.WriteString("$errors = @()\n")
+	b.WriteString("$want = @(\n")
+	for _, entry := range sharing {
+		fmt.Fprintf(&b, "  [pscustomobject]@{guid=%s; name=%s; e=$%s; t=%d}\n",
+			psQuote(entry.Guid), psQuote(entry.Name), map[bool]string{true: "true", false: "false"}[entry.Enabled],
+			map[string]int{"public": 0, "private": 1}[entry.Kind])
+	}
+	b.WriteString(")\n")
+	b.WriteString("foreach ($c in $m.EnumEveryConnection) {\n")
+	b.WriteString("  $p = $m.NetConnectionProps($c)\n")
+	b.WriteString("  $s = $m.INetSharingConfigurationForINetConnection($c)\n")
+	b.WriteString("  $match = $null\n")
+	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
+	b.WriteString("  try {\n")
+	b.WriteString("    if ($null -ne $match) {\n")
+	b.WriteString("      $cur = [bool]$s.SharingEnabled\n")
+	b.WriteString("      $curT = $(if ($cur) { [int]$s.SharingType } else { -1 })\n")
+	b.WriteString("      if ($match.e -and ((-not $cur) -or $curT -ne [int]$match.t)) {\n")
+	b.WriteString("        if ($cur) { $s.DisableSharing() }\n")
+	b.WriteString("        $s.EnableSharing([int]$match.t)\n")
+	b.WriteString("      } elseif ((-not $match.e) -and $cur) { $s.DisableSharing() }\n")
+	b.WriteString("    } elseif ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled) {\n")
+	b.WriteString("      $s.DisableSharing()\n")
+	b.WriteString("    }\n")
+	b.WriteString("  } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) }\n")
+	b.WriteString("}\n")
+	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{errors=$errors}) -Compress\n")
+	return b.String()
+}
 
 // BuildWinRTSwitchScript 构造新 WDI 兜底路径：停掉现有 tethering，
 // 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游（物理 WLAN），

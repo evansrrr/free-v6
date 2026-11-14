@@ -81,6 +81,103 @@ func TestRestoreActions(t *testing.T) {
 	}
 }
 
+// 解析共享状态数组（正常形态）。
+func TestParsePowerShellSharingArray(t *testing.T) {
+	data := `[
+	  {"name":"WLAN","guid":"{AAA}","device":"Intel Wi-Fi","enabled":true,"kind":"public"},
+	  {"name":"Local Area Connection* 3","guid":"{BBB}","device":"Microsoft Wi-Fi Direct Virtual Adapter","enabled":true,"kind":"private"},
+	  {"name":"Ethernet","guid":"{CCC}","device":"Realtek","enabled":false,"kind":"public"}
+	]`
+	sharing, err := ParsePowerShellSharing([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sharing) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(sharing))
+	}
+	if sharing[0].Name != "WLAN" || !sharing[0].Enabled || sharing[0].Kind != "public" {
+		t.Fatalf("unexpected first entry: %+v", sharing[0])
+	}
+	if sharing[1].Kind != "private" || sharing[1].Guid != "{BBB}" {
+		t.Fatalf("unexpected second entry: %+v", sharing[1])
+	}
+}
+
+// PowerShell 对单元素数组输出对象 —— 单对象形态也要能解析。
+func TestParsePowerShellSharingSingleObject(t *testing.T) {
+	sharing, err := ParsePowerShellSharing([]byte(`{"name":"WLAN","guid":"{AAA}","enabled":true,"kind":"public"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sharing) != 1 || sharing[0].Name != "WLAN" {
+		t.Fatalf("unexpected result: %+v", sharing)
+	}
+}
+
+// 空输出（无共享连接）→ 空列表而不是错误。
+func TestParsePowerShellSharingEmpty(t *testing.T) {
+	sharing, err := ParsePowerShellSharing([]byte("[]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sharing) != 0 {
+		t.Fatalf("expected empty, got %+v", sharing)
+	}
+	// kind 非法的条目被丢弃，不让坏数据进入还原脚本
+	sharing, err = ParsePowerShellSharing([]byte(`{"name":"X","guid":"{X}","enabled":true,"kind":"weird"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sharing) != 0 {
+		t.Fatalf("entry with invalid kind must be dropped, got %+v", sharing)
+	}
+}
+
+// 经典切换脚本：TUN 设 PUBLIC、热点私有侧设 PRIVATE，参数正确引用。
+func TestBuildICSSwitchScript(t *testing.T) {
+	script := BuildICSSwitchScript("Local Area Connection* 3")
+	for _, expected := range []string{
+		"New-Object -ComObject HNetCfg.HNetShare",
+		"$tc.EnableSharing(0)",
+		"$pc.EnableSharing(1)",
+		"'Local Area Connection* 3'",
+		"'" + TunDeviceName + "'",
+		"$ErrorActionPreference='Stop'",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Errorf("switch script missing %q:\n%s", expected, script)
+		}
+	}
+	// 单引号注入防护：别名里的单引号被翻倍
+	script = BuildICSSwitchScript("it's-a-conn")
+	if !strings.Contains(script, "'it''s-a-conn'") {
+		t.Fatalf("single quote must be escaped:\n%s", script)
+	}
+}
+
+// 还原脚本：每个基线条目按 guid 恢复角色；FreeV6TUN 不在基线里 → 禁用共享。
+func TestBuildICSRestoreScript(t *testing.T) {
+	sharing := []SharingSnapshot{
+		{Name: "WLAN", Guid: "{AAA}", Enabled: true, Kind: "public"},
+		{Name: "Ethernet", Guid: "{CCC}", Enabled: false, Kind: "public"},
+	}
+	script := BuildICSRestoreScript(sharing, TunDeviceName)
+	for _, expected := range []string{
+		"'{AAA}'", // guid 条目
+		"e=$true", // 原 PUBLIC
+		"t=0",
+		"'{CCC}'",
+		"e=$false", // 原未共享
+		"'" + TunDeviceName + "'",
+		"$s.DisableSharing()",
+		"$errors +=", // 单连接失败要汇总
+	} {
+		if !strings.Contains(script, expected) {
+			t.Errorf("restore script missing %q:\n%s", expected, script)
+		}
+	}
+}
+
 // 从共享基线派生热点私有侧别名：只认 private 角色且处于共享中的连接。
 func TestFindHotspotPrivate(t *testing.T) {
 	sharing := []SharingSnapshot{
