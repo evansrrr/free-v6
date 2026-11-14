@@ -1,6 +1,7 @@
 package network
 
 import (
+	"strings"
 	"time"
 )
 
@@ -21,4 +22,12 @@ type InterfaceSnapshot struct {
 	IPv6DefaultGateways []string `json:"ipv6DefaultGateways"`
 	IPv4DNSServers      []string `json:"ipv4DnsServers"`
 	IPv6DNSServers      []string `json:"ipv6DnsServers"`
+}
+
+// firstString 从解析出的 JSON 值里取字符串字段（容错：非字符串返回空）。
+func firstString(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }

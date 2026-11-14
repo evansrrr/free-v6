@@ -16,9 +16,9 @@ import (
 //
 // includeSharing controls whether the ICS sharing baseline (HNetShare COM
 // enumeration) is also captured. It is only consumed by hotspot sharing, and
-// enumerating it walks every connection via COM, so callers that will not
-// switch the hotspot pass false to skip the walk. The interface baseline
-// itself is read in-process via GetAdaptersAddresses — no subprocess.
+// enumerating it costs a powershell.exe round-trip, so callers that will not
+// switch the hotspot pass false to skip it. The interface baseline itself is
+// read in-process via GetAdaptersAddresses — no subprocess.
 //
 // Three attempts with backoff absorb the transient adapter churn seen on cold
 // boot (old FreeV6TUN disappearing, virtual/hotspot adapters hot-plugging), the

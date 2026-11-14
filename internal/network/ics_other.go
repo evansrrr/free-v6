@@ -15,8 +15,8 @@ func EnsureHotspot5GHz(context.Context) (HotspotBandResult, error) {
 	return HotspotBandResult{}, ErrWindowsOnly
 }
 
-func SwitchICS(context.Context, string) error {
-	return ErrWindowsOnly
+func SwitchICS(context.Context, string) (string, error) {
+	return "", ErrWindowsOnly
 }
 
 func SwitchWinRT(context.Context) (string, error) {

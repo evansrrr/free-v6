@@ -96,17 +96,8 @@ func jsonUnmarshalFlexible(output []byte, target any) error {
 
 const psHeader = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
 
-// firstString 从解析出的 JSON 值里取字符串字段（容错：非字符串返回空）。
-func firstString(value any) string {
-	if text, ok := value.(string); ok {
-		return strings.TrimSpace(text)
-	}
-	return ""
-}
-
 // PowerShellSharingCaptureCommand 枚举全部 HNetShare 连接的共享状态，
-// 输出 UTF-8 JSON 数组（中文网卡名依赖首行的编码设置）。它是 CaptureSharing
-// 的兜底：COM 直调（hnshare_windows.go）失败或返回空时用它恢复基线抓取。
+// 输出 UTF-8 JSON 数组（中文网卡名依赖首行的编码设置）。
 const PowerShellSharingCaptureCommand = psHeader + `
 $m = New-Object -ComObject HNetCfg.HNetShare
 $o = @()
@@ -166,68 +157,6 @@ func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 	return sharing, nil
 }
 
-// hnshareConn 是一次 HNetShare 连接枚举读到的共享状态（纯数据，与 COM 解耦，
-// 便于还原计划计算的单测）。
-type hnshareConn struct {
-	name    string
-	guid    string
-	device  string
-	enabled bool
-	kind    string // "public" | "private"
-}
-
-// restoreAction 描述对一个连接要执行的一次共享操作。
-type restoreAction int
-
-const (
-	restoreNone    restoreAction = iota
-	restoreDisable               // DisableSharing
-	restoreEnablePublic          // EnableSharing(0)
-	restoreEnablePrivate         // EnableSharing(1)
-)
-
-// kindToEnable 把共享角色映射成对应的 EnableSharing 动作。
-func kindToEnable(kind string) restoreAction {
-	if kind == "private" {
-		return restoreEnablePrivate
-	}
-	return restoreEnablePublic
-}
-
-// restoreActions 计算一个当前连接要执行的还原动作序列（可能为空）。
-// 规则与原 PowerShell 还原脚本一致：
-//   · baseline 里有该 guid → 恢复到基线状态（enabled + kind）；
-//   · baseline 里没有、且是 TUN（按名匹配）→ 若当前共享则禁用；
-//   · 其它 → 不动（会话中途新建的其他共享不碰）。
-func restoreActions(c hnshareConn, baseline []SharingSnapshot, tunName string) []restoreAction {
-	var target *SharingSnapshot
-	for i := range baseline {
-		if baseline[i].Guid != "" && baseline[i].Guid == c.guid {
-			target = &baseline[i]
-			break
-		}
-	}
-	if target != nil {
-		if target.Enabled {
-			if !c.enabled {
-				return []restoreAction{kindToEnable(target.Kind)}
-			}
-			if c.kind != target.Kind {
-				return []restoreAction{restoreDisable, kindToEnable(target.Kind)}
-			}
-			return nil
-		}
-		if c.enabled {
-			return []restoreAction{restoreDisable}
-		}
-		return nil
-	}
-	if c.name == tunName && c.enabled {
-		return []restoreAction{restoreDisable}
-	}
-	return nil
-}
-
 // PowerShellEnsure5GHzCommand 探测活动 Wi-Fi 网卡的频段偏好高级属性，并在
 // 存在 5GHz 选项时幂等地把它设为「优先 5GHz」。属性名/显示值因厂商而异
 // （Intel/部分 Realtek 叫 "Preferred Band"，值形如 "3. Prefer 5GHz band"），
@@ -253,8 +182,7 @@ ConvertTo-Json -InputObject ([pscustomobject]@{supported=$true; applied=(-not $a
 
 // BuildICSSwitchScript 构造经典路径（HNetShare COM）的拓扑切换脚本：
 // FreeV6TUN → PUBLIC（上游，自动取消原 PUBLIC），热点私有侧网卡 → PRIVATE。
-// 任何一步失败都以非零退出码抛错，由调用方回滚。它是 SwitchICS 的兜底，
-// 当 COM 直调失败时用脚本重试（脚本内部幂等：已处于目标角色则跳过）。
+// 任何一步失败都以非零退出码抛错，由调用方回滚。
 func BuildICSSwitchScript(privateAlias string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
@@ -275,8 +203,7 @@ func BuildICSSwitchScript(privateAlias string) string {
 
 // BuildICSRestoreScript 构造还原脚本：按快照把每个连接恢复到原角色；
 // 快照里没有的连接只有 FreeV6TUN 会被禁用共享（会话中途新建的其他共享不碰）。
-// 单连接失败收集后以非零退出码退出，输出还原结果 JSON。它是 RestoreICSSharing
-// 的兜底，COM 直调失败时用它重试。
+// 单连接失败收集后以非零退出码退出，输出还原结果 JSON。
 func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)

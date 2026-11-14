@@ -39,48 +39,6 @@ func mihomoTunDevice(t *testing.T) string {
 	return strings.TrimSpace(rest)
 }
 
-// restoreActions：按基线恢复连接角色，规则与原还原脚本一致。
-func TestRestoreActions(t *testing.T) {
-	baseline := []SharingSnapshot{
-		{Name: "WLAN", Guid: "{AAA}", Enabled: true, Kind: "public"},
-		{Name: "Ethernet", Guid: "{CCC}", Enabled: false, Kind: "public"},
-		{Name: "Private", Guid: "{BBB}", Enabled: true, Kind: "private"},
-	}
-
-	// 基线 public，当前已 public → 无操作
-	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 0 {
-		t.Fatalf("already matching must be no-op, got %v", got)
-	}
-	// 基线 public，当前 private → 禁用再启用 public
-	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: true, kind: "private"}, baseline, TunDeviceName); len(got) != 2 || got[0] != restoreDisable || got[1] != restoreEnablePublic {
-		t.Fatalf("kind change must disable+enable, got %v", got)
-	}
-	// 基线 public，当前未共享 → 启用 public
-	if got := restoreActions(hnshareConn{guid: "{AAA}", enabled: false}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreEnablePublic {
-		t.Fatalf("disabled must re-enable public, got %v", got)
-	}
-	// 基线未共享，当前共享 → 禁用
-	if got := restoreActions(hnshareConn{guid: "{CCC}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreDisable {
-		t.Fatalf("enabled must disable, got %v", got)
-	}
-	// 基线 private，当前 public → 禁用再启用 private
-	if got := restoreActions(hnshareConn{guid: "{BBB}", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 2 || got[0] != restoreDisable || got[1] != restoreEnablePrivate {
-		t.Fatalf("private restore must disable+enable private, got %v", got)
-	}
-	// 基线无此 guid 且是 TUN 且当前共享 → 禁用
-	if got := restoreActions(hnshareConn{guid: "{TUN}", name: TunDeviceName, enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 1 || got[0] != restoreDisable {
-		t.Fatalf("stray TUN must disable, got %v", got)
-	}
-	// 基线无此 guid 且非 TUN 且当前共享 → 不动
-	if got := restoreActions(hnshareConn{guid: "{OTHER}", name: "Other", enabled: true, kind: "public"}, baseline, TunDeviceName); len(got) != 0 {
-		t.Fatalf("unrelated connection must be untouched, got %v", got)
-	}
-	// 基线无此 guid 且是 TUN 但未共享 → 不动
-	if got := restoreActions(hnshareConn{guid: "{TUN2}", name: TunDeviceName, enabled: false}, baseline, TunDeviceName); len(got) != 0 {
-		t.Fatalf("disabled stray TUN must be no-op, got %v", got)
-	}
-}
-
 // 解析共享状态数组（正常形态）。
 func TestParsePowerShellSharingArray(t *testing.T) {
 	data := `[
@@ -133,6 +91,27 @@ func TestParsePowerShellSharingEmpty(t *testing.T) {
 	}
 }
 
+// 从共享基线派生热点私有侧别名：只认 private 角色且处于共享中的连接。
+func TestFindHotspotPrivate(t *testing.T) {
+	sharing := []SharingSnapshot{
+		{Name: "WLAN", Kind: "public", Enabled: true},
+		{Name: "Local Area Connection* 3", Kind: "private", Enabled: true},
+		{Name: "Ethernet", Kind: "public", Enabled: false},
+	}
+	if got := FindHotspotPrivate(sharing); got != "Local Area Connection* 3" {
+		t.Fatalf("expected private adapter name, got %q", got)
+	}
+	// 私有侧未共享 → 视为未找到（热点未开）
+	sharing[1].Enabled = false
+	if got := FindHotspotPrivate(sharing); got != "" {
+		t.Fatalf("expected empty when private side not enabled, got %q", got)
+	}
+	// 空基线
+	if got := FindHotspotPrivate(nil); got != "" {
+		t.Fatalf("expected empty for nil baseline, got %q", got)
+	}
+}
+
 // 经典切换脚本：TUN 设 PUBLIC、热点私有侧设 PRIVATE，参数正确引用。
 func TestBuildICSSwitchScript(t *testing.T) {
 	script := BuildICSSwitchScript("Local Area Connection* 3")
@@ -175,27 +154,6 @@ func TestBuildICSRestoreScript(t *testing.T) {
 		if !strings.Contains(script, expected) {
 			t.Errorf("restore script missing %q:\n%s", expected, script)
 		}
-	}
-}
-
-// 从共享基线派生热点私有侧别名：只认 private 角色且处于共享中的连接。
-func TestFindHotspotPrivate(t *testing.T) {
-	sharing := []SharingSnapshot{
-		{Name: "WLAN", Kind: "public", Enabled: true},
-		{Name: "Local Area Connection* 3", Kind: "private", Enabled: true},
-		{Name: "Ethernet", Kind: "public", Enabled: false},
-	}
-	if got := FindHotspotPrivate(sharing); got != "Local Area Connection* 3" {
-		t.Fatalf("expected private adapter name, got %q", got)
-	}
-	// 私有侧未共享 → 视为未找到（热点未开）
-	sharing[1].Enabled = false
-	if got := FindHotspotPrivate(sharing); got != "" {
-		t.Fatalf("expected empty when private side not enabled, got %q", got)
-	}
-	// 空基线
-	if got := FindHotspotPrivate(nil); got != "" {
-		t.Fatalf("expected empty for nil baseline, got %q", got)
 	}
 }
 
