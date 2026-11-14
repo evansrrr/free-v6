@@ -11,8 +11,8 @@ func CaptureSharing(context.Context) ([]SharingSnapshot, error) {
 	return nil, ErrWindowsOnly
 }
 
-func DetectHotspot(context.Context) (HotspotStatus, error) {
-	return HotspotStatus{}, ErrWindowsOnly
+func EnsureHotspot5GHz(context.Context) (HotspotBandResult, error) {
+	return HotspotBandResult{}, ErrWindowsOnly
 }
 
 func SwitchICS(context.Context, string) (string, error) {

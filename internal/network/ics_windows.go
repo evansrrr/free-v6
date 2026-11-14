@@ -29,13 +29,19 @@ func CaptureSharing(ctx context.Context) ([]SharingSnapshot, error) {
 	return ParsePowerShellSharing(output)
 }
 
-// DetectHotspot 探测移动热点是否在运行，并返回经典路径所需的私有侧网卡名。
-func DetectHotspot(ctx context.Context) (HotspotStatus, error) {
-	output, err := runPowerShell(ctx, BuildHotspotDetectCommand())
+// EnsureHotspot5GHz 探测活动 Wi-Fi 网卡的频段偏好，存在 5GHz 选项时幂等地
+// 设为「优先 5GHz」（持久化到网卡驱动配置）。不支持/无网卡时返回
+// Supported=false 或 error，调用方据此降级，不阻断热点共享本身。
+func EnsureHotspot5GHz(ctx context.Context) (HotspotBandResult, error) {
+	output, err := runPowerShell(ctx, PowerShellEnsure5GHzCommand)
 	if err != nil {
-		return HotspotStatus{}, fmt.Errorf("detect hotspot: %w", err)
+		return HotspotBandResult{}, fmt.Errorf("ensure 5GHz hotspot: %w", err)
 	}
-	return ParseHotspotStatus(output)
+	var result HotspotBandResult
+	if err := jsonUnmarshalFlexible(output, &result); err != nil {
+		return HotspotBandResult{}, fmt.Errorf("decode 5GHz hotspot result: %w", err)
+	}
+	return result, nil
 }
 
 // SwitchICS 经典路径：FreeV6TUN=PUBLIC、热点私有侧=PRIVATE。
@@ -52,6 +58,9 @@ func SwitchICS(ctx context.Context, privateAlias string) (string, error) {
 func SwitchWinRT(ctx context.Context) (string, error) {
 	output, err := runPowerShell(ctx, BuildWinRTSwitchScript())
 	if err != nil {
+		if strings.Contains(string(output), "移动热点未处于运行状态") {
+			return "", ErrHotspotNotRunning
+		}
 		return "", fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
 	}
 	var result struct {

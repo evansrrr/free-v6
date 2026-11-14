@@ -91,24 +91,24 @@ func TestParsePowerShellSharingEmpty(t *testing.T) {
 	}
 }
 
-// 探测脚本要带上网关地址参数，输出解析要覆盖两种形态。
-func TestBuildHotspotDetectCommandAndParse(t *testing.T) {
-	cmd := BuildHotspotDetectCommand()
-	if !strings.Contains(cmd, "'"+DefaultHotspotGateway+"'") {
-		t.Fatalf("detect command must embed gateway literal:\n%s", cmd)
+// 从共享基线派生热点私有侧别名：只认 private 角色且处于共享中的连接。
+func TestFindHotspotPrivate(t *testing.T) {
+	sharing := []SharingSnapshot{
+		{Name: "WLAN", Kind: "public", Enabled: true},
+		{Name: "Local Area Connection* 3", Kind: "private", Enabled: true},
+		{Name: "Ethernet", Kind: "public", Enabled: false},
 	}
-	status, err := ParseHotspotStatus([]byte(`{"active":true,"privateAlias":"Local Area Connection* 3","privateIP":"192.168.137.1","tethering":false}`))
-	if err != nil {
-		t.Fatal(err)
+	if got := FindHotspotPrivate(sharing); got != "Local Area Connection* 3" {
+		t.Fatalf("expected private adapter name, got %q", got)
 	}
-	if !status.Active || status.PrivateAlias == "" || status.PrivateIP != DefaultHotspotGateway {
-		t.Fatalf("unexpected status: %+v", status)
+	// 私有侧未共享 → 视为未找到（热点未开）
+	sharing[1].Enabled = false
+	if got := FindHotspotPrivate(sharing); got != "" {
+		t.Fatalf("expected empty when private side not enabled, got %q", got)
 	}
-	if _, err := ParseHotspotStatus([]byte("")); err == nil {
-		t.Fatal("empty detect output must be an error")
-	}
-	if _, err := ParseHotspotStatus([]byte("not json")); err == nil {
-		t.Fatal("garbage detect output must be an error")
+	// 空基线
+	if got := FindHotspotPrivate(nil); got != "" {
+		t.Fatalf("expected empty for nil baseline, got %q", got)
 	}
 }
 

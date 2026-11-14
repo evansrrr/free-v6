@@ -12,6 +12,7 @@ const state = {
   autoRunProxy: false,
   hotkeyEnabled: false,
   hotspotShare: false,
+  prefer5GHzHotspot: true,
   // /status 下报的热点共享运行态（下降沿弹“下次生效”提示用）
   hotspotActive: false,
   // FAB 忙碌指示：'starting'|'stopping' 期间 setRunning 不覆盖按钮文字
@@ -433,6 +434,7 @@ async function startProxyFlow(auto = false) {
 // 失败记错误日志并展开日志界面（自动启动时先把主窗口叫出来）。
 function reportHotspotResult(hs, auto = false) {
   if (!hs) return;
+  reportBandResult(hs.band);
   if (hs.applied) {
     state.hotspotActive = true;
     // restarted（WinRT 路径）会重启热点，明确记入日志；经典路径只切共享角色。
@@ -450,6 +452,27 @@ function reportHotspotResult(hs, auto = false) {
     $('#scrim')?.classList.add('open');
   }
   // disabled → 静默
+}
+
+// 优先 5GHz 频段偏好的探测/设置结果（独立于拓扑切换，失败非阻断）。
+function reportBandResult(band) {
+  if (!band) return;
+  if (band.verified) return; // 已在当前网卡校验过，静默
+  if (band.applied) {
+    addLog(band.value ? `已将热点网卡设为优先 5GHz（${band.value}）` : '已将热点网卡设为优先 5GHz');
+    return;
+  }
+  if (band.already) {
+    addLog('热点网卡已是 5GHz 频段');
+    return;
+  }
+  if (band.supported === false) {
+    addLog('此网卡不支持 5GHz 热点偏好，手机吞吐将受 2.4GHz 限制');
+    return;
+  }
+  if (band.error) {
+    addLog(`设置 5GHz 热点偏好失败: ${band.error}`, true);
+  }
 }
 
 // 手动启动失败：按原因给出引导弹窗与日志（自动运行的失败见 autoRunFail）
@@ -1136,7 +1159,7 @@ function persistSettings() {
   };
   if (!state.helperOnline) return fail('helper 未连接，设置未保存');
   settingsWriteGen += 1;
-  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, chainEnabled: state.chain.enabled, cloudEnabled: state.cloud.enabled }) })
+  return api('/settings', { method: 'PUT', body: JSON.stringify({ mode: state.mode, campusCidrs: state.cidrs, devMode: state.devMode, autoStart: state.autoStart, silentStart: state.silentStart, autoRunProxy: state.autoRunProxy, hotkeyEnabled: state.hotkeyEnabled, hotspotShare: state.hotspotShare, prefer5GHzHotspot: state.prefer5GHzHotspot, chainEnabled: state.chain.enabled, cloudEnabled: state.cloud.enabled }) })
     .then(() => { settingsWriteGen += 1; addLog('设置已保存'); return true; })
     .catch((e) => { settingsWriteGen += 1; return fail(`保存设置失败: ${e.message}`); });
 }
@@ -1925,13 +1948,15 @@ async function pollStatus() {
       const nextAutoRunProxy = typeof status.settings?.autoRunProxy === 'boolean' ? status.settings.autoRunProxy : state.autoRunProxy;
       const nextHotkeyEnabled = typeof status.settings?.hotkeyEnabled === 'boolean' ? status.settings.hotkeyEnabled : state.hotkeyEnabled;
       const nextHotspotShare = typeof status.settings?.hotspotShare === 'boolean' ? status.settings.hotspotShare : state.hotspotShare;
-      if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled || nextHotspotShare !== state.hotspotShare) {
+      const nextPrefer5GHz = typeof status.settings?.prefer5GHzHotspot === 'boolean' ? status.settings.prefer5GHzHotspot : state.prefer5GHzHotspot;
+      if (nextDevMode !== state.devMode || nextAutoStart !== state.autoStart || nextSilentStart !== state.silentStart || nextAutoRunProxy !== state.autoRunProxy || nextHotkeyEnabled !== state.hotkeyEnabled || nextHotspotShare !== state.hotspotShare || nextPrefer5GHz !== state.prefer5GHzHotspot) {
         state.devMode = nextDevMode;
         state.autoStart = nextAutoStart;
         state.silentStart = nextSilentStart;
         state.autoRunProxy = nextAutoRunProxy;
         state.hotkeyEnabled = nextHotkeyEnabled;
         state.hotspotShare = nextHotspotShare;
+        state.prefer5GHzHotspot = nextPrefer5GHz;
         updateSettingsUI();
       }
     }
@@ -2496,6 +2521,8 @@ function updateSettingsUI() {
   if (hotkeySwitch) hotkeySwitch.selected = state.hotkeyEnabled;
   const hotspotSwitch = $('#hotspotShareSwitch');
   if (hotspotSwitch) hotspotSwitch.selected = state.hotspotShare;
+  const prefer5GHzSwitch = $('#prefer5GHzSwitch');
+  if (prefer5GHzSwitch) prefer5GHzSwitch.selected = state.prefer5GHzHotspot;
   const dynSwitch = $('#dynamicColorSwitch');
   if (dynSwitch) dynSwitch.selected = state.dynamicColor;
   const oledSwitch = $('#pureBlackSwitch');
@@ -3020,6 +3047,22 @@ function wireSettingsEvents() {
       return;
     }
     addLog(next ? '已开启共享移动热点' : '已关闭共享移动热点');
+    notifyEffectiveNextStart(saved);
+  });
+
+  // 优先 5GHz 热点 —— 运行中改动下次启动生效；保存失败拨回开关。
+  $('#prefer5GHzSwitch')?.addEventListener('change', async (e) => {
+    const next = e.target.selected;
+    const previous = state.prefer5GHzHotspot;
+    if (next === previous) return;
+    state.prefer5GHzHotspot = next;
+    const saved = await persistSettings();
+    if (!saved) {
+      state.prefer5GHzHotspot = previous;
+      e.target.selected = previous;
+      return;
+    }
+    addLog(next ? '已开启优先 5GHz 热点' : '已关闭优先 5GHz 热点');
     notifyEffectiveNextStart(saved);
   });
 

@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -37,12 +38,33 @@ type HotspotMeta struct {
 	OriginalProfile string `json:"originalProfile,omitempty"` // winrt 路径：切换前的上游连接配置
 }
 
-// HotspotStatus 是 DetectHotspot 的探测结果。
-type HotspotStatus struct {
-	Active       bool   `json:"active"`
-	PrivateAlias string `json:"privateAlias"` // 持有 ICS 网关地址的网卡显示名（经典路径）
-	PrivateIP    string `json:"privateIP"`
-	Tethering    bool   `json:"tethering"` // WinRT tethering 处于 On
+// ErrHotspotNotRunning 表示移动热点当前未运行。WinRT 切换脚本在热点关闭时
+// 直接抛错；SwitchWinRT 把该情形归一化为本哨兵，供调用方映射为软性的
+// "not-running" 结果（区别于真正的失败）。
+var ErrHotspotNotRunning = errors.New("mobile hotspot not running")
+
+// FindHotspotPrivate 返回共享基线里「热点私有侧」连接的显示名（ICS 的
+// private 角色且处于共享中）。它直接复用 CaptureSharing 抓到的
+// NetConnectionProps.Name，与 SwitchICS 脚本按名匹配的目标一致，因此比旧的
+// Get-NetIPAddress InterfaceAlias 探测更准确，也省掉一次 PowerShell 冷启动。
+// 找不到（热点未开、或新 WDI 驱动无独立虚拟适配器）时返回空串。
+func FindHotspotPrivate(sharing []SharingSnapshot) string {
+	for _, entry := range sharing {
+		if entry.Kind == "private" && entry.Enabled && entry.Name != "" {
+			return entry.Name
+		}
+	}
+	return ""
+}
+
+// HotspotBandResult 是优先 5GHz 探测/设置的结果。
+type HotspotBandResult struct {
+	Supported bool   `json:"supported"`         // 网卡存在可写的 5GHz 频段偏好属性
+	Applied   bool   `json:"applied"`           // 本次把频段偏好改成了 5GHz
+	Already   bool   `json:"already"`           // 已是 5GHz，无需改动
+	Reason    string `json:"reason,omitempty"`  // 不支持时的原因
+	Value     string `json:"value,omitempty"`   // 设置的 5GHz 显示值
+	Adapter   string `json:"adapter,omitempty"` // Wi-Fi 网卡名
 }
 
 // psQuote 把字符串包成 PowerShell 单引号字面量（内部单引号翻倍）。
@@ -135,43 +157,28 @@ func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 	return sharing, nil
 }
 
-// PowerShellHotspotDetectCommand 探测移动热点是否在运行：
-//  1. 经典信号：ICS 网关地址（192.168.137.1）落在某块网卡上；
-//  2. 新 WDI 兜底：WinRT NetworkOperatorTetheringManager.TetheringState == On。
-const PowerShellHotspotDetectCommand = psHeader + `
-$ErrorActionPreference='SilentlyContinue'
-$active=$false; $alias=''; $ip=''; $tether=$false
-$a = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq %s } | Select-Object -First 1
-if ($null -ne $a) { $active=$true; $alias=[string]$a.InterfaceAlias; $ip=[string]$a.IPAddress }
-try {
-  $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
-  $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
-  foreach ($p in $ni::GetConnectionProfiles()) {
-    try {
-      $mgr=$tm::CreateFromConnectionProfile($p)
-      if ([string]$mgr.TetheringState -eq 'On') { $tether=$true; $active=$true; break }
-    } catch {}
-  }
-} catch {}
-ConvertTo-Json -InputObject ([pscustomobject]@{active=$active; privateAlias=$alias; privateIP=$ip; tethering=$tether}) -Compress`
-
-// BuildHotspotDetectCommand 返回带网关地址参数的探测脚本。
-func BuildHotspotDetectCommand() string {
-	return fmt.Sprintf(PowerShellHotspotDetectCommand, psQuote(DefaultHotspotGateway))
+// PowerShellEnsure5GHzCommand 探测活动 Wi-Fi 网卡的频段偏好高级属性，并在
+// 存在 5GHz 选项时幂等地把它设为「优先 5GHz」。属性名/显示值因厂商而异
+// （Intel/部分 Realtek 叫 "Preferred Band"，值形如 "3. Prefer 5GHz band"），
+// 因此按 ValidDisplayValues 是否含 5GHz 动态定位，而非硬编码关键字。
+// 输出 UTF-8 JSON。此脚本是一次性/幂等设置，不是每轮询热路径。
+const PowerShellEnsure5GHzCommand = psHeader + `
+$ErrorActionPreference='Stop'
+$wifi = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.MediaType -match '802.11' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|802.11') } | Select-Object -First 1
+if ($null -eq $wifi) { throw 'no active Wi-Fi adapter' }
+$band = $null; $five = $null
+foreach ($p in (Get-NetAdapterAdvancedProperty -Name $wifi.Name -ErrorAction SilentlyContinue)) {
+  $v = @($p.ValidDisplayValues) | Where-Object { $_ -match '5' -and $_ -match 'GHz' } | Select-Object -First 1
+  if ($null -ne $v) { $band = $p; $five = [string]$v; break }
 }
-
-// ParseHotspotStatus 解析探测输出。
-func ParseHotspotStatus(data []byte) (HotspotStatus, error) {
-	var status HotspotStatus
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
-		return status, fmt.Errorf("hotspot detect produced no output")
-	}
-	if err := json.Unmarshal([]byte(trimmed), &status); err != nil {
-		return status, fmt.Errorf("decode hotspot detect: %w", err)
-	}
-	return status, nil
+if ($null -eq $band) {
+  ConvertTo-Json -InputObject ([pscustomobject]@{supported=$false; reason='no 5GHz band option'; adapter=[string]$wifi.Name}) -Compress
+  exit 0
 }
+$already = ([string]$band.DisplayValue -eq $five)
+if (-not $already) { Set-NetAdapterAdvancedProperty -Name $wifi.Name -DisplayName $band.DisplayName -DisplayValue $five }
+ConvertTo-Json -InputObject ([pscustomobject]@{supported=$true; applied=(-not $already); already=$already; value=$five; adapter=[string]$wifi.Name}) -Compress
+`
 
 // BuildICSSwitchScript 构造经典路径（HNetShare COM）的拓扑切换脚本：
 // FreeV6TUN → PUBLIC（上游，自动取消原 PUBLIC），热点私有侧网卡 → PRIVATE。
@@ -237,10 +244,10 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 // 新上游启动失败时在脚本内回滚重启原上游，回滚结果写进错误消息。
 //
 // 成败判定是双层的，任何一层可用即可：优先 TetheringState（读到非空值），
-// 投影读空的机器退回热点网关 IP 探测（与 DetectHotspot 同一信号，已在
-// 故障机验证可用）。绝不读异步 op 的 .Status/GetResults —— 部分机器上
-// 该属性为空，曾把进行中的启动误判为“未完成”的假失败。定位 tunP/原上游
-// 必须在任何停止动作之前完成。
+// 投影读空的机器退回热点网关 IP 探测（与 ICS 网关地址 192.168.137.1 同一
+// 信号，已在故障机验证可用）。绝不读异步 op 的 .Status/GetResults —— 部分
+// 机器上该属性为空，曾把进行中的启动误判为“未完成”的假失败。定位 tunP/原
+// 上游必须在任何停止动作之前完成。
 func BuildWinRTSwitchScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'

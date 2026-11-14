@@ -70,6 +70,14 @@ type settings struct {
 	// 切到 FreeV6 TUN（ICS 拓扑切换），热点设备走电脑的代理出口，
 	// 停止免流自动还原；默认关闭。
 	HotspotShare bool `json:"hotspotShare"`
+	// 优先 5GHz 热点（设置 → 通用）：启动热点共享时，若 Wi-Fi 网卡支持，
+	// 把 Windows 移动热点偏好到 5GHz 频段以提升热点设备的吞吐；默认开启。
+	// 属性名/值因网卡厂商而异，动态探测、不支持时静默降级（不阻断共享）。
+	Prefer5GHzHotspot bool `json:"prefer5GHzHotspot"`
+	// Prefer5GHzVerified 记录已校验过频段偏好的 Wi-Fi 网卡名：下次启动热点
+	// 共享时若网卡未变则跳过重复探测，避免每次启动都冷启一次 PowerShell。
+	// 由 helper 维护，GUI PUT 永不携带。
+	Prefer5GHzVerified string `json:"prefer5GHzVerified,omitempty"`
 	// 链式代理（设置 → 核心）：来源与开关由 /api/v1/chain-proxy 端点维护。
 	// GUI 的 settings PUT 不携带这些键 —— 必须「省略即保留」，否则每次
 	// 保存设置都会悄悄关掉链式、把出口切回裸 WARP。
@@ -102,7 +110,7 @@ func defaultCampusCIDRs() []string {
 }
 
 func defaultSettings() settings {
-	return settings{Mode: mihomo.ModeRule, CampusCIDRs: defaultCampusCIDRs(), Blacklist: []string{}}
+	return settings{Mode: mihomo.ModeRule, CampusCIDRs: defaultCampusCIDRs(), Blacklist: []string{}, Prefer5GHzHotspot: true}
 }
 
 func main() {
@@ -423,6 +431,12 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if !jsonKeyPresent(body, "hotspotShare") {
 			current.HotspotShare = persisted.HotspotShare
 		}
+		// 同上：省略 prefer5GHzHotspot 时保留存储值。prefer5GHzVerified 由
+		// helper 维护、GUI PUT 永不携带，始终以存储值为准。
+		if !jsonKeyPresent(body, "prefer5GHzHotspot") {
+			current.Prefer5GHzHotspot = persisted.Prefer5GHzHotspot
+		}
+		current.Prefer5GHzVerified = persisted.Prefer5GHzVerified
 		// 同上：sourceType/sourceUrl 只由 chain-proxy 端点维护、主 PUT 永远
 		// 省略；chainEnabled 由主 PUT 携带当前值。三者「省略即保留」，防
 		// 外部部分 PUT 把导入状态清掉、悄悄把出口切回裸 WARP。
@@ -713,10 +727,13 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if storeErr != nil {
 		stored = defaultSettings()
 	}
-	_ = h.saveSettings(mergeStartSettings(stored, input))
+	merged := mergeStartSettings(stored, input)
+	_ = h.saveSettings(merged)
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
-	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
+	// 传合并后的设置，让「优先 5GHz」的网卡校验标记回写时不覆盖本次启动
+	// 的 mode/cidrs/devMode。
+	hotspotResult := h.applyHotspotShare(snapshot, snapshotPath, merged)
 	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret})
 }
 
@@ -751,33 +768,33 @@ func healLeftoverSnapshot(snapshotPath string) {
 // 热点未运行 → not-running；切换失败 → 回滚基线并返回 failed。成功时把
 // Hotspot 元数据写回快照，供 /status 探测与停止免流时还原。任何失败都只
 // 体现在返回值里，不影响免流本身（非阻断决策）。
-func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled bool) map[string]any {
-	if !enabled {
+func (h *helper) applyHotspotShare(snapshot network.Snapshot, snapshotPath string, stored settings) map[string]any {
+	if !stored.HotspotShare {
 		return map[string]any{"applied": false, "reason": "disabled"}
 	}
 	if len(snapshot.Sharing) == 0 {
 		return map[string]any{"applied": false, "reason": "failed", "error": "未取到 ICS 共享基线，无法安全切换"}
 	}
-	// 探测/切换用独立超时（Background 而非请求上下文）：客户端断开也不能
-	// 把系统留在半切换状态。
-	detectCtx, detectCancel := context.WithTimeout(context.Background(), icsDetectTimeout)
-	status, err := network.DetectHotspot(detectCtx)
-	detectCancel()
-	if err != nil {
-		return map[string]any{"applied": false, "reason": "failed", "error": err.Error()}
-	}
-	if !status.Active {
-		return map[string]any{"applied": false, "reason": "not-running"}
-	}
+	// 优先 5GHz：先探测/设置网卡频段偏好（幂等、持久化），再切拓扑。
+	// 结果随响应带回前端；失败只降级，不阻断热点共享本身。
+	band := h.ensurePrefer5GHz(&stored)
+	// 热点私有侧别名直接取自共享基线（NetConnectionProps.Name），不再为
+	// 探测单独冷启一次 PowerShell；找不到时由 WinRT 路径自行判「未运行」。
+	privateAlias := network.FindHotspotPrivate(snapshot.Sharing)
+	// 切换用独立超时（Background 而非请求上下文）：客户端断开也不能把
+	// 系统留在半切换状态。
 	switchCtx, switchCancel := context.WithTimeout(context.Background(), icsOpTimeout)
 	defer switchCancel()
-	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
+	meta, switchErr := switchHotspotTopology(switchCtx, privateAlias, snapshot)
 	if switchErr != nil {
+		if errors.Is(switchErr, network.ErrHotspotNotRunning) {
+			return map[string]any{"applied": false, "reason": "not-running", "band": band}
+		}
 		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
-			return map[string]any{"applied": false, "reason": "failed",
+			return map[string]any{"applied": false, "reason": "failed", "band": band,
 				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
 		}
-		return map[string]any{"applied": false, "reason": "failed", "error": switchErr.Error()}
+		return map[string]any{"applied": false, "reason": "failed", "band": band, "error": switchErr.Error()}
 	}
 	snapshot.Hotspot = meta
 	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
@@ -786,20 +803,64 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 			_ = network.RestoreWinRT(switchCtx, meta.OriginalProfile)
 		}
 		_ = network.RestoreICSSharing(switchCtx, snapshot)
-		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
+		return map[string]any{"applied": false, "reason": "failed", "band": band, "error": "保存热点共享状态: " + err.Error()}
 	}
 	// restarted=true 表示本路径重启过移动热点（WinRT 路径必然 stop→start），
 	// 前端据此把“热点短暂断开”作为预期事件记入日志而不是当成故障。
-	return map[string]any{"applied": true, "path": meta.Path, "restarted": meta.Path == "winrt"}
+	return map[string]any{"applied": true, "path": meta.Path, "restarted": meta.Path == "winrt", "band": band}
+}
+
+// ensurePrefer5GHz 在「优先 5GHz」开启时探测/设置 Wi-Fi 网卡的频段偏好。
+// 已在当前网卡上校验过则跳过（持久标记），避免每次启动都冷启一次
+// PowerShell；网卡变更后会自动重验。
+func (h *helper) ensurePrefer5GHz(stored *settings) any {
+	if !stored.Prefer5GHzHotspot {
+		return nil
+	}
+	if stored.Prefer5GHzVerified != "" && wifiAdapterPresent(stored.Prefer5GHzVerified) {
+		return map[string]any{"verified": true}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), icsDetectTimeout)
+	result, err := network.EnsureHotspot5GHz(ctx)
+	cancel()
+	if err != nil {
+		return map[string]any{"applied": false, "error": err.Error()}
+	}
+	out := map[string]any{"supported": result.Supported, "applied": result.Applied, "already": result.Already}
+	if result.Reason != "" {
+		out["reason"] = result.Reason
+	}
+	if result.Value != "" {
+		out["value"] = result.Value
+	}
+	if result.Adapter != "" {
+		stored.Prefer5GHzVerified = result.Adapter
+		_ = h.saveSettings(*stored)
+	}
+	return out
+}
+
+// wifiAdapterPresent 判断给定网卡名是否仍存在于本机（无子进程探测）。
+func wifiAdapterPresent(name string) bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if strings.EqualFold(strings.TrimSpace(iface.Name), strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
 }
 
 // switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
 // 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
-func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot) (*network.HotspotMeta, error) {
+func switchHotspotTopology(ctx context.Context, privateAlias string, snapshot network.Snapshot) (*network.HotspotMeta, error) {
 	var icsErr error
-	if status.PrivateAlias != "" {
-		if _, err := network.SwitchICS(ctx, status.PrivateAlias); err == nil {
-			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: status.PrivateIP}, nil
+	if privateAlias != "" {
+		if _, err := network.SwitchICS(ctx, privateAlias); err == nil {
+			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: network.DefaultHotspotGateway}, nil
 		} else {
 			icsErr = err
 			// 经典路径可能已改动角色：先回滚再走兜底，避免两套状态叠加。
@@ -815,7 +876,7 @@ func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, sn
 		}
 		return nil, err
 	}
-	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
+	return &network.HotspotMeta{Applied: true, Path: "winrt", OriginalProfile: originalProfile}, nil
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
@@ -919,6 +980,10 @@ func (h *helper) loadSettings() (settings, error) {
 	}
 	if current.Blacklist == nil {
 		current.Blacklist = []string{}
+	}
+	// prefer5GHzHotspot 默认开启：旧设置文件没有该键时按 true 处理。
+	if !jsonKeyPresent(data, "prefer5GHzHotspot") {
+		current.Prefer5GHzHotspot = true
 	}
 	return current, nil
 }
