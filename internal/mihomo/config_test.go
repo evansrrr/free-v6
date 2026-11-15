@@ -18,6 +18,8 @@ func TestRenderMasqueConfig(t *testing.T) {
 		"log-level: error", "find-process-mode: 'always'", "mode: rule", "tun:", "enable: true",
 		// 固定设备名：ICS 热点共享按 FreeV6TUN 识别 TUN 适配器
 		"device: FreeV6TUN",
+		// TUN mtu 对齐 MASQUE 节点（1280），避免热点转发路径上的封装分片
+		"mtu: 1280",
 		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🚀 节点选择", "rules:",
 		"2606:4700:4700::1111", "2606:4700:4700::1001", "2400:3200::1", "2400:3200:baba::1",
 	} {
