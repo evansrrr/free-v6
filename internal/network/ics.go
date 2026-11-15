@@ -296,19 +296,22 @@ function Get-HeatLabel {
   if (Test-HeatUp) { $g = '热点网关在线' }
   return ($st + '，' + $g)
 }
-# 1) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
+# 1) 热点未运行 → 软性 not-running，不定位 TUN、不停止热点，原样保留。
+#    必须放在任何 tunP 查找之前：否则热点关闭时会误报「FreeV6TUN connection
+#    profile not found」的硬失败，而不是「热点未运行」的软跳过。
+if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
+# 2) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
 $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
 $orig = ''
 if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.Name) { $orig = $p.ProfileName; break } } }
 $tunP = $null
 foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
 if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
-# 2) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
+# 3) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
 #    半途而废会把热点丢在关闭状态）。
 foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
 $null = Wait-Heat 'Down' 16
-# 3) 绑定 TUN 重新启动：双层判定（最多 20s）。
+# 4) 绑定 TUN 重新启动：双层判定（最多 20s）。
 try { $null = $tm::CreateFromConnectionProfile($tunP).StartTetheringAsync() } catch {}
 if (-not (Wait-Heat 'Up' 40)) {
   $recovered = $false

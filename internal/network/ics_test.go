@@ -189,6 +189,12 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	if locate < 0 || stop < 0 || locate > stop {
 		t.Fatalf("tunP lookup (idx %d) must precede any stop (idx %d)", locate, stop)
 	}
+	// 「热点未运行」判定必须排在 tunP 查找之前：否则热点关闭时会先抛
+	// FreeV6TUN 不存在的硬失败，而不是软性的 not-running。
+	notRunning := strings.Index(script, "移动热点未处于运行状态")
+	if notRunning < 0 || notRunning > locate {
+		t.Fatalf("not-running check (idx %d) must precede tunP lookup (idx %d)", notRunning, locate)
+	}
 	// 回滚失败必须把结果写进错误消息，便于区分“已恢复/未恢复”
 	if !strings.Contains(script, "已恢复原上游") || !strings.Contains(script, "未能恢复原上游") {
 		t.Fatal("switch failure must report rollback outcome in the message")
