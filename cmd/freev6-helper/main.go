@@ -42,11 +42,8 @@ func listenAddress() string {
 }
 
 // icsOpTimeout 覆盖 WinRT tethering 异步操作的最坏情况（Stop/Start 各
-// 最多 Wait-Op 60s），正常几百毫秒完成；探测单独给短超时。
-const (
-	icsOpTimeout     = 120 * time.Second
-	icsDetectTimeout = 30 * time.Second
-)
+// 最多 Wait-Op 60s），正常几百毫秒完成。
+const icsOpTimeout = 120 * time.Second
 
 type helper struct {
 	root string
@@ -758,21 +755,18 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 	if len(snapshot.Sharing) == 0 {
 		return map[string]any{"applied": false, "reason": "failed", "error": "未取到 ICS 共享基线，无法安全切换"}
 	}
-	// 探测/切换用独立超时（Background 而非请求上下文）：客户端断开也不能
-	// 把系统留在半切换状态。
-	detectCtx, detectCancel := context.WithTimeout(context.Background(), icsDetectTimeout)
-	status, err := network.DetectHotspot(detectCtx)
-	detectCancel()
-	if err != nil {
-		return map[string]any{"applied": false, "reason": "failed", "error": err.Error()}
-	}
-	if !status.Active {
-		return map[string]any{"applied": false, "reason": "not-running"}
-	}
+	// 热点私有侧别名直接取自共享基线（NetConnectionProps.Name），不再为
+	// 探测单独冷启一次 PowerShell；找不到时由 WinRT 路径自行判「未运行」。
+	privateAlias := network.FindHotspotPrivate(snapshot.Sharing)
+	// 切换用独立超时（Background 而非请求上下文）：客户端断开也不能把
+	// 系统留在半切换状态。
 	switchCtx, switchCancel := context.WithTimeout(context.Background(), icsOpTimeout)
 	defer switchCancel()
-	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
+	meta, switchErr := switchHotspotTopology(switchCtx, privateAlias, snapshot)
 	if switchErr != nil {
+		if errors.Is(switchErr, network.ErrHotspotNotRunning) {
+			return map[string]any{"applied": false, "reason": "not-running"}
+		}
 		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
 			return map[string]any{"applied": false, "reason": "failed",
 				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
@@ -795,11 +789,11 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 
 // switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
 // 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
-func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot) (*network.HotspotMeta, error) {
+func switchHotspotTopology(ctx context.Context, privateAlias string, snapshot network.Snapshot) (*network.HotspotMeta, error) {
 	var icsErr error
-	if status.PrivateAlias != "" {
-		if _, err := network.SwitchICS(ctx, status.PrivateAlias); err == nil {
-			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: status.PrivateIP}, nil
+	if privateAlias != "" {
+		if _, err := network.SwitchICS(ctx, privateAlias); err == nil {
+			return &network.HotspotMeta{Applied: true, Path: "ics", PrivateIP: network.DefaultHotspotGateway}, nil
 		} else {
 			icsErr = err
 			// 经典路径可能已改动角色：先回滚再走兜底，避免两套状态叠加。
@@ -815,7 +809,7 @@ func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, sn
 		}
 		return nil, err
 	}
-	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
+	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: network.DefaultHotspotGateway, OriginalProfile: originalProfile}, nil
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {

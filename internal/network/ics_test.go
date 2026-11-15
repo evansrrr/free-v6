@@ -91,24 +91,24 @@ func TestParsePowerShellSharingEmpty(t *testing.T) {
 	}
 }
 
-// 探测脚本要带上网关地址参数，输出解析要覆盖两种形态。
-func TestBuildHotspotDetectCommandAndParse(t *testing.T) {
-	cmd := BuildHotspotDetectCommand()
-	if !strings.Contains(cmd, "'"+DefaultHotspotGateway+"'") {
-		t.Fatalf("detect command must embed gateway literal:\n%s", cmd)
+// 从共享基线派生热点私有侧别名：只认 private 角色且处于共享中的连接。
+func TestFindHotspotPrivate(t *testing.T) {
+	sharing := []SharingSnapshot{
+		{Name: "WLAN", Kind: "public", Enabled: true},
+		{Name: "Local Area Connection* 3", Kind: "private", Enabled: true},
+		{Name: "Ethernet", Kind: "public", Enabled: false},
 	}
-	status, err := ParseHotspotStatus([]byte(`{"active":true,"privateAlias":"Local Area Connection* 3","privateIP":"192.168.137.1","tethering":false}`))
-	if err != nil {
-		t.Fatal(err)
+	if got := FindHotspotPrivate(sharing); got != "Local Area Connection* 3" {
+		t.Fatalf("expected private adapter name, got %q", got)
 	}
-	if !status.Active || status.PrivateAlias == "" || status.PrivateIP != DefaultHotspotGateway {
-		t.Fatalf("unexpected status: %+v", status)
+	// 私有侧未共享 → 视为未找到（热点未开）
+	sharing[1].Enabled = false
+	if got := FindHotspotPrivate(sharing); got != "" {
+		t.Fatalf("expected empty when private side not enabled, got %q", got)
 	}
-	if _, err := ParseHotspotStatus([]byte("")); err == nil {
-		t.Fatal("empty detect output must be an error")
-	}
-	if _, err := ParseHotspotStatus([]byte("not json")); err == nil {
-		t.Fatal("garbage detect output must be an error")
+	// 空基线
+	if got := FindHotspotPrivate(nil); got != "" {
+		t.Fatalf("expected empty for nil baseline, got %q", got)
 	}
 }
 
@@ -188,6 +188,12 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	stop := strings.Index(script, "StopTetheringAsync")
 	if locate < 0 || stop < 0 || locate > stop {
 		t.Fatalf("tunP lookup (idx %d) must precede any stop (idx %d)", locate, stop)
+	}
+	// 「热点未运行」判定必须排在 tunP 查找之前：否则热点关闭时会先抛
+	// FreeV6TUN 不存在的硬失败，而不是软性的 not-running。
+	notRunning := strings.Index(script, "移动热点未处于运行状态")
+	if notRunning < 0 || notRunning > locate {
+		t.Fatalf("not-running check (idx %d) must precede tunP lookup (idx %d)", notRunning, locate)
 	}
 	// 回滚失败必须把结果写进错误消息，便于区分“已恢复/未恢复”
 	if !strings.Contains(script, "已恢复原上游") || !strings.Contains(script, "未能恢复原上游") {

@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -37,12 +38,23 @@ type HotspotMeta struct {
 	OriginalProfile string `json:"originalProfile,omitempty"` // winrt 路径：切换前的上游连接配置
 }
 
-// HotspotStatus 是 DetectHotspot 的探测结果。
-type HotspotStatus struct {
-	Active       bool   `json:"active"`
-	PrivateAlias string `json:"privateAlias"` // 持有 ICS 网关地址的网卡显示名（经典路径）
-	PrivateIP    string `json:"privateIP"`
-	Tethering    bool   `json:"tethering"` // WinRT tethering 处于 On
+// ErrHotspotNotRunning 表示移动热点当前未运行。WinRT 切换脚本在热点关闭时
+// 直接抛错；SwitchWinRT 把该情形归一化为本哨兵，供调用方映射为软性的
+// "not-running" 结果（区别于真正的失败）。
+var ErrHotspotNotRunning = errors.New("mobile hotspot not running")
+
+// FindHotspotPrivate 返回共享基线里「热点私有侧」连接的显示名（ICS 的
+// private 角色且处于共享中）。它直接复用 CaptureSharing 抓到的
+// NetConnectionProps.Name，与 SwitchICS 脚本按名匹配的目标一致，因此比旧的
+// Get-NetIPAddress InterfaceAlias 探测更准确，也省掉一次 PowerShell 冷启动。
+// 找不到（热点未开、或新 WDI 驱动无独立虚拟适配器）时返回空串。
+func FindHotspotPrivate(sharing []SharingSnapshot) string {
+	for _, entry := range sharing {
+		if entry.Kind == "private" && entry.Enabled && entry.Name != "" {
+			return entry.Name
+		}
+	}
+	return ""
 }
 
 // psQuote 把字符串包成 PowerShell 单引号字面量（内部单引号翻倍）。
@@ -135,44 +147,6 @@ func ParsePowerShellSharing(data []byte) ([]SharingSnapshot, error) {
 	return sharing, nil
 }
 
-// PowerShellHotspotDetectCommand 探测移动热点是否在运行：
-//  1. 经典信号：ICS 网关地址（192.168.137.1）落在某块网卡上；
-//  2. 新 WDI 兜底：WinRT NetworkOperatorTetheringManager.TetheringState == On。
-const PowerShellHotspotDetectCommand = psHeader + `
-$ErrorActionPreference='SilentlyContinue'
-$active=$false; $alias=''; $ip=''; $tether=$false
-$a = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq %s } | Select-Object -First 1
-if ($null -ne $a) { $active=$true; $alias=[string]$a.InterfaceAlias; $ip=[string]$a.IPAddress }
-try {
-  $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
-  $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
-  foreach ($p in $ni::GetConnectionProfiles()) {
-    try {
-      $mgr=$tm::CreateFromConnectionProfile($p)
-      if ([string]$mgr.TetheringState -eq 'On') { $tether=$true; $active=$true; break }
-    } catch {}
-  }
-} catch {}
-ConvertTo-Json -InputObject ([pscustomobject]@{active=$active; privateAlias=$alias; privateIP=$ip; tethering=$tether}) -Compress`
-
-// BuildHotspotDetectCommand 返回带网关地址参数的探测脚本。
-func BuildHotspotDetectCommand() string {
-	return fmt.Sprintf(PowerShellHotspotDetectCommand, psQuote(DefaultHotspotGateway))
-}
-
-// ParseHotspotStatus 解析探测输出。
-func ParseHotspotStatus(data []byte) (HotspotStatus, error) {
-	var status HotspotStatus
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
-		return status, fmt.Errorf("hotspot detect produced no output")
-	}
-	if err := json.Unmarshal([]byte(trimmed), &status); err != nil {
-		return status, fmt.Errorf("decode hotspot detect: %w", err)
-	}
-	return status, nil
-}
-
 // BuildICSSwitchScript 构造经典路径（HNetShare COM）的拓扑切换脚本：
 // FreeV6TUN → PUBLIC（上游，自动取消原 PUBLIC），热点私有侧网卡 → PRIVATE。
 // 任何一步失败都以非零退出码抛错，由调用方回滚。
@@ -237,10 +211,12 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 // 新上游启动失败时在脚本内回滚重启原上游，回滚结果写进错误消息。
 //
 // 成败判定是双层的，任何一层可用即可：优先 TetheringState（读到非空值），
-// 投影读空的机器退回热点网关 IP 探测（与 DetectHotspot 同一信号，已在
-// 故障机验证可用）。绝不读异步 op 的 .Status/GetResults —— 部分机器上
-// 该属性为空，曾把进行中的启动误判为“未完成”的假失败。定位 tunP/原上游
-// 必须在任何停止动作之前完成。
+// 投影读空的机器退回热点网关 IP 探测（192.168.137.1，已在故障机验证可用）。
+// 绝不读异步 op 的 .Status/GetResults —— 部分机器上该属性为空，曾把进行中
+// 的启动误判为“未完成”的假失败。
+//
+// 顺序约定：先判「热点未运行」（软性 not-running，不碰热点），再定位
+// tunP/原上游（找不到原地失败），二者都必须在任何停止动作之前完成。
 func BuildWinRTSwitchScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
@@ -289,19 +265,22 @@ function Get-HeatLabel {
   if (Test-HeatUp) { $g = '热点网关在线' }
   return ($st + '，' + $g)
 }
-# 1) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
+# 1) 热点未运行 → 软性 not-running，不定位 TUN、不停止热点，原样保留。
+#    必须放在任何 tunP 查找之前：否则热点关闭时会误报「FreeV6TUN connection
+#    profile not found」的硬失败，而不是「热点未运行」的软跳过。
+if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
+# 2) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
 $wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
 $orig = ''
 if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.Name) { $orig = $p.ProfileName; break } } }
 $tunP = $null
 foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
 if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
-# 2) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
+# 3) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
 #    半途而废会把热点丢在关闭状态）。
 foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
 $null = Wait-Heat 'Down' 16
-# 3) 绑定 TUN 重新启动：双层判定（最多 20s）。
+# 4) 绑定 TUN 重新启动：双层判定（最多 20s）。
 try { $null = $tm::CreateFromConnectionProfile($tunP).StartTetheringAsync() } catch {}
 if (-not (Wait-Heat 'Up' 40)) {
   $recovered = $false

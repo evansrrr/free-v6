@@ -29,15 +29,6 @@ func CaptureSharing(ctx context.Context) ([]SharingSnapshot, error) {
 	return ParsePowerShellSharing(output)
 }
 
-// DetectHotspot 探测移动热点是否在运行，并返回经典路径所需的私有侧网卡名。
-func DetectHotspot(ctx context.Context) (HotspotStatus, error) {
-	output, err := runPowerShell(ctx, BuildHotspotDetectCommand())
-	if err != nil {
-		return HotspotStatus{}, fmt.Errorf("detect hotspot: %w", err)
-	}
-	return ParseHotspotStatus(output)
-}
-
 // SwitchICS 经典路径：FreeV6TUN=PUBLIC、热点私有侧=PRIVATE。
 func SwitchICS(ctx context.Context, privateAlias string) (string, error) {
 	output, err := runPowerShell(ctx, BuildICSSwitchScript(privateAlias))
@@ -49,9 +40,13 @@ func SwitchICS(ctx context.Context, privateAlias string) (string, error) {
 
 // SwitchWinRT 新 WDI 兜底路径：把移动热点上游改绑到 FreeV6TUN。
 // 返回切换前的原上游连接配置名（供停止时还原）。
+// 热点未运行 → 返回 ErrHotspotNotRunning（软性 not-running，不是失败）。
 func SwitchWinRT(ctx context.Context) (string, error) {
 	output, err := runPowerShell(ctx, BuildWinRTSwitchScript())
 	if err != nil {
+		if strings.Contains(string(output), "移动热点未处于运行状态") {
+			return "", ErrHotspotNotRunning
+		}
 		return "", fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
 	}
 	var result struct {
