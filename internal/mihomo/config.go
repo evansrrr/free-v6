@@ -144,23 +144,21 @@ dns:
     - '+.local'
     - '*.msftconnecttest.com'
     - '*.msftncsi.com'
+  # 全部 DNS 出口只走 IPv6：这个客户端在校园网里靠 IPv6 免流，DNS 一旦用
+  # 223.5.5.5 / 1.12.12.12 这类 IPv4 端点，内核自己的解析请求就会变成公网
+  # IPv4 流量（内核的 socket 绕过 TUN，直接走物理网卡）。Windows 的连通性
+  # 探测（msftconnecttest）会持续触发这条路径，等于后台一直在跑计费 IPv4。
+  # 2606:4700:4700::/32 的 443 正是 masque 自己用的那条路，最稳。
   default-nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
     - 2606:4700:4700::1111
-    - 2606:4700:4700::1001
     - 2400:3200::1
-    - 2400:3200:baba::1
   nameserver:
-    - https://223.5.5.5/dns-query
-    - https://1.12.12.12/dns-query
-    - 2606:4700:4700::1111
-    - 2606:4700:4700::1001
+    - https://[2606:4700:4700::1111]/dns-query
+    - https://[2606:4700:4700::1001]/dns-query
     - 2400:3200::1
     - 2400:3200:baba::1
   proxy-server-nameserver:
-    - https://223.5.5.5/dns-query
-    - 2606:4700:4700::1111
+    - https://[2606:4700:4700::1111]/dns-query
     - 2400:3200::1
   # 只对真正需要"境外解析"的少数域名单独指定 DoH（规则集与内核发布
   # 都挂在 GitHub / gh-proxy 家族上）。其余域名一律走上面的 nameserver：
@@ -168,8 +166,7 @@ dns:
   # 校园网内的国内域名。所以这里不需要 geosite 全量分流。
   nameserver-policy:
     '+.github.com,+.githubusercontent.com,+.githubassets.com,+.gh-proxy.com,+.gh-proxy.org':
-      - https://1.1.1.1/dns-query
-      - https://8.8.8.8/dns-query
+      - https://[2606:4700:4700::1111]/dns-query
       - 2606:4700:4700::1111
 
 `
