@@ -672,10 +672,13 @@ let ipv6EchoSource = '';
 // IPv6 出口检测。走 helper 的 /ipv6/probe：它用 tcp6 直连、竞速多个检测地址，
 // 既没有 CORS/混合内容限制（高校 speedtest 后端才用得上），也不会因为某一个
 // 地址超时就把可用的校园 IPv6 判成「不支持免流」。
+// 刚停完免流的那几秒系统还在拆 TUN、收敛默认路由，helper 会自己重试；重试过就
+// 记一行日志，免得「检测中…」空转几秒看起来像卡死。
 async function detectPublicIPv6() {
   const res = await api('/ipv6/probe');
   if (!res || !res.ip) throw new Error((res && res.error) || '未取得 IPv6');
   ipv6EchoSource = res.source || '';
+  if (res.attempts > 1) addLog(`IPv6 检测重试 ${res.attempts - 1} 次后通过`);
   return res.ip;
 }
 

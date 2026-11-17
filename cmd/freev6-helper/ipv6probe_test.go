@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,7 +75,7 @@ func TestProbeIPv6SourcesPicksFastest(t *testing.T) {
 	defer server.Close()
 
 	started := time.Now()
-	result, err := probeIPv6Sources(context.Background(), server.Client(), []string{
+	result, _, err := probeIPv6Sources(context.Background(), server.Client(), []string{
 		server.URL + "/slow",
 		server.URL + "/broken",
 		server.URL + "/empty",
@@ -99,7 +103,7 @@ func TestProbeIPv6SourcesReportsFailures(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := probeIPv6Sources(context.Background(), server.Client(), []string{
+	_, _, err := probeIPv6Sources(context.Background(), server.Client(), []string{
 		server.URL + "/a",
 		server.URL + "/b",
 	})
@@ -111,15 +115,58 @@ func TestProbeIPv6SourcesReportsFailures(t *testing.T) {
 	}
 }
 
-// 全都连不上 = 本机没有 IPv6 出口：给一句直白结论，而不是五条技术细节。
+// 全都连不上 = 本机没有 IPv6 出口：给一句直白结论，不要空转。
+// 上下文短于预算时按上下文收尾，避免本机恰好有 v6 时重试到预算用完。
 func TestProbeIPv6SourcesReportsMissingPath(t *testing.T) {
 	closed := "http://127.0.0.1:1/probe"
-	_, err := probeIPv6Sources(context.Background(), http.DefaultClient, []string{closed, closed + "2"})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, _, err := probeIPv6Sources(ctx, http.DefaultClient, []string{closed, closed + "2"})
 	if err == nil {
 		t.Fatal("全部连不上却返回成功")
 	}
-	if !strings.Contains(err.Error(), "本机可能没有 IPv6 出口") {
-		t.Errorf("错误信息应给出「没有 IPv6 出口」的结论: %v", err)
+	if !strings.Contains(err.Error(), "IPv6") {
+		t.Errorf("错误信息应提到 IPv6: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("耗时 %v，超出短预算", elapsed)
+	}
+}
+
+// 过渡态失败（拨号层报错）要重试：停止免流后 TUN 拆除的那几秒正是这个样子。
+type flakyTransport struct {
+	calls     int32
+	failTimes int32
+	body      string
+}
+
+func (f *flakyTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	if atomic.AddInt32(&f.calls, 1) <= f.failTimes {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("network is unreachable")}
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(f.body)),
+	}, nil
+}
+
+func TestProbeIPv6SourcesRetriesTransientFailure(t *testing.T) {
+	transport := &flakyTransport{failTimes: 1, body: "2408:8207:1234::1"}
+	started := time.Now()
+	result, _, err := probeIPv6Sources(context.Background(), &http.Client{Transport: transport}, []string{"http://probe.invalid/ip"})
+	if err != nil {
+		t.Fatalf("重试后应拿到结果: %v", err)
+	}
+	if result.IP != "2408:8207:1234::1" {
+		t.Errorf("IP = %q", result.IP)
+	}
+	if calls := atomic.LoadInt32(&transport.calls); calls < 2 {
+		t.Errorf("只请求了 %d 次，没有重试", calls)
+	}
+	if elapsed := time.Since(started); elapsed < ipv6ProbeRetryGap {
+		t.Errorf("耗时 %v，没有等到重试间隔", elapsed)
 	}
 }
 
@@ -138,7 +185,7 @@ func TestProbeIPv6SourcesTimesOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := probeIPv6Sources(ctx, server.Client(), []string{server.URL + "/hang"})
+	_, _, err := probeIPv6Sources(ctx, server.Client(), []string{server.URL + "/hang"})
 	if err == nil {
 		t.Fatal("全部挂住却返回成功")
 	}

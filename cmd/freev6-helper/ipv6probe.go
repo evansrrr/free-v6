@@ -11,6 +11,10 @@ package main
 //     IPv4 地址，把「有 IPv6 出口」误判成「没有」。
 //
 // 多个地址并行竞速，先给出合法 IPv6 的胜出，其余立即取消。
+//
+// 另有一个坑：刚停完免流的几秒里，Windows 还在拆 FreeV6TUN、默认路由也没收敛，
+// 这时任何 IPv6 出站都会失败。只问一次，就会把「等两秒就好」判成「本机没有出口」
+// ——所以一轮全败且本机确实配了 IPv6 时按预算重试（见 probeIPv6Sources）。
 
 import (
 	"context"
@@ -25,7 +29,14 @@ import (
 	"time"
 )
 
-const ipv6ProbeTimeout = 5 * time.Second
+const (
+	// 单轮竞速：几个地址并行，正常情况下 <300ms 出结果。
+	ipv6ProbeRoundTimeout = 4 * time.Second
+	// 含重试的总预算。停止免流后 Windows 要拆掉 TUN 适配器、重新收敛默认路由，
+	// 这几秒里 IPv6 出站全废——只问一次必然把「刚停完免流」误判成「没有出口」。
+	ipv6ProbeBudget   = 12 * time.Second
+	ipv6ProbeRetryGap = 1200 * time.Millisecond
+)
 
 // 检测地址。三所高校的 speedtest 后端在 CERNET2 内往返通常远小于 200ms，
 // ipv6.testipv6.cn 是校外的兜底（JSONP，必须带 callback 才会回正文）。
@@ -41,7 +52,7 @@ var ipv6EchoSources = []string{
 var ipv6ProbeClient = func() *http.Client {
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	return &http.Client{
-		Timeout: ipv6ProbeTimeout,
+		Timeout: ipv6ProbeRoundTimeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				return dialer.DialContext(ctx, "tcp6", addr)
@@ -129,10 +140,68 @@ func fetchIPv6(ctx context.Context, client *http.Client, source string) (ipv6Pro
 	return ipv6ProbeResult{IP: ip, Source: host}, nil
 }
 
-// 并行竞速所有地址，第一个成功的结果胜出。全失败才返回错误，并把各地址的
-// 失败原因带上——前端把它原样写进日志，用户能看出是哪个地址出了问题。
-func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string) (ipv6ProbeResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, ipv6ProbeTimeout)
+// 本机是否配了全球单播 IPv6（排除 ULA/链路本地）。用来区分两件事：「本来就
+// 没有 v6 出口」要立刻给结论，而「刚停完免流、路由还在收敛」值得重试。
+func hasLocalIPv6() bool {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, address := range addresses {
+		ipnet, ok := address.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipnet.IP.To4() == nil && ipnet.IP.IsGlobalUnicast() && !ipnet.IP.IsPrivate() {
+			return true
+		}
+	}
+	return false
+}
+
+// probeFailure 汇总一轮竞速的失败原因。
+type probeFailure struct {
+	failures []*probeError
+	total    int
+}
+
+// transient：整轮都停在「连不上/超时」这一层，没有拿到任何 HTTP 响应或正文，
+// 说明是链路/路由层面的过渡态（TUN 正在拆除、默认路由还没收敛），而不是某个
+// 站点挂了——这种失败会自愈，值得重试。HTTP 错误、正文里没有地址则不会。
+func (f *probeFailure) transient() bool {
+	for _, failure := range f.failures {
+		if !failure.noPath {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *probeFailure) error() error {
+	if len(f.failures) == 0 {
+		return fmt.Errorf("%d 个检测地址均无响应（超时）", f.total)
+	}
+	if f.transient() && len(f.failures) == f.total {
+		return fmt.Errorf("%d 个检测地址均无法访问，本机可能没有 IPv6 出口（如 %s）", f.total, f.failures[0].Error())
+	}
+	shown := f.failures
+	if len(shown) > 2 {
+		shown = shown[:2]
+	}
+	reasons := make([]string, 0, len(shown))
+	for _, failure := range shown {
+		reasons = append(reasons, failure.Error())
+	}
+	message := fmt.Sprintf("全部 %d 个检测地址失败：%s", f.total, strings.Join(reasons, "、"))
+	if len(f.failures) > len(shown) {
+		message += " 等"
+	}
+	return errors.New(message)
+}
+
+// 一轮竞速：所有地址并行发出，第一个成功的结果胜出，其余立即取消。
+func probeIPv6Once(ctx context.Context, client *http.Client, sources []string) (ipv6ProbeResult, *probeFailure) {
+	ctx, cancel := context.WithTimeout(ctx, ipv6ProbeRoundTimeout)
 	defer cancel()
 
 	type outcome struct {
@@ -160,39 +229,41 @@ func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string
 			}
 			failures = append(failures, out.err)
 		case <-ctx.Done():
-			return ipv6ProbeResult{}, probeFailedError(failures, len(sources))
+			return ipv6ProbeResult{}, &probeFailure{failures: failures, total: len(sources)}
 		}
 	}
-	return ipv6ProbeResult{}, probeFailedError(failures, len(sources))
+	return ipv6ProbeResult{}, &probeFailure{failures: failures, total: len(sources)}
 }
 
-func probeFailedError(failures []*probeError, total int) error {
-	noPath := len(failures) == total
-	for _, failure := range failures {
-		if !failure.noPath {
-			noPath = false
-			break
+// 探到出结果为止：过渡态失败在预算内反复重试，其余立刻给结论。
+// 返回的 attempts 让前端能把「等了 6 秒才成功」说清楚。
+func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string) (ipv6ProbeResult, int, error) {
+	budget, cancel := context.WithTimeout(ctx, ipv6ProbeBudget)
+	defer cancel()
+
+	attempts := 0
+	for {
+		attempts++
+		result, failure := probeIPv6Once(budget, client, sources)
+		if failure == nil {
+			return result, attempts, nil
+		}
+		// 真没有 v6 出口时重试只会让用户干等（校外、手机热点走这条快速失败）
+		if !failure.transient() || !hasLocalIPv6() {
+			return ipv6ProbeResult{}, attempts, failure.error()
+		}
+		select {
+		case <-time.After(ipv6ProbeRetryGap):
+		case <-budget.Done():
+			// 本机有地址却始终打不出去：多半卡在停止免流的网络回收上
+			if attempts > 1 {
+				// 不嵌套括号：前端会把它包进「检测失败: …」
+				return ipv6ProbeResult{}, attempts, errors.New(
+					"本机有 IPv6 地址但出站不通，可能刚停完免流或校园网 v6 不通，请稍后重试")
+			}
+			return ipv6ProbeResult{}, attempts, failure.error()
 		}
 	}
-	if noPath {
-		return fmt.Errorf("%d 个检测地址均无法访问，本机可能没有 IPv6 出口（如 %s）", total, failures[0].Error())
-	}
-	if len(failures) == 0 {
-		return fmt.Errorf("%d 个检测地址均无响应（超时）", total)
-	}
-	shown := failures
-	if len(shown) > 2 {
-		shown = shown[:2]
-	}
-	reasons := make([]string, 0, len(shown))
-	for _, failure := range shown {
-		reasons = append(reasons, failure.Error())
-	}
-	message := fmt.Sprintf("全部 %d 个检测地址失败：%s", total, strings.Join(reasons, "、"))
-	if len(failures) > len(shown) {
-		message += " 等"
-	}
-	return errors.New(message)
 }
 
 // GET /api/v1/ipv6/probe 探测本机公网 IPv6，回答启动免流的网络前置条件。
@@ -202,10 +273,10 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	result, err := probeIPv6Sources(request.Context(), ipv6ProbeClient, ipv6EchoSources)
+	result, attempts, err := probeIPv6Sources(request.Context(), ipv6ProbeClient, ipv6EchoSources)
 	if err != nil {
-		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": "", "error": err.Error()})
+		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": "", "error": err.Error(), "attempts": attempts})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": result.IP, "source": result.Source})
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": result.IP, "source": result.Source, "attempts": attempts})
 }
