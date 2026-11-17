@@ -39,20 +39,12 @@ REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
    Source:    https://nsis.sourceforge.io/
    Note: the NSIS toolchain is downloaded by the Tauri bundler at build time.
 
-6. GeoSite.dat (geosite domain data, bundled at <install dir>\GeoSite.dat)
-   License:   Apache-2.0
-   Copyright: The v2fly and MetaCubeX authors
-   Source:    https://github.com/MetaCubeX/meta-rules-dat (compiled from
-              v2fly/domain-list-community source lists)
-   Note: refreshed from the source repository on each release build
-   (cmd/ensure-geodata) and only redistributed as the compiled .dat file.
-
-7. nsis_tauri_utils (NSIS plugin embedded in the produced setup.exe)
+6. nsis_tauri_utils (NSIS plugin embedded in the produced setup.exe)
    License:   MIT OR Apache-2.0
    Copyright: Tauri Programme within The Commons Conservancy
    Source:    https://github.com/tauri-apps/nsis-tauri-utils
 
-8. gopkg.in/yaml.v3 (Go YAML parser linked into freev6-helper)
+7. gopkg.in/yaml.v3 (Go YAML parser linked into freev6-helper)
    License:   MIT OR Apache-2.0
    Copyright: Kirill Simonov (MIT portion); Canonical Ltd (Apache portion)
    Source:    https://github.com/go-yaml/yaml
@@ -62,20 +54,20 @@ REDISTRIBUTED IN THIS REPOSITORY / THE INSTALLER
 LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
 --------------------------------------------------------------------------
 
-9. Material Symbols Outlined icon font (subset, web/fonts/material-symbols-outlined.woff2)
+8. Material Symbols Outlined icon font (subset, web/fonts/material-symbols-outlined.woff2)
    License:   Apache-2.0
    Copyright: Google LLC
    Note: subset of the official font (45 used glyphs, ~6KB); bundled
    locally so icons work offline. Text fonts are bundled
    as latin subsets as well (entry 10).
 
-10. DM Sans, Manrope, JetBrains Mono fonts (latin subsets, web/fonts/)
+9. DM Sans, Manrope, JetBrains Mono fonts (latin subsets, web/fonts/)
    License:   SIL Open Font License 1.1
    Copyright: the respective font authors (full text in LICENSES/OFL-1.1.txt)
    Note: official latin unicode-range variable subsets; bundled locally so
    text renders offline. Chinese/system fallbacks unchanged.
 
-11. f6-core (Clash.Meta core, mihomo fork)
+10. f6-core (Clash.Meta core, mihomo fork)
    License:   GPL-3.0-only
    Copyright: MetaCubeX contributors; fork modifications by the freev6 authors
    Source:    https://github.com/evansrrr/f6-core (fork of
