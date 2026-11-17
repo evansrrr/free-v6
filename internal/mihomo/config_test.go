@@ -15,10 +15,10 @@ func TestRenderMasqueConfig(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"type: masque", "server: \"2606:4700:103::1\"", "private-key: private", "public-key: peer",
-		"log-level: error", "find-process-mode: 'always'", "mode: rule", "tun:", "enable: true",
+		"log-level: error", "mode: rule", "tun:", "enable: true",
 		// 固定设备名：ICS 热点共享按 FreeV6TUN 识别 TUN 适配器
 		"device: FreeV6TUN",
-		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🚀 节点选择", "rules:",
+		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🛑 全球拦截", "rules:",
 		"2606:4700:4700::1111", "2606:4700:4700::1001", "2400:3200::1", "2400:3200:baba::1",
 	} {
 		if !strings.Contains(config, expected) {
@@ -31,8 +31,13 @@ func TestRenderMasqueConfig(t *testing.T) {
 	if strings.Contains(config, "server: 162.") {
 		t.Fatal("IPv4 access points must not be included")
 	}
-	if count := strings.Count(config, "    type: http"); count != 10 {
-		t.Fatalf("expected 10 HTTP rule providers, got %d", count)
+	// 只留真正改变行为的规则集（广告拦截）；其余列表的目标分组与 MATCH 同路，
+	// 留着只会多下载 9 份列表、常驻十几万条规则。
+	if count := strings.Count(config, "    type: http"); count != 1 {
+		t.Fatalf("expected a single HTTP rule provider, got %d", count)
+	}
+	if strings.Contains(config, "find-process-mode") {
+		t.Fatal("no PROCESS-* rules are rendered, so process matching must stay off")
 	}
 	if !strings.Contains(config, "external-controller: 127.0.0.1:9090") {
 		t.Fatal("renderer must expose only the loopback mihomo controller")

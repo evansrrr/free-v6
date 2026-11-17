@@ -46,20 +46,19 @@ var (
 	}
 )
 
+// ruleSets 只保留真正会改变行为的规则集。
+//
+// 其余 9 张列表（ChinaDomain / GoogleCN / SteamCN / ProxyLite / CMBlog /
+// UnBan / CFnat / LocalAreaNetwork / ChinaCompanyIp）的目标分组都是
+// 「🚀 节点选择」，与末尾的 MATCH 完全同路——它们不改变任何一条连接的出口，
+// 只负责在首次启动时下载 9 份列表、常驻十几万条域名规则（约 100 B/条）。
+// 免流场景下国内国外流量都要过 WARP，这套分流本来就没有意义。
 var ruleSets = []struct {
 	Group string
 	URL   string
 }{
-	{"🚀 节点选择", "https://raw.githubusercontent.com/cmliu/ACL4SSR/refs/heads/main/Clash/CFnat.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/UnBan.list"},
+	// 唯一有实际效果的一张：广告域名直接 REJECT。
 	{"🛑 全球拦截", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/GoogleCN.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Ruleset/SteamCN.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ProxyLite.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/CMBlog.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list"},
-	{"🚀 节点选择", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaCompanyIp.list"},
 }
 
 const (
@@ -102,7 +101,6 @@ external-controller: 127.0.0.1:9090
 ipv6: true
 unified-delay: true
 tcp-concurrent: true
-find-process-mode: 'always'
 
 profile:
   store-selected: true
@@ -229,8 +227,8 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	b.WriteString("  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n\n")
 	b.WriteString("  - name: GLOBAL\n    type: select\n    proxies:\n      - ♻️ 自动选择\n      - 🔄 故障转移\n      - ☑️ 手动切换\n\n")
 	writeProxyGroup(&b, "☑️ 手动切换", "select", "", names)
-	writeProxyGroup(&b, "♻️ 自动选择", "url-test", "    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    lazy: false\n", names)
-	writeProxyGroup(&b, "🔄 故障转移", "fallback", "    url: http://www.gstatic.com/generate_204\n    interval: 180\n", names)
+	writeProxyGroup(&b, "♻️ 自动选择", "url-test", "    url: http://www.gstatic.com/generate_204\n    interval: 600\n    tolerance: 50\n    lazy: false\n", names)
+	writeProxyGroup(&b, "🔄 故障转移", "fallback", "    url: http://www.gstatic.com/generate_204\n    interval: 600\n", names)
 	if len(options.ChainProxies) > 0 {
 		writeChainGroup(&b, options.ChainProxies)
 	}
