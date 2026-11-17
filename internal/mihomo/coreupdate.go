@@ -344,18 +344,30 @@ func (s *CoreStore) ApplyUpdate(ctx context.Context, manifest CoreManifest, forc
 	return result, nil
 }
 
+// coreConfigTestBudget 是配置自检的采纳窗口。
+//
+// `-t` 要解析整份渲染配置（含 rule-provider、geosite），离线时会被超时拖满。
+// 3 秒内跑不完就当"没有结论"，既不阻断也不记警告：更新本身已经有 `-v`
+// 自检把关，配置问题还有启动失败回滚兜底。
+var coreConfigTestBudget = 3 * time.Second
+
 // checkConfig 用状态目录里现有的渲染配置跑一次 `-t`。没有配置（首次安装）
-// 就跳过；失败只作为警告返回，不阻断更新。
+// 就跳过；3 秒内没跑完同样跳过；跑完但失败只作为警告返回，不阻断更新。
 func (s *CoreStore) checkConfig(binaryPath string) string {
 	stateDir := filepath.Join(s.root, "state")
 	configPath := filepath.Join(stateDir, "mihomo.yaml")
 	if !isRegularFile(configPath) {
 		return ""
 	}
-	if err := TestConfig(binaryPath, configPath, stateDir); err != nil {
+	err := TestConfigWithin(binaryPath, configPath, stateDir, coreConfigTestBudget)
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrConfigTestTimeout):
+		return ""
+	default:
 		return fmt.Sprintf("配置自检未通过（仍已安装，启动失败会自动回滚）: %v", err)
 	}
-	return ""
 }
 
 // coreAssetURLs 给清单里的直连 URL 套上镜像前缀（与 App 更新同一套改写规则）。

@@ -18,14 +18,27 @@ var ErrAlreadyRunning = errors.New("mihomo is already running")
 // 才能发现的问题（未知 type、非法字段值…），必须在网络快照之前暴露。
 // 仅链式路径调用，经典路径不承担这份耗时与失败面。
 func TestConfig(binaryPath, configPath, homeDir string) error {
+	return TestConfigWithin(binaryPath, configPath, homeDir, 15*time.Second)
+}
+
+// ErrConfigTestTimeout 表示 `-t` 在预算内没跑完（典型场景：离线，
+// rule-provider 拉取把时间耗光）。调用方据此判断"这条结论不作数"。
+var ErrConfigTestTimeout = errors.New("mihomo -t 超时")
+
+// TestConfigWithin 与 TestConfig 相同，但允许指定预算。内核安装自检用
+// 3 秒的小预算：跑不完就当没结论，不拿它当放行/拦截的依据。
+func TestConfigWithin(binaryPath, configPath, homeDir string, budget time.Duration) error {
 	if strings.TrimSpace(binaryPath) == "" {
 		return errors.New("mihomo binary path is empty")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, binaryPath, "-t", "-d", homeDir, "-f", configPath).CombinedOutput()
 	if err == nil {
 		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ErrConfigTestTimeout
 	}
 	details := strings.TrimSpace(string(output))
 	if details == "" {
