@@ -127,6 +127,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/status", h.status)
 	mux.HandleFunc("/api/v1/runtime", h.runtime)
+	mux.HandleFunc("/api/v1/runtime/check", h.runtimeCheck)
 	mux.HandleFunc("/api/v1/appearance", h.appearance)
 	mux.HandleFunc("/api/v1/runtime/download", h.downloadRuntime)
 	mux.HandleFunc("/api/v1/runtime/download/progress", h.runtimeDownloadProgress)
@@ -220,14 +221,41 @@ func (h *helper) runtime(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	path, err := mihomo.DiscoverBinary(h.root)
+	core, err := mihomo.NewCoreStore(h.root).Active()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok":           true,
-		"present":      err == nil,
-		"path":         path,
+		"ok":             true,
+		"present":        err == nil,
+		"path":           core.Path,
+		"version":        core.Version,
+		"versionDisplay": core.Parsed().Display(),
+		"managed":        core.Managed,
+		// legacy=true 表示当前跑的还是老版本遗留的上游 mihomo 内核，
+		// 更新检查会把它当成"该升级"，UI 用它解释为什么要更新。
+		"legacy":       err == nil && !core.Managed,
 		"error":        errorText(err),
 		"platform":     runtime.GOOS,
 		"architecture": runtime.GOARCH,
+	})
+}
+
+// runtimeCheck 比对发布清单，回答"有没有新内核"。带 ?force=1 时绕过缓存。
+// 网络失败不是致命错误：前端据此决定是否提示，不阻塞启动。
+func (h *helper) runtimeCheck(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	check, err := mihomo.CheckCoreUpdate(h.root, request.URL.Query().Get("force") == "1")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"ok":         err == nil,
+		"installed":  check.Installed,
+		"latest":     check.Latest,
+		"available":  check.Available,
+		"legacy":     check.Legacy,
+		"notes":      check.Notes,
+		"minApp":     check.MinApp,
+		"downloadMB": check.DownloadMB,
+		"error":      errorText(err),
 	})
 }
 
@@ -235,15 +263,17 @@ func (h *helper) runtime(writer http.ResponseWriter, request *http.Request) {
 // 读取。done/total 是字节计数器，切换镜像时归零重算（进度条可能回跳，与
 // 更新下载同约定）。state/path/version/sha256/err/busy 受 mu 保护。
 type runtimeDownloadRunState struct {
-	mu      sync.Mutex
-	state   string // idle | downloading | done | error
-	path    string
-	version string
-	sha256  string
-	err     string
-	busy    bool
-	done    atomic.Int64
-	total   atomic.Int64
+	mu       sync.Mutex
+	state    string // idle | downloading | done | error
+	path     string
+	version  string
+	previous string
+	warning  string
+	sha256   string
+	err      string
+	busy     bool
+	done     atomic.Int64
+	total    atomic.Int64
 }
 
 var runtimeDownloadRun = runtimeDownloadRunState{state: "idle"}
@@ -254,6 +284,22 @@ func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Reque
 	if request.Method != http.MethodPost {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
+	}
+	// body 可选：{"force": true} 表示重装当前版本（修复损坏的内核）。
+	var input struct {
+		Force bool `json:"force"`
+	}
+	if request.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(request.Body, 4<<10)).Decode(&input)
+	}
+	force := input.Force
+	// 重装当前版本会覆盖正被进程映射的 exe，Windows 下 rename 必然失败，
+	// 先给一句人话而不是让用户看到 "Access is denied"。
+	if force {
+		if _, running, _ := mihomo.Status(filepath.Join(h.root, "state", "mihomo.pid")); running {
+			writeJSON(writer, http.StatusConflict, map[string]string{"error": "免流运行中无法重装内核，请先停止"})
+			return
+		}
 	}
 
 	runtimeDownloadRun.mu.Lock()
@@ -266,6 +312,8 @@ func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Reque
 	runtimeDownloadRun.state = "downloading"
 	runtimeDownloadRun.path = ""
 	runtimeDownloadRun.version = ""
+	runtimeDownloadRun.previous = ""
+	runtimeDownloadRun.warning = ""
 	runtimeDownloadRun.sha256 = ""
 	runtimeDownloadRun.err = ""
 	runtimeDownloadRun.done.Store(0)
@@ -274,26 +322,44 @@ func (h *helper) downloadRuntime(writer http.ResponseWriter, request *http.Reque
 
 	go func() {
 		// 请求体立即返回，下载生命周期与请求解耦：用独立 context 而非
-		// request.Context()。总预算 3 分钟（与旧实现一致），每条镜像另有
-		// 自己的停滞/硬限预算。
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		// request.Context()。清单 + 内核包共用这份总预算，每条镜像另外
+		// 有自己的停滞/硬限预算。
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
-		result, err := mihomo.DownloadLatestWithProgress(ctx, h.root, func(received, total int64) {
+
+		finish := func(state string, apply func()) {
+			runtimeDownloadRun.mu.Lock()
+			runtimeDownloadRun.state = state
+			runtimeDownloadRun.busy = false
+			if apply != nil {
+				apply()
+			}
+			runtimeDownloadRun.mu.Unlock()
+		}
+
+		// 清单永远强制刷新：用户点"下载/更新"就是要拿最新的，缓存留给
+		// 后台静默检查。
+		manifest, err := mihomo.FetchCoreManifest(h.root, true)
+		if err != nil {
+			finish("error", func() { runtimeDownloadRun.err = err.Error() })
+			return
+		}
+		store := mihomo.NewCoreStore(h.root)
+		result, err := store.ApplyUpdate(ctx, manifest, force, func(received, total int64) {
 			runtimeDownloadRun.done.Store(received)
 			runtimeDownloadRun.total.Store(total)
 		})
-		runtimeDownloadRun.mu.Lock()
 		if err != nil {
-			runtimeDownloadRun.state = "error"
-			runtimeDownloadRun.err = err.Error()
-			runtimeDownloadRun.busy = false
-		} else {
-			runtimeDownloadRun.state = "done"
+			finish("error", func() { runtimeDownloadRun.err = err.Error() })
+			return
+		}
+		finish("done", func() {
 			runtimeDownloadRun.path = result.Path
 			runtimeDownloadRun.version = result.Version
+			runtimeDownloadRun.previous = result.Previous
+			runtimeDownloadRun.warning = result.Warning
 			runtimeDownloadRun.sha256 = result.SHA256
-		}
-		runtimeDownloadRun.mu.Unlock()
+		})
 	}()
 
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
@@ -306,17 +372,20 @@ func (h *helper) runtimeDownloadProgress(writer http.ResponseWriter, request *ht
 		return
 	}
 	runtimeDownloadRun.mu.Lock()
-	state, path, version, sha256Hex, errMsg := runtimeDownloadRun.state, runtimeDownloadRun.path, runtimeDownloadRun.version, runtimeDownloadRun.sha256, runtimeDownloadRun.err
+	state, path, version, previous, warning := runtimeDownloadRun.state, runtimeDownloadRun.path, runtimeDownloadRun.version, runtimeDownloadRun.previous, runtimeDownloadRun.warning
+	sha256Hex, errMsg := runtimeDownloadRun.sha256, runtimeDownloadRun.err
 	runtimeDownloadRun.mu.Unlock()
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok":      true,
-		"state":   state,
-		"done":    runtimeDownloadRun.done.Load(),
-		"total":   runtimeDownloadRun.total.Load(),
-		"path":    path,
-		"version": version,
-		"sha256":  sha256Hex,
-		"error":   errMsg,
+		"ok":       true,
+		"state":    state,
+		"done":     runtimeDownloadRun.done.Load(),
+		"total":    runtimeDownloadRun.total.Load(),
+		"path":     path,
+		"version":  version,
+		"previous": previous,
+		"warning":  warning,
+		"sha256":   sha256Hex,
+		"error":    errMsg,
 	})
 }
 
@@ -681,29 +750,50 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		defer cancel()
 		_ = network.RestoreSnapshot(ctx, snapshot)
 	}
-	binaryPath, err := mihomo.DiscoverBinary(h.root)
+	store := mihomo.NewCoreStore(h.root)
+	core, err := store.Active()
 	if err != nil {
 		restore()
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := mihomo.Start(binaryPath, configPath, stateDir, pidPath, logPath); err != nil {
-		restore()
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
-		return
+	// 起内核：Start → 等 /version 就绪 → 控制器鉴权。三步合成一次尝试，
+	// 好让"新内核起不来就回滚重试"只写一遍。
+	startCore := func(binaryPath string) (int, error) {
+		if _, startErr := mihomo.Start(binaryPath, configPath, stateDir, pidPath, logPath); startErr != nil {
+			return http.StatusConflict, startErr
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+		defer cancel()
+		if readyErr := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); readyErr != nil {
+			_ = mihomo.Stop(pidPath)
+			return http.StatusBadGateway, errors.New(diagnosticError(readyErr, logPath))
+		}
+		if _, checkErr := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); checkErr != nil {
+			_ = mihomo.Stop(pidPath)
+			return http.StatusBadGateway, errors.New(diagnosticError(checkErr, logPath))
+		}
+		return http.StatusOK, nil
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
-	defer cancel()
-	if err := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); err != nil {
-		_ = mihomo.Stop(pidPath)
-		restore()
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
-		return
+
+	statusCode, startErr := startCore(core.Path)
+	if startErr != nil {
+		// 自动回滚：新内核起不来时退回上一版再试一次，并把它记进 bad 列表，
+		// 后续自动更新不再推这个版本。
+		if rolled, rollErr := store.Rollback(); rollErr == nil && rolled.Path != core.Path {
+			store.MarkBad(core.Version)
+			fmt.Fprintf(os.Stderr, "helper: core %s failed to start (%v), rolled back to %s\n", core.Version, startErr, rolled.Version)
+			if retryStatus, retryErr := startCore(rolled.Path); retryErr == nil {
+				statusCode, startErr = http.StatusOK, nil
+				core = rolled
+			} else {
+				statusCode, startErr = retryStatus, retryErr
+			}
+		}
 	}
-	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); err != nil {
-		_ = mihomo.Stop(pidPath)
+	if startErr != nil {
 		restore()
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": diagnosticError(err, logPath)})
+		writeJSON(writer, statusCode, map[string]string{"error": startErr.Error()})
 		return
 	}
 	// Persist onto the FULL stored settings — saving a partial struct here
@@ -717,7 +807,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
 	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
-	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret})
+	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret, "core": core.Version})
 }
 
 // healLeftoverSnapshot 先按上次会话残留的快照还原，再让 startProxy 重新
