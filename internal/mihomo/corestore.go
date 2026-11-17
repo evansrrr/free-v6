@@ -46,6 +46,9 @@ type CoreIndex struct {
 	Previous    string    `json:"previous"`
 	Version     string    `json:"version"`
 	InstalledAt time.Time `json:"installedAt"`
+	// VerifiedAt 是当前内核第一次成功跑起来的时间。非零且不早于 InstalledAt
+	// 表示"这份内核在本机实测可用"，此时回滚位已经没有存在意义，可以回收。
+	VerifiedAt time.Time `json:"verifiedAt,omitempty"`
 	// Bad 记录自检失败的版本，自动更新不再重试它们。
 	Bad []string `json:"bad,omitempty"`
 }
@@ -246,6 +249,7 @@ func (s *CoreStore) Install(exePath, version string) (Core, error) {
 	index.Active = active
 	index.Version = version
 	index.InstalledAt = time.Now().UTC()
+	index.VerifiedAt = time.Time{}
 	if err := s.writeIndex(index); err != nil {
 		return Core{}, err
 	}
@@ -266,10 +270,31 @@ func (s *CoreStore) Rollback() (Core, error) {
 	index.Active, index.Previous = index.Previous, index.Active
 	index.Version = version
 	index.InstalledAt = time.Now().UTC()
+	index.VerifiedAt = time.Time{}
 	if err := s.writeIndex(index); err != nil {
 		return Core{}, err
 	}
 	return Core{Version: version, Path: path, Managed: true}, nil
+}
+
+// MarkVerified 记录"当前这份内核在本机确实跑起来了"。调用点只有一个：
+// 免流启动并通过控制器鉴权之后。它是回滚位可以被回收的唯一凭据。
+func (s *CoreStore) MarkVerified() {
+	index := s.Index()
+	if index.Active == "" {
+		return
+	}
+	index.VerifiedAt = time.Now().UTC()
+	_ = s.writeIndex(index)
+}
+
+// Verified 报告当前 active 内核是否已经在本机实测跑通过。
+func (s *CoreStore) Verified() bool {
+	index := s.Index()
+	if index.Active == "" || index.VerifiedAt.IsZero() {
+		return false
+	}
+	return !index.VerifiedAt.Before(index.InstalledAt)
 }
 
 // MarkBad 记录一个自检失败的版本，自动更新不再尝试它。
@@ -311,6 +336,29 @@ func (s *CoreStore) GC() []string {
 	if index.Previous != "" {
 		keep[index.Previous] = true
 	}
+	return s.sweep(keep)
+}
+
+// Prune 把磁盘收敛到只剩 active 一份内核（外加清掉遗留的上游内核）。
+//
+// 调用时机是"当前内核已经被证明能跑"之后——应用启动时发现上次启动免流成功
+// 过、或者本次启动免流跑通。回滚位只在新内核尚未验证的窗口里有价值；窗口
+// 一关，多留一份 38MB 只是占磁盘。
+func (s *CoreStore) Prune() []string {
+	index := s.Index()
+	if index.Active == "" {
+		return nil
+	}
+	removed := s.sweep(map[string]bool{index.Active: true})
+	if len(removed) > 0 && index.Previous != "" {
+		// previous 已被删掉，指针留着只会让 Rollback 指向不存在的文件。
+		index.Previous = ""
+		_ = s.writeIndex(index)
+	}
+	return append(removed, s.DeleteLegacy()...)
+}
+
+func (s *CoreStore) sweep(keep map[string]bool) []string {
 	entries, err := os.ReadDir(s.CoresDir())
 	if err != nil {
 		return nil

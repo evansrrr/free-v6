@@ -214,3 +214,66 @@ func writeTempExe(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// 内核证明能跑之后，回滚位就该回收：磁盘上只留一份 38MB。
+func TestPruneKeepsOnlyActiveCore(t *testing.T) {
+	root := t.TempDir()
+	store := NewCoreStore(root)
+	legacy := filepath.Join(root, "runtime", "mihomo-"+runtime.GOOS+"-"+runtime.GOARCH+"-v3.exe")
+	writeFile(t, legacy, "legacy core")
+	if _, err := store.Install(writeTempExe(t, "v1"), "core-v0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Install(writeTempExe(t, "v2"), "core-v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.MarkVerified()
+
+	removed := store.Prune()
+	if len(removed) == 0 {
+		t.Fatal("expected the rollback slot and the legacy core to be pruned")
+	}
+	installed := store.Installed()
+	if len(installed) != 1 || installed[0].Path != active.Path {
+		t.Fatalf("expected only the active core to remain, got %+v", installed)
+	}
+	if index := store.Index(); index.Previous != "" {
+		t.Fatalf("previous pointer must be cleared after pruning: %+v", index)
+	}
+	if _, statErr := os.Stat(legacy); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("legacy core should be pruned together with the rollback slot")
+	}
+	if _, err := store.Active(); err != nil {
+		t.Fatalf("active core must stay usable: %v", err)
+	}
+}
+
+func TestVerifiedResetsOnEveryInstallAndRollback(t *testing.T) {
+	store := NewCoreStore(t.TempDir())
+	if _, err := store.Install(writeTempExe(t, "v1"), "core-v0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if store.Verified() {
+		t.Fatal("a freshly installed core is not verified yet")
+	}
+	store.MarkVerified()
+	if !store.Verified() {
+		t.Fatal("MarkVerified should mark the active core as verified")
+	}
+
+	if _, err := store.Install(writeTempExe(t, "v2"), "core-v0.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if store.Verified() {
+		t.Fatal("installing a new core must clear the verified flag")
+	}
+
+	store.MarkVerified()
+	if _, err := store.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if store.Verified() {
+		t.Fatal("rolling back must clear the verified flag")
+	}
+}

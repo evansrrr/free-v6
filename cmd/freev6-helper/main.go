@@ -115,6 +115,13 @@ func main() {
 	}
 	root := executableRoot()
 	h := &helper{root: root}
+	// 上一轮已经实测跑通过的内核不需要再留回滚位：磁盘收敛到一份 38MB。
+	// 这里只是提前回收——即使不做，下一次启动免流成功时也会收敛。
+	if store := mihomo.NewCoreStore(root); store.Verified() {
+		if removed := store.Prune(); len(removed) > 0 {
+			fmt.Fprintf(os.Stderr, "helper: pruned stale cores: %v\n", removed)
+		}
+	}
 	// Re-apply the autostart pieces while the switch is on: refresh the task's
 	// exe path after updates move the install directory and rewrite the Task
 	// Manager marker entry (migrating old builds' direct-exe form). Task
@@ -795,6 +802,12 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		restore()
 		writeJSON(writer, statusCode, map[string]string{"error": startErr.Error()})
 		return
+	}
+	// 内核跑通并应答了控制器：这份内核从此可信，回滚位可以回收。
+	// 失败路径不回收——那时回滚位正是要用的东西。
+	store.MarkVerified()
+	if removed := store.Prune(); len(removed) > 0 {
+		fmt.Fprintf(os.Stderr, "helper: pruned previous core: %v\n", removed)
 	}
 	// Persist onto the FULL stored settings — saving a partial struct here
 	// used to wipe blacklist/devMode on every proxy start, so the developer
