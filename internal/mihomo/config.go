@@ -53,12 +53,25 @@ var (
 // 「🚀 节点选择」，与末尾的 MATCH 完全同路——它们不改变任何一条连接的出口，
 // 只负责在首次启动时下载 9 份列表、常驻十几万条域名规则（约 100 B/条）。
 // 免流场景下国内国外流量都要过 WARP，这套分流本来就没有意义。
+// Name 同时是 rule-provider 的名字和缓存文件名：用语义名而不是序号，
+// 换列表时才不会读到上一次留下的同序号缓存（provider 只在文件过期时才
+// 重新下载，序号复用会静默加载错误的列表）。
 var ruleSets = []struct {
+	Name  string
 	Group string
 	URL   string
 }{
 	// 唯一有实际效果的一张：广告域名直接 REJECT。
-	{"🛑 全球拦截", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list"},
+	{"banad", "🛑 全球拦截", "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list"},
+}
+
+// RuleSetFileNames 返回会写进 state/ruleset/ 的文件名，供启动清理使用。
+func RuleSetFileNames() []string {
+	names := make([]string, 0, len(ruleSets))
+	for _, ruleSet := range ruleSets {
+		names = append(names, ruleSet.Name+".list")
+	}
+	return names
 }
 
 const (
@@ -241,8 +254,8 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 	// providers 与 RULE-SET 规则，非豁免流量统一 MATCH→🔗。
 	if len(options.ChainProxies) == 0 {
 		b.WriteString("rule-providers:\n")
-		for i, ruleSet := range ruleSets {
-			fmt.Fprintf(&b, "  rule%02d:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/rule%02d.list\n", i, ruleSet.URL, i)
+		for _, ruleSet := range ruleSets {
+			fmt.Fprintf(&b, "  %s:\n    type: http\n    behavior: classical\n    format: text\n    interval: 86400\n    url: %s\n    path: ./ruleset/%s.list\n", ruleSet.Name, ruleSet.URL, ruleSet.Name)
 		}
 	}
 	b.WriteString("\nrules:\n")
@@ -265,8 +278,8 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 		fmt.Fprintf(&b, "  - %s,%s,DIRECT,no-resolve\n", kind, target)
 	}
 	if len(options.ChainProxies) == 0 {
-		for i, ruleSet := range ruleSets {
-			fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
+		for _, ruleSet := range ruleSets {
+			fmt.Fprintf(&b, "  - RULE-SET,%s,%s\n", ruleSet.Name, ruleSet.Group)
 		}
 	}
 	// 内网直连：以前是 GEOIP,LAN，为这一条规则要背一个 15.7MB 的 geoip.dat。

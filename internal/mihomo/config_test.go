@@ -18,7 +18,7 @@ func TestRenderMasqueConfig(t *testing.T) {
 		"log-level: error", "mode: rule", "tun:", "enable: true",
 		// 固定设备名：ICS 热点共享按 FreeV6TUN 识别 TUN 适配器
 		"device: FreeV6TUN",
-		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,rule00,🛑 全球拦截", "rules:",
+		"♻️ 自动选择", "🔄 故障转移", "rule-providers:", "RULE-SET,banad,🛑 全球拦截", "rules:",
 		"2606:4700:4700::1111", "2606:4700:4700::1001", "2400:3200::1", "2400:3200:baba::1",
 	} {
 		if !strings.Contains(config, expected) {
@@ -35,6 +35,12 @@ func TestRenderMasqueConfig(t *testing.T) {
 	// 留着只会多下载 9 份列表、常驻十几万条规则。
 	if count := strings.Count(config, "    type: http"); count != 1 {
 		t.Fatalf("expected a single HTTP rule provider, got %d", count)
+	}
+	// provider 块必须是合法 YAML（曾经把 "\n" 写坏成字面量，断言却看不出来）
+	for _, want := range []string{"  banad:\n    type: http", "    path: ./ruleset/banad.list"} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("rule provider block malformed, missing %q", want)
+		}
 	}
 	if strings.Contains(config, "find-process-mode") {
 		t.Fatal("no PROCESS-* rules are rendered, so process matching must stay off")

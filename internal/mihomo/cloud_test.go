@@ -137,7 +137,7 @@ func TestRenderCloudProfileWithoutWarpDevice(t *testing.T) {
 		}
 	}
 	// 规则集仍由本地骨架渲染（路由归本地）
-	if !strings.Contains(config, "RULE-SET,rule00,🛑 全球拦截") {
+	if !strings.Contains(config, "RULE-SET,banad,🛑 全球拦截") {
 		t.Fatalf("rule-providers missing in cloud mode")
 	}
 }
