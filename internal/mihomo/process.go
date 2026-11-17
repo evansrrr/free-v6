@@ -47,10 +47,9 @@ func TestConfigWithin(binaryPath, configPath, homeDir string, budget time.Durati
 	return fmt.Errorf("mihomo -t: %s", details)
 }
 
-// Start 以 -d homeDir 显式固定 mihomo 的工作目录（GeoSite.dat、cache.db、
-// ruleset 缓存都落在这里）：不传时它取进程 cwd/可执行文件目录，不同机器
-// 上位置飘忽导致 geodata “明明有也找不到”。homeDir 由调用方统一传 state
-// 目录，与 EnsureGeodata 的写入位置保持一致。
+// Start 以 -d homeDir 显式固定 mihomo 的工作目录（cache.db、ruleset 缓存、
+// 日志都落在这里）：不传时它取进程 cwd/可执行文件目录，不同机器上位置飘忽，
+// 缓存就会散落到随机目录。homeDir 由调用方统一传 state 目录。
 func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error) {
 	if strings.TrimSpace(binaryPath) == "" {
 		return 0, errors.New("mihomo binary path is empty")

@@ -14,9 +14,9 @@ import (
 //   - 备用配置 = 本机 → 校园节点直出（不套娃，也不再需要 WARP 凭据）
 //
 // 之所以只取 proxies 而不整份覆盖：TUN 命名（ICS 热点共享按名识别网卡）、
-// external-controller 的 per-install secret、校园网 DIRECT 绕过、geodata
-// 预置、端口冲突预检全部由本地骨架负责，云端配置一旦覆盖这些字段就会把
-// 上述机制砸掉。规则同理——路由归本地，云端只提供"从哪儿出去"。
+// external-controller 的 per-install secret、校园网 DIRECT 绕过、端口冲突
+// 预检全部由本地骨架负责，云端配置一旦覆盖这些字段就会把上述机制砸掉。
+// 规则同理——路由归本地，云端只提供"从哪儿出去"。
 const (
 	// CloudMaxNodes 挡住误传整份 ACL4SSR 千节点配置：既限制内存，也让
 	// 接入点列表不至于渲染成几千行。
