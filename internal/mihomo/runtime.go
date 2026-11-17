@@ -5,46 +5,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 var ErrBinaryNotFound = errors.New("mihomo runtime binary not found")
 
-// RuntimeCandidates returns paths in preference order for the current platform.
-// The runtime directory is the installed layout; state is retained for local development.
-func RuntimeCandidates(root string) []string {
-	name := "mihomo-" + runtime.GOOS + "-" + runtime.GOARCH + ".exe"
-	v3Name := "mihomo-" + runtime.GOOS + "-" + runtime.GOARCH + "-v3.exe"
-	return []string{
-		filepath.Join(root, "runtime", v3Name),
-		filepath.Join(root, "runtime", name),
-		filepath.Join(root, "runtime", "mihomo.exe"),
-		filepath.Join(root, "state", v3Name),
-		filepath.Join(root, "state", name),
-		filepath.Join(root, "state", "mihomo.exe"),
-	}
-}
-
+// DiscoverBinary 返回当前该用的内核路径。解析顺序由 CoreStore.Active 决定：
+// 指针清单 → cores/ 里版本最高的 → 老用户遗留的上游内核。
 func DiscoverBinary(root string) (string, error) {
-	if root == "" {
-		root = "."
+	core, err := NewCoreStore(root).Active()
+	if err != nil {
+		return "", err
 	}
-	for _, candidate := range RuntimeCandidates(root) {
-		info, err := os.Stat(candidate)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return "", fmt.Errorf("inspect mihomo runtime %q: %w", candidate, err)
-		}
-		if info.IsDir() {
-			continue
-		}
-		return candidate, nil
-	}
-	return "", fmt.Errorf("%w under %q", ErrBinaryNotFound, root)
+	return core.Path, nil
 }
 
+// ResolveBinary 优先用显式路径（CLI --binary / 调试覆盖），否则走发现逻辑。
 func ResolveBinary(explicit, root string) (string, error) {
 	if explicit != "" {
 		info, err := os.Stat(explicit)
@@ -57,4 +32,12 @@ func ResolveBinary(explicit, root string) (string, error) {
 		return explicit, nil
 	}
 	return DiscoverBinary(root)
+}
+
+// RuntimeDir 返回内核目录（安装布局）。
+func RuntimeDir(root string) string {
+	if root == "" {
+		root = "."
+	}
+	return filepath.Join(root, "runtime")
 }

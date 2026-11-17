@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,33 +17,10 @@ import (
 	"github.com/yourname/freev6/internal/stallhttp"
 )
 
-// mihomoGitHubZipURL 是被镜像前缀拼接的发布资产本体；版本与下方
-// expectedRuntimeSHA256 必须一起升级。
-const mihomoGitHubZipURL = "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v3-v1.19.31.zip"
-
-// expectedRuntimeSHA256 是 GitHub release API 对该资产公布的 digest。
-// 多镜像意味着多个不受控分发方，下载的又是会被执行的文件——哈希必须
-// 与固定值比对，不匹配按该线路失败处理（投毒/截断/换包都到此为止）。
-// var 形式便于测试注入本地构造的载荷摘要。
-var expectedRuntimeSHA256 = "f1a81678517dee871b51858f2a62d190d014b389057c67db575d1ddba892d19b"
-
-// runtimeDownloadURLs 按优先级排列：gh-proxy 家族是本项目核心/更新下载
-// 的大陆加速通道（geodata.go 同源），按 2026-10 校园网实测 1MB 首段延迟
-// 排序（v6/v4 最快，现役 gh-proxy.com 保留前三）；github 直连兜底给
-// 国际可达的网络。变量形式便于测试注入。
-var runtimeDownloadURLs = []string{
-	"https://v6.gh-proxy.org/" + mihomoGitHubZipURL,
-	"https://v4.gh-proxy.org/" + mihomoGitHubZipURL,
-	"https://gh-proxy.com/" + mihomoGitHubZipURL,
-	"https://axisnow.gh-proxy.org/" + mihomoGitHubZipURL,
-	"https://cdn.gh-proxy.org/" + mihomoGitHubZipURL,
-	mihomoGitHubZipURL,
-}
-
 // 单镜像预算：停滞 10s 内无字节进展立即切线路（挂死的 gh-proxy 只烧掉
 // 10 秒，慢而有进展的下载不被误杀）；硬上限兜住持续蠕动的镜像。总预算
-// 仍由调用方 context 控制（helper 3 分钟），镜像间互不共享份额——这正是
-// geodata 镜像链踩过的坑（共享预算被首镜像吃光）。
+// 仍由调用方 context 控制，镜像间互不共享份额——这正是 geodata 镜像链
+// 踩过的坑（共享预算被首镜像吃光）。
 var (
 	runtimeStallTimeout      = 10 * time.Second
 	runtimeMirrorHardTimeout = 60 * time.Second
@@ -52,13 +28,9 @@ var (
 	runtimeStallCheckInterval = time.Second
 )
 
+// maxRuntimeDownload 是内核包/可执行文件的大小上限，同时兜住恶意镜像的
+// 无限流。38MB 的内核留足余量。
 const maxRuntimeDownload = 150 << 20
-
-type DownloadResult struct {
-	Version string
-	Path    string
-	SHA256  string
-}
 
 // progressSink 接收下载进度：received 为当前镜像已传输字节数，total 为响应
 // Content-Length（未知时为 -1）。回调在下载 goroutine 内随数据流入触发，
@@ -66,56 +38,41 @@ type DownloadResult struct {
 // 会归零重算，前端进度条可能回跳，属预期行为。
 type progressSink func(received, total int64)
 
-func DownloadLatest(ctx context.Context, root string) (DownloadResult, error) {
-	return DownloadLatestWithProgress(ctx, root, nil)
-}
-
-// DownloadLatestWithProgress 与 DownloadLatest 相同，额外通过 progress
-// 上报下载字节进度（progress 为 nil 时不报）。
-func DownloadLatestWithProgress(ctx context.Context, root string, progress progressSink) (DownloadResult, error) {
+// downloadAsset 按顺序尝试每条镜像，返回临时文件路径与它的 SHA256。
+// 调用方负责删除临时文件。
+//
+// 三类失败一律换线：网络/HTTP 错误、SHA256 与期望不符、超时。多镜像意味着
+// 多个不受控分发方，而下载的又是会被执行的文件——哈希不符必须当成"这条
+// 线路的内容不可信"，而不是整体失败（换一条线常常就好了）。
+func downloadAsset(ctx context.Context, urls []string, expectedSHA string, progress progressSink) (string, string, error) {
 	client := &http.Client{}
 	var failures []string
 	skipped := 0
-	for index, source := range runtimeDownloadURLs {
+	for index, source := range urls {
 		if ctx.Err() != nil {
-			skipped = len(runtimeDownloadURLs) - index
+			skipped = len(urls) - index
 			break
 		}
-		digest, temporaryPath, downloadErr := downloadRuntimeMirror(ctx, client, source, progress)
-		if downloadErr == nil {
-			runtimeDir := filepath.Join(root, "runtime")
-			if mkdirErr := os.MkdirAll(runtimeDir, 0o700); mkdirErr != nil {
-				_ = os.Remove(temporaryPath)
-				return DownloadResult{}, mkdirErr
-			}
-			outputPath, extractErr := extractRuntime(temporaryPath, runtimeDir)
-			_ = os.Remove(temporaryPath)
-			if extractErr == nil {
-				return DownloadResult{Version: "v1.19.31", Path: outputPath, SHA256: digest}, nil
-			}
-			// 包体已通过 SHA256 校验仍解不开 → 环境问题而非线路问题，
-			// 但换线路重试无害且可能掩盖不了磁盘错误；按线路失败记录。
-			downloadErr = extractErr
-		} else {
-			_ = os.Remove(temporaryPath)
+		path, digest, err := downloadMirror(ctx, client, source, expectedSHA, progress)
+		if err == nil {
+			return path, digest, nil
 		}
-		failures = append(failures, fmt.Sprintf("%s: %v", hostOf(source), downloadErr))
+		_ = os.Remove(path)
+		failures = append(failures, fmt.Sprintf("%s: %v", hostOf(source), err))
 	}
 	if skipped > 0 {
 		failures = append(failures, fmt.Sprintf("剩余 %d 个镜像因总超时未尝试", skipped))
 	}
 	if len(failures) == 0 && ctx.Err() != nil {
-		return DownloadResult{}, fmt.Errorf("下载 mihomo runtime 超时: %w", ctx.Err())
+		return "", "", fmt.Errorf("下载超时: %w", ctx.Err())
 	}
-	return DownloadResult{}, fmt.Errorf("下载 mihomo runtime 失败（已尝试 %d/%d 个镜像: %s），请检查网络后重试",
-		len(failures), len(runtimeDownloadURLs), strings.Join(failures, "; "))
+	return "", "", fmt.Errorf("下载失败（已尝试 %d/%d 个镜像: %s），请检查网络后重试",
+		len(failures), len(urls), strings.Join(failures, "; "))
 }
 
-// downloadRuntimeMirror 拉取单个镜像到临时文件并校验固定 SHA256。返回
-// 摘要与临时文件路径（调用方负责删除）。停滞 watchdog 与硬上限都通过
-// 取消 mirrorCtx 中断在途读取：连接挂死、首字节不来、传输中断流都会在
-// runtimeStallTimeout 内让位给下一条线路。
-func downloadRuntimeMirror(ctx context.Context, client *http.Client, source string, progress progressSink) (digest string, temporaryPath string, err error) {
+// downloadMirror 拉取单个镜像到临时文件并校验摘要。返回的路径即使出错也
+// 可能是非空的临时文件（供调用方清理）。
+func downloadMirror(ctx context.Context, client *http.Client, source, expectedSHA string, progress progressSink) (string, string, error) {
 	mirrorCtx, cancel := context.WithTimeout(ctx, runtimeMirrorHardTimeout)
 	defer cancel()
 
@@ -125,34 +82,31 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 	stopWatchdog := stallhttp.StartWatchdog(mirrorCtx, cancel, &received, runtimeStallTimeout, runtimeStallCheckInterval)
 	defer stopWatchdog()
 
-	request, requestErr := http.NewRequestWithContext(mirrorCtx, http.MethodGet, source, nil)
-	if requestErr != nil {
-		return "", "", requestErr
+	request, err := http.NewRequestWithContext(mirrorCtx, http.MethodGet, source, nil)
+	if err != nil {
+		return "", "", err
 	}
 	request.Header.Set("User-Agent", "freev6")
 
-	response, doErr := client.Do(request)
-	if doErr != nil {
-		return "", "", fmt.Errorf("download mihomo runtime: %w", doErr)
+	response, err := client.Do(request)
+	if err != nil {
+		return "", "", err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("mihomo runtime download returned HTTP %s", response.Status)
+		return "", "", fmt.Errorf("HTTP %s", response.Status)
 	}
 
-	temporary, createErr := os.CreateTemp("", "freev6-mihomo-*.zip")
-	if createErr != nil {
-		return "", "", createErr
+	temporary, err := os.CreateTemp("", "freev6-core-*")
+	if err != nil {
+		return "", "", err
 	}
-	// 捕获到局部变量：失败路径的显式 return 会把 named return 清空，
-	// defer 若引用 named path 就删不掉临时文件。
-	temporaryPath = temporary.Name()
-	cleanupPath := temporaryPath
+	path := temporary.Name()
 	keep := false
 	defer func() {
 		_ = temporary.Close()
 		if !keep {
-			_ = os.Remove(cleanupPath)
+			_ = os.Remove(path)
 		}
 	}()
 
@@ -163,18 +117,18 @@ func downloadRuntimeMirror(ctx context.Context, client *http.Client, source stri
 		reader = &progressReportingReader{r: reader, received: &received, total: response.ContentLength, onProgress: progress}
 	}
 	limited := io.LimitReader(reader, maxRuntimeDownload)
-	if _, copyErr := io.Copy(temporary, limited); copyErr != nil {
-		return "", "", fmt.Errorf("save mihomo runtime download: %w", copyErr)
+	if _, err := io.Copy(temporary, limited); err != nil {
+		return path, "", err
 	}
-	if closeErr := temporary.Close(); closeErr != nil {
-		return "", "", closeErr
+	if err := temporary.Close(); err != nil {
+		return path, "", err
 	}
-	digest = hex.EncodeToString(hash.Sum(nil))
-	if digest != expectedRuntimeSHA256 {
-		return "", "", fmt.Errorf("sha256 与固定值不符（got %s…），镜像内容不可信", digest[:16])
+	digest := hex.EncodeToString(hash.Sum(nil))
+	if expectedSHA != "" && !strings.EqualFold(digest, expectedSHA) {
+		return path, digest, fmt.Errorf("sha256 不符（got %s…）", digest[:16])
 	}
 	keep = true
-	return digest, temporaryPath, nil
+	return path, digest, nil
 }
 
 // progressReportingReader 在每次 Read 后上报当前字节进度。received 复用
@@ -195,59 +149,52 @@ func (p *progressReportingReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func extractRuntime(archivePath, runtimeDir string) (string, error) {
-	outputPath := filepath.Join(runtimeDir, "mihomo-windows-amd64-v3.exe")
-	name := strings.ToLower(filepath.Base(archivePath))
-
-	if strings.HasSuffix(name, ".zip") {
-		archive, err := zip.OpenReader(archivePath)
-		if err != nil {
-			return "", fmt.Errorf("open mihomo archive: %w", err)
-		}
+// extractArchive 从 zip 或 gzip 里取出内核可执行文件写到 destPath。
+//
+// 按内容判断而不是扩展名：下载落在临时文件里，没有后缀可用。zip 只认第一个
+// .exe 条目——f6-core 的发布包正好只有一个根级 exe。
+func extractArchive(archivePath, destPath string) error {
+	archive, zipErr := zip.OpenReader(archivePath)
+	if zipErr == nil {
 		defer archive.Close()
 		for _, file := range archive.File {
-			lower := strings.ToLower(file.Name)
-			if strings.HasSuffix(lower, ".exe") {
-				input, err := file.Open()
-				if err != nil {
-					return "", err
-				}
-				output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
-				if err == nil {
-					_, err = io.Copy(output, io.LimitReader(input, maxRuntimeDownload))
-				}
-				_ = input.Close()
-				_ = output.Close()
-				if err != nil {
-					return "", fmt.Errorf("extract mihomo runtime: %w", err)
-				}
-				return outputPath, nil
+			if !strings.HasSuffix(strings.ToLower(file.Name), ".exe") {
+				continue
 			}
+			input, err := file.Open()
+			if err != nil {
+				return err
+			}
+			if err := writeLimited(input, destPath); err != nil {
+				_ = input.Close()
+				return err
+			}
+			return input.Close()
 		}
-		return "", fmt.Errorf("mihomo zip contains no executable")
+		return fmt.Errorf("core zip contains no executable")
 	}
 
 	input, err := os.Open(archivePath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer input.Close()
 	reader, err := gzip.NewReader(input)
 	if err != nil {
-		return "", fmt.Errorf("open mihomo gzip: %w", err)
+		return fmt.Errorf("不认识的发布包格式（zip: %v, gzip: %w）", zipErr, err)
 	}
 	defer reader.Close()
-	output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	return writeLimited(reader, destPath)
+}
+
+func writeLimited(source io.Reader, destPath string) error {
+	output, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
 	if err != nil {
-		return "", err
+		return err
 	}
-	_, copyErr := io.Copy(output, io.LimitReader(reader, maxRuntimeDownload))
-	closeErr := output.Close()
-	if copyErr != nil {
-		return "", fmt.Errorf("extract mihomo gzip: %w", copyErr)
+	if _, err := io.Copy(output, io.LimitReader(source, maxRuntimeDownload)); err != nil {
+		_ = output.Close()
+		return err
 	}
-	if closeErr != nil {
-		return "", closeErr
-	}
-	return outputPath, nil
+	return output.Close()
 }
