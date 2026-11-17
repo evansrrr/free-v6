@@ -67,6 +67,8 @@ const state = {
   runtimeLegacy: false,
   // 内核更新检查结果：null 表示没有可用更新（或尚未检查成功）
   coreUpdate: null,
+  coreChecking: false,
+  coreDownloading: false,
   warpRegistered: false,
   warpRegistering: false,
   warpAutoTried: false,
@@ -1653,7 +1655,11 @@ function applyRuntimeInfo(runtime) {
 
 // 检查内核更新：与软件更新同一套节奏（启动后静默查一次），失败静默。
 // force=true 用于用户主动点「检查」。
-async function checkCoreUpdate(force = false) {
+// 默认实时拉清单：6 小时缓存只作"网络失败时的兜底"。否则新版本会被压在
+// 缓存里看不见——发版后用户要等半天才收到提示，和软件更新的体验不一致。
+async function checkCoreUpdate(force = true) {
+  if (state.coreChecking) return state.coreUpdate;
+  state.coreChecking = true;
   try {
     const res = await api(`/runtime/check${force ? '?force=1' : ''}`);
     if (!res?.ok) return state.coreUpdate; // 网络问题：保留上次结论
@@ -1667,6 +1673,8 @@ async function checkCoreUpdate(force = false) {
       : null;
   } catch (_) {
     return state.coreUpdate;
+  } finally {
+    state.coreChecking = false;
   }
   updateSettingsUI();
   return state.coreUpdate;
@@ -1727,6 +1735,7 @@ async function pollCoreDownloadProgress() {
 async function downloadCore(btn) {
   if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
   if (btn) btn.disabled = true;
+  state.coreDownloading = true;
   renderCoreDownloadProgress(0, true);
   const wasRunning = state.proxyRunning;
   try {
@@ -1754,6 +1763,7 @@ async function downloadCore(btn) {
     showToast('核心下载失败', 'error');
     return false;
   } finally {
+    state.coreDownloading = false;
     renderCoreDownloadProgress(0, false);
     if (btn) btn.disabled = false;
     updateSettingsUI();
@@ -3839,6 +3849,12 @@ function init() {
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
+  // 内核更新：启动后那一次之外，每 30 分钟实时复查一次（清单只有几 KB）。
+  // 窗口在后台时不查；正在安装内核时跳过，别和安装抢网络。
+  setInterval(() => {
+    if (document.hidden || state.coreDownloading || !state.helperOnline) return;
+    checkCoreUpdate();
+  }, 30 * 60 * 1000);
 
   // 自动运行免流：网络恢复后立即重试（离线期间按间隔静默等待）
   window.addEventListener('online', () => {
