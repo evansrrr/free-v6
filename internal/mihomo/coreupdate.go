@@ -39,7 +39,7 @@ var coreMirrorPrefixes = []string{
 // latest——在内核还没有任何正式版之前，latest 会 404，首次安装和更新检查
 // 都会失效。所以先兜底到一个确定存在的 tag，等 core-v0.2.0 这类正式版
 // 发出去之后 latest 自动接管，这段兜底就只剩"多一条候选"的作用。
-const coreManifestFallbackTag = "core-v0.1.0-rc.3"
+const coreManifestFallbackTag = "core-v0.2.0"
 
 // coreManifestURLs 是清单的候选地址：latest 组（镜像 + 直连）→ 兜底 tag 组。
 // 404 由镜像快速返回，不会把整条链拖成几十秒。
