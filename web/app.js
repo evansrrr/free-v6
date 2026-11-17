@@ -1696,7 +1696,7 @@ function renderCoreDownloadProgress(pct, active) {
 // 轮询 /runtime/download/progress 直到 done/error。返回下载结果（含 version）
 // 或 null（失败）。
 async function pollCoreDownloadProgress() {
-  for (let i = 0; i < 600; i++) { // 上限 ~3 分钟，对齐 helper 侧总预算
+  for (let i = 0; i < 900; i++) { // 上限 ~4.5 分钟，略高于 helper 侧 4 分钟预算
     await new Promise((r) => setTimeout(r, 300));
     let p;
     try {
@@ -1943,6 +1943,8 @@ async function pollStatus() {
     } catch (_) { /* 保持上次已知状态 */ }
     if (firstConnect) {
       addLog('已连接 freev6 helper');
+      // helper 冷启动晚于启动时那次检查的话，这里补一次（命中缓存，代价是一次 GET）
+      setTimeout(() => { checkCoreUpdate(); }, 800);
       // Helper is up: retry a dynamic-color seed fetch that failed at load
       if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
       // 首次连上：同步 WARP 注册状态，未注册则自动注册一次
