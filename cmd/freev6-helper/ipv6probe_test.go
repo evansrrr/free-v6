@@ -257,3 +257,41 @@ func TestProductionProbeClientIsIPv6Only(t *testing.T) {
 		t.Logf("失败原因（可接受）: %v", fmt.Sprint(err))
 	}
 }
+
+// 字面量地址不该经过解析器：否则每次探测都白搭一次 DNS 查询。
+func TestDialIPv6SkipsResolverForLiteral(t *testing.T) {
+	started := time.Now()
+	_, err := dialIPv6(context.Background(), &net.Dialer{Timeout: 300 * time.Millisecond}, "[::1]:9")
+	if err == nil {
+		t.Fatal("::1:9 竟然连上了")
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		t.Errorf("字面量地址被当成了域名解析失败: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("耗时 %v，字面量不该有解析开销", elapsed)
+	}
+}
+
+// Windows DNS 客户端在网络变更后会熔断几秒，这时所有查询都超时。必须能认出
+// 「是解析挂了」而不是「出站不通」，两者给用户的建议完全不同。
+type dnsFailTransport struct{}
+
+func (dnsFailTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, &net.DNSError{Err: "server misbehaving", Name: "probe.invalid", IsTemporary: true}
+}
+
+func TestFetchIPv6MarksDNSFailure(t *testing.T) {
+	_, err := fetchIPv6(context.Background(),
+		&http.Client{Transport: dnsFailTransport{}}, "http://probe.invalid/ip")
+	if err == nil {
+		t.Fatal("解析失败被当成成功")
+	}
+	if !err.dns {
+		t.Errorf("应标记为 DNS 失败: %v", err)
+	}
+	if err.reason != "域名解析失败" {
+		t.Errorf("reason = %q", err.reason)
+	}
+}

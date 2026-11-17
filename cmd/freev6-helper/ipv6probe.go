@@ -12,9 +12,13 @@ package main
 //
 // 多个地址并行竞速，先给出合法 IPv6 的胜出，其余立即取消。
 //
-// 另有一个坑：刚停完免流的几秒里，Windows 还在拆 FreeV6TUN、默认路由也没收敛，
-// 这时任何 IPv6 出站都会失败。只问一次，就会把「等两秒就好」判成「本机没有出口」
-// ——所以一轮全败且本机确实配了 IPv6 时按预算重试（见 probeIPv6Sources）。
+// 两个实测过的坑决定了这里的形状：
+//  1. 停止免流拆掉 TUN 会触发 Windows DNS 客户端熔断——`ipconfig /flushdns`
+//     之后前两次查询各超时 3s 才恢复。用系统解析器时，四个地址会一起停在
+//     "域名解析失败"，然后被报成"本机有 IPv6 地址但出站不通"。所以解析走
+//     纯 Go 解析器（probeResolver），只查 AAAA（dialIPv6）。
+//  2. 链路层面仍会有过渡态（路由收敛、上游抖动），一轮全败且本机确实配了
+//     IPv6 时按预算重试；DNS 之外的失败立刻定论，不让用户干等。
 
 import (
 	"context"
@@ -37,19 +41,70 @@ import (
 const (
 	// 单轮竞速：几个地址并行，正常情况下 <300ms 出结果。
 	ipv6ProbeRoundTimeout = 4 * time.Second
-	// 含重试的总预算。停止免流后 Windows 要拆掉 TUN 适配器、重新收敛默认路由，
-	// 这几秒里 IPv6 出站全废——只问一次必然把「刚停完免流」误判成「没有出口」。
+	// 含重试的总预算。链路过渡态（路由收敛、上游抖动）在几秒内自愈，
+	// 只问一次会把"刚停完免流"误判成"没有出口"。DNS 熔断已由 probeResolver
+	// 绕开，这里覆盖的是剩下的链路层抖动。
 	ipv6ProbeBudget   = 12 * time.Second
 	ipv6ProbeRetryGap = 1200 * time.Millisecond
 )
 
-// 检测地址。三所高校的 speedtest 后端在 CERNET2 内往返通常远小于 200ms，
-// ipv6.testipv6.cn 是校外的兜底（JSONP，必须带 callback 才会回正文）。
+// 检测地址。四家分散在不同网络里，任一给出合法 IPv6 就够：
+//   - speedtest6.bupt.edu.cn、speed6.ujs.edu.cn：校园 speedtest 后端，
+//     CERNET2 内往返通常几十毫秒（实测 23ms / 75ms）。
+//   - ipv6.testipv6.cn：校外兜底，JSONP，**必须带 callback** 才会回正文。
+//   - api-ipv6.ip.sb：纯文本，走 Cloudflare，慢一些（0.2–4s）但目前可用。
+//
+// test6.ustc.edu.cn、fs.nju.edu.cn、test6.nju.edu.cn 已移出：前两个在用户
+// 这条出口上稳定 3s 超时，后一个被反爬挡在校验页后面。
 var ipv6EchoSources = []string{
 	"https://speedtest6.bupt.edu.cn/getIP.php",
-	"https://test6.ustc.edu.cn/backend/getIP.php",
+	"http://speed6.ujs.edu.cn/backend/getIP.php",
 	"https://ipv6.testipv6.cn/ip/?callback=_freev6&testdomain=testipv6.cn",
-	"https://fs.nju.edu.cn/speed/getIP.php",
+	"https://api-ipv6.ip.sb/ip",
+}
+
+// 探测专用解析器：强制使用 Go 自带的纯 Go 解析器，直接向 DNS 服务器发查询。
+//
+// Windows 的 DNS 客户端在网卡增删之后（停止免流拆掉 TUN 正是这种事件）会进入
+// 数秒的"服务器未响应"熔断：实测 `ipconfig /flushdns` 之后前两次查询各超时
+// 3 秒，第三次才通（23ms）。这几秒正好盖住整个探测窗口——四个地址全部停在
+// "域名解析失败"，最后被当成"出站不通"报给用户。同一个服务器、同一时刻，
+// 纯 Go 解析器 25ms 就能拿到结果，因为它不经过那层熔断。
+var probeResolver = &net.Resolver{PreferGo: true}
+
+// dialIPv6 先只查 AAAA，再连那个地址。
+//   - 只查 AAAA：探测的目的就是验证 IPv6 出口，混进 A 记录会连回 IPv4，
+//     拿到一个 IPv4 地址，结论完全相反；
+//   - 自己解析再拨号：绕开系统解析器（见 probeResolver）。
+//
+// 解析器读不到系统 DNS 配置时退回"直接拨域名"的旧行为，宁可慢也别直接失败。
+func dialIPv6(ctx context.Context, dialer *net.Dialer, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return dialer.DialContext(ctx, "tcp6", addr)
+	}
+	addresses, lookupErr := probeResolver.LookupIP(ctx, "ip6", host)
+	if lookupErr != nil || len(addresses) == 0 {
+		if conn, fallbackErr := dialer.DialContext(ctx, "tcp6", addr); fallbackErr == nil {
+			return conn, nil
+		}
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		return nil, &net.DNSError{Err: "no AAAA record", Name: host, IsNotFound: true}
+	}
+	var lastErr error
+	for _, address := range addresses {
+		conn, dialErr := dialer.DialContext(ctx, "tcp6", net.JoinHostPort(address.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		lastErr = dialErr
+	}
+	return nil, lastErr
 }
 
 // 探测专用客户端：只走 IPv6，且不读系统代理——免流运行时系统代理指向 mihomo，
@@ -60,7 +115,7 @@ var ipv6ProbeClient = func() *http.Client {
 		Timeout: ipv6ProbeRoundTimeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, "tcp6", addr)
+				return dialIPv6(ctx, dialer, addr)
 			},
 			TLSHandshakeTimeout:   3 * time.Second,
 			ResponseHeaderTimeout: 4 * time.Second,
@@ -103,6 +158,8 @@ type probeError struct {
 	host   string
 	reason string
 	noPath bool
+	// dns 标记"名字解析不了"这一类失败：它和出站不通是两种病，汇总文案要分开。
+	dns bool
 }
 
 func (e *probeError) Error() string { return e.host + " " + e.reason }
@@ -119,7 +176,13 @@ func fetchIPv6(ctx context.Context, client *http.Client, source string) (ipv6Pro
 	response, err := client.Do(request)
 	if err != nil {
 		reason := "连接失败"
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		var dnsErr *net.DNSError
+		switch {
+		case errors.As(err, &dnsErr):
+			// 解析失败和"连不上"是两件事：前者说明 DNS 坏了（停止免流后确实
+			// 出现过这种窗口），后者才是出站不通。混成一句会让排障走弯路。
+			return ipv6ProbeResult{}, &probeError{host: host, reason: "域名解析失败", noPath: true, dns: true}
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded):
 			reason = "超时"
 		}
 		return ipv6ProbeResult{}, &probeError{host: host, reason: reason, noPath: true}
@@ -204,6 +267,20 @@ func (f *probeFailure) error() error {
 	return errors.New(message)
 }
 
+// dnsOnly：这一轮所有源都栽在"名字解析不了"上，一个都没能发起连接。
+// 这种失败的方向完全不同——网络可能是通的，坏的是 DNS，修路由没用。
+func (f *probeFailure) dnsOnly() bool {
+	if len(f.failures) == 0 {
+		return false
+	}
+	for _, failure := range f.failures {
+		if !failure.dns {
+			return false
+		}
+	}
+	return true
+}
+
 // 一轮竞速：所有地址并行发出，第一个成功的结果胜出，其余立即取消。
 func probeIPv6Once(ctx context.Context, client *http.Client, sources []string) (ipv6ProbeResult, *probeFailure) {
 	ctx, cancel := context.WithTimeout(ctx, ipv6ProbeRoundTimeout)
@@ -253,6 +330,9 @@ func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string
 		if failure == nil {
 			return result, attempts, nil
 		}
+		// 每轮全败都落一行：前端只显示一句汇总，"到底每个源是超时、解析失败
+		// 还是没地址"只有这里看得到。没有这一行，排障就只剩猜。
+		fmt.Fprintf(os.Stderr, "helper: ipv6 probe round %d: %s\n", attempts, failure.describe())
 		// 真没有 v6 出口时重试只会让用户干等（校外、手机热点走这条快速失败）
 		if !failure.transient() || !hasLocalIPv6() {
 			return ipv6ProbeResult{}, attempts, failure.error()
@@ -262,6 +342,12 @@ func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string
 		case <-budget.Done():
 			// 本机有地址却始终打不出去：多半卡在停止免流的网络回收上
 			if attempts > 1 {
+				logProbeNetworkState()
+				if failure.dnsOnly() {
+					// 名字根本解析不出来：问题在 DNS 这一层，别说成"出站不通"
+					return ipv6ProbeResult{}, attempts, errors.New(
+						"DNS 暂时解析不了检测地址（刚停完免流时常见），请稍后重试")
+				}
 				// 不嵌套括号：前端会把它包进「检测失败: …」
 				return ipv6ProbeResult{}, attempts, errors.New(
 					"本机有 IPv6 地址但出站不通，可能刚停完免流或校园网 v6 不通，请稍后重试")
@@ -269,6 +355,50 @@ func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string
 			return ipv6ProbeResult{}, attempts, failure.error()
 		}
 	}
+}
+
+// describe 把一轮里每个源的失败原因拼成一行，供 helper.log 用。
+func (f *probeFailure) describe() string {
+	if len(f.failures) == 0 {
+		return fmt.Sprintf("%d 个地址全部超时", f.total)
+	}
+	parts := make([]string, 0, len(f.failures))
+	for _, failure := range f.failures {
+		parts = append(parts, failure.Error())
+	}
+	if len(parts) < f.total {
+		parts = append(parts, fmt.Sprintf("另有 %d 个未响应", f.total-len(parts)))
+	}
+	return strings.Join(parts, "；")
+}
+
+// logProbeNetworkState 记录"此刻各接口还有没有默认网关"。
+//
+// 这是判断"有 IPv6 地址但出站不通"的最后一道分界线：网卡上没有 v6 默认网关，
+// 说明是路由被拆掉（停止免流残留 / 路由器通告还没回来）；网关都在，问题就在
+// DNS 或上游，别再往路由上找。
+func logProbeNetworkState() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	snapshot, err := network.CaptureSnapshot(ctx, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "helper: ipv6 probe net: snapshot failed: %v\n", err)
+		return
+	}
+	parts := make([]string, 0, len(snapshot.Interfaces))
+	for _, iface := range snapshot.Interfaces {
+		if len(iface.IPv6DefaultGateways) == 0 && len(iface.IPv4DefaultGateways) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s v6gw=%s v4gw=%s", iface.Alias,
+			strings.Join(iface.IPv6DefaultGateways, "/"),
+			strings.Join(iface.IPv4DefaultGateways, "/")))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "没有任何接口报告默认网关")
+	}
+	fmt.Fprintf(os.Stderr, "helper: ipv6 probe net: %s；%s=%v\n", strings.Join(parts, "；"),
+		network.TunDeviceName, network.AdapterPresent(network.TunDeviceName))
 }
 
 // GET /api/v1/ipv6/probe 探测本机公网 IPv6，回答启动免流的网络前置条件。
