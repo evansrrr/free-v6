@@ -54,6 +54,16 @@ func normalizeProxyEntries(entries []map[string]any, reserved map[string]bool, d
 	// “看起来在代理上、实际真实 IP 直通”，是明确的泄露向量，直接拒绝。
 	// dns 类型与代理无关，同样拒绝。
 	forbiddenTypes := map[string]bool{"direct": true, "dns": true}
+	// 链式路径是 本机 → MASQUE → 自有节点：节点的传输层由 MASQUE（HTTP/3）
+	// 承载，因此只有 TCP 类协议真的能跑起来。QUIC 类（hysteria/hysteria2/
+	// tuic）在 MASQUE 里是 QUIC 套 QUIC，内层握手抢不到 MTU；wireguard 同样
+	// 走 UDP。内核已经把这几类编译掉了——在这里提前拦住，给一句人能看懂的
+	// 错误，而不是让 mihomo 加载配置时整份失败、免流直接起不来。
+	// 备用配置（dialer 为空）的节点是本地直接出口，不受这条限制。
+	chainTypes := map[string]bool{
+		"ss": true, "ssr": true, "socks5": true, "http": true,
+		"vmess": true, "vless": true, "trojan": true, "anytls": true,
+	}
 	for index, entry := range entries {
 		name, _ := entry["name"].(string)
 		name = strings.TrimSpace(name)
@@ -67,6 +77,9 @@ func normalizeProxyEntries(entries []map[string]any, reserved map[string]bool, d
 		}
 		if forbiddenTypes[kind] {
 			return nil, fmt.Errorf("第 %d 个代理类型 %q 不允许导入（%s 类型会让流量直连真实出口 IP）", index+1, kind, kind)
+		}
+		if dialer != "" && !chainTypes[kind] {
+			return nil, fmt.Errorf("第 %d 个代理类型 %q 不支持链式代理（经 MASQUE 只支持 ss / ssr / vmess / vless / trojan / anytls / socks5 / http）", index+1, kind)
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("代理名称重复: %q", name)

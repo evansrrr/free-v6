@@ -201,6 +201,26 @@ func TestParseChainProxiesRejectsLeakyTypes(t *testing.T) {
 	}
 }
 
+// 经 MASQUE 的链路只能承载 TCP 类协议：QUIC 类（QUIC 套 QUIC 抢不到 MTU）
+// 与 wireguard（UDP）在链式里跑不通，必须在导入时就拒绝——否则内核加载
+// 配置会整份失败，免流直接起不来。
+func TestParseChainProxiesRejectsUntransportableTypes(t *testing.T) {
+	cases := []string{"hysteria", "hysteria2", "tuic", "wireguard", "snell", "mieru"}
+	for _, kind := range cases {
+		t.Run(kind, func(t *testing.T) {
+			content := "proxies:\n  - {name: node-" + kind + ", type: " + kind + "}\n"
+			_, err := ParseChainProxies([]byte(content))
+			if err == nil || !strings.Contains(err.Error(), "不支持链式代理") {
+				t.Fatalf("err = %v, want transport rejection for %s", err, kind)
+			}
+		})
+	}
+	// 反例：同样这些类型在备用配置里是本地直接出口，不受链式限制。
+	if _, err := normalizeProxyEntries([]map[string]any{{"name": "egress", "type": "tuic"}}, map[string]bool{}, ""); err != nil {
+		t.Fatalf("cloud-mode entries must not be rejected by the chain whitelist: %v", err)
+	}
+}
+
 // 链式启用 = 全流量经自有代理：不得再出现指向接入点的 RULE-SET 分流
 // 与 rule-providers（它们造成“国内域名走 WARP 出口”的分裂，并在后台
 // 拉取时绕链外联）。未启用时两者必须原样保留。
@@ -230,7 +250,7 @@ func TestRenderChainDropsRuleSetSplitEgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(withoutChain, "rule-providers:") || !strings.Contains(withoutChain, "RULE-SET,rule00") {
+	if !strings.Contains(withoutChain, "rule-providers:") || !strings.Contains(withoutChain, "RULE-SET,banad") {
 		t.Fatal("non-chain config must keep rule-providers and RULE-SET lines unchanged")
 	}
 }
