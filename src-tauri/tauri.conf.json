@@ -4,8 +4,8 @@
   "version": "0.5.4",
   "identifier": "dev.freev6.desktop",
   "build": {
-    "beforeDevCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -trimpath -buildvcs=false -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe && go run ./cmd/ensure-geodata",
-    "beforeBuildCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -trimpath -buildvcs=false -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe && go run ./cmd/ensure-geodata",
+    "beforeDevCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -trimpath -buildvcs=false -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe",
+    "beforeBuildCommand": "del /q src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe 2>nul & go build -trimpath -buildvcs=false -o src-tauri/binaries/freev6-helper-x86_64-pc-windows-msvc.build.exe ./cmd/freev6-helper && move /Y src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.build.exe src-tauri\\binaries\\freev6-helper-x86_64-pc-windows-msvc.exe",
     "frontendDist": "../web"
   },
   "app": {
@@ -36,8 +36,7 @@
       "LICENSES": "LICENSES",
       "../README.md": "README.md",
       "../docs/agreement.md": "docs/agreement.md",
-      "../docs/privacy.md": "docs/privacy.md",
-      "../GeoSite.dat": "GeoSite.dat"
+      "../docs/privacy.md": "docs/privacy.md"
     },
     "icon": [
       "icons/32x32.png",

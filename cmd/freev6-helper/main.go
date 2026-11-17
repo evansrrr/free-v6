@@ -115,6 +115,11 @@ func main() {
 	}
 	root := executableRoot()
 	h := &helper{root: root}
+	// 旧版本预置的地理数据（geosite/geoip/mmdb，合计约 27MB）已经没有引用，
+	// 静默清掉；删不掉的（被占用）下次启动再试。
+	if removed := mihomo.RemoveLegacyGeodata(root); len(removed) > 0 {
+		fmt.Fprintf(os.Stderr, "helper: removed legacy geodata: %v\n", removed)
+	}
 	// 上一轮已经实测跑通过的内核不需要再留回滚位：磁盘收敛到一份 38MB。
 	// 这里只是提前回收——即使不做，下一次启动免流成功时也会收敛。
 	if store := mihomo.NewCoreStore(root); store.Verified() {
@@ -703,21 +708,6 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	// GeoSite.dat 硬依赖预置（新机器首启故障修复）：配置的 nameserver-policy
-	// 引用 geosite，缺文件时 mihomo 启动阶段自己去 github 直连下载，大陆
-	// 网络下挂起 → controller 就绪 15s 超时，真正原因（Can't find GeoSite.dat
-	// start download）被盖住。这里先用镜像准备好；失败在快照/系统改动之前
-	// 快速返回可读错误。
-	geoCtx, geoCancel := context.WithTimeout(context.Background(), mihomo.GeodataDownloadTimeout)
-	geoDownloaded, geoErr := mihomo.EnsureGeodata(geoCtx, stateDir)
-	geoCancel()
-	if geoErr != nil {
-		writeJSON(writer, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("准备地理数据失败: %v", geoErr)})
-		return
-	}
-	if geoDownloaded {
-		fmt.Fprintln(os.Stderr, "helper: geo data prepared")
 	}
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})

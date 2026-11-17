@@ -198,3 +198,15 @@ func writeLimited(source io.Reader, destPath string) error {
 	}
 	return output.Close()
 }
+
+// hostOf 取 URL 的主机名，只用于把失败日志写成 "v6.gh-proxy.org: 超时" 的形状。
+func hostOf(rawURL string) string {
+	rest := rawURL
+	if cut := strings.Index(rest, "://"); cut >= 0 {
+		rest = rest[cut+3:]
+	}
+	if cut := strings.IndexAny(rest, "/?#"); cut >= 0 {
+		rest = rest[:cut]
+	}
+	return rest
+}
