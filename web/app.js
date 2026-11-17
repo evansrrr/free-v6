@@ -189,12 +189,22 @@ async function api(path, options = {}) {
 
 // 停止免流。快照损坏/读不出来时 helper 仍会成功停止、只跳过网络状态还原
 // （restoreSkipped）——记进日志提示用户，不能静默吞掉。
+//
+// 顺带量一次端到端耗时：helper 侧的阶段耗时写在 helper.log，"点了停止要等
+// 多久"这件事在前端也留一条可核对的记录，省得只有体感没有数字。
 async function stopProxyApi() {
+  const startedAt = performance.now();
   const payload = await api('/proxy/stop', { method: 'POST' });
+  const elapsedMs = performance.now() - startedAt;
   // 停止请求已落定（mihomo 已停）后再递增：让 pollStatus 能区分「停止前
   // 发出的陈旧 /status」与「停止后发出的」——若在发起时递增，停止前发出的
   // 请求会在发起后才快照到新代数，其 running=true 不会被丢弃。
   proxyOpGen += 1;
+  // 正常应在 1s 内（内核退出 + TUN 收尾）。超过就记一行，用户报"停止很慢"
+  // 时这条日志和 helper.log 的 stop 行能直接对上。
+  if (elapsedMs >= 1000) {
+    addLog(`停止免流耗时 ${(elapsedMs / 1000).toFixed(1)}s`);
+  }
   if (payload.restoreSkipped) {
     addLog(`网络状态还原已跳过（快照不可用）: ${payload.restoreSkipped}`, true);
   }

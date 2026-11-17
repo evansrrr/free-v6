@@ -11,9 +11,13 @@ type ListenPort struct {
 	Name    string
 }
 
+// ControllerAddress 是渲染配置里 external-controller 的固定地址。启动时的
+// 端口自检与停止时的 TUN 关闭都按它访问内核，两边必须是同一个值。
+const ControllerAddress = "127.0.0.1:9090"
+
 var requiredListenPorts = []ListenPort{
 	{Network: "tcp", Address: "127.0.0.1:7890", Name: "mixed proxy"},
-	{Network: "tcp", Address: "127.0.0.1:9090", Name: "controller"},
+	{Network: "tcp", Address: ControllerAddress, Name: "controller"},
 	{Network: "tcp", Address: "0.0.0.0:1053", Name: "DNS"},
 	{Network: "udp", Address: "0.0.0.0:1053", Name: "DNS"},
 }

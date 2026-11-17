@@ -46,6 +46,15 @@ func listenAddress() string {
 const (
 	icsOpTimeout     = 120 * time.Second
 	icsDetectTimeout = 30 * time.Second
+
+	// tunOffTimeout 覆盖「PATCH 关 TUN + 等适配器从系统消失」。正常百毫秒级；
+	// 内核不认这个字段时最多拖这么久，然后照旧硬杀，不会把停止卡住。
+	tunOffTimeout = 1500 * time.Millisecond
+	// tunAdapterGoneTimeout 是"TUN 关闭后适配器多久从系统里消失"的上限。
+	tunAdapterGoneTimeout = 600 * time.Millisecond
+	// stopExitTimeout 等内核进程真正退出的上限。等的是 9090 端口释放——不等
+	// 它，紧接着的启动会在端口自检上撞出"端口被占用"。
+	stopExitTimeout = 2 * time.Second
 )
 
 type helper struct {
@@ -948,11 +957,48 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	default:
 		restoreSkipped = err.Error()
 	}
-	// 热点还原（若有）完成后立即停 mihomo，再还原 DNS。DNS 与热点独立：
-	// 即使热点还原失败也照做（失败仅告警，不改变 restoreErr 语义）。
-	if stopErr := mihomo.Stop(pidPath); stopErr != nil {
+	// 热点还原（若有）完成后先让内核自己关掉 TUN，再杀进程，最后还原 DNS。
+	//
+	// 直接 TerminateProcess 会跳过内核的收尾：wintun 适配器与 auto-route 写进
+	// 路由表的默认路由只能等 Windows 异步回收，那几秒里出站流量仍然被吸进一个
+	// 没人接收的 TUN——"点了停止，网还要过十几秒才恢复"、紧接着点启动又检测
+	// 失败，都是这个窗口。PATCH 关掉 tun 之后适配器同步消失，路由立刻回到物理
+	// 网卡（见 mihomo.DisableTun）。必须在热点还原之后：还原 ICS 共享角色要求
+	// FreeV6TUN 连接仍然存在。任何一步失败只记日志、照旧硬杀，不退化。
+	stopStarted := time.Now()
+	tunAttempted := false
+	adapterGone := false
+	var tunTook time.Duration
+	if _, running, statusErr := mihomo.Status(pidPath); statusErr == nil && running {
+		tunAttempted = true
+		secret, _ := mihomo.ReadControllerSecret(filepath.Join(h.root, "state"))
+		tunCtx, tunCancel := context.WithTimeout(context.Background(), tunOffTimeout)
+		tunStarted := time.Now()
+		if tunErr := mihomo.DisableTun(tunCtx, mihomo.ControllerAddress, secret); tunErr != nil {
+			fmt.Fprintf(os.Stderr, "helper: stop: tun off skipped: %v\n", tunErr)
+		} else {
+			// 上限给得很短：wintun 会话关闭是同步的，适配器正常在百毫秒内消失。
+			// 等不到就说明这条路在这台机器上不通，硬杀兜底，绝不让停止陪着等。
+			goneCtx, goneCancel := context.WithTimeout(context.Background(), tunAdapterGoneTimeout)
+			adapterGone = network.WaitAdapterGone(goneCtx, network.TunDeviceName, 10*time.Millisecond)
+			goneCancel()
+		}
+		tunTook = time.Since(tunStarted)
+		tunCancel()
+	}
+	stopWaited, stopExited, stopErr := mihomo.StopAndWait(pidPath, stopExitTimeout)
+	if stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
 		return
+	}
+	// 一行阶段耗时进 helper.log：以后"停止很慢"能直接看出是 TUN 收尾、进程
+	// 退出还是下游还原吃掉的，不用再靠猜。
+	if tunAttempted {
+		fmt.Fprintf(os.Stderr, "helper: stop: tun off %v (adapter gone=%v), exit %v (exited=%v), total %v\n",
+			tunTook.Round(time.Millisecond), adapterGone, stopWaited.Round(time.Millisecond), stopExited,
+			time.Since(stopStarted).Round(time.Millisecond))
+	} else {
+		fmt.Fprintf(os.Stderr, "helper: stop: core not running, total %v\n", time.Since(stopStarted).Round(time.Millisecond))
 	}
 	if snapshotLoaded {
 		// DNS 还原放后台执行：mihomo 已停、/status 已回到 running=false，不必
