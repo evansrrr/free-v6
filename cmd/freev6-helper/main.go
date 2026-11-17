@@ -120,6 +120,11 @@ func main() {
 	if removed := mihomo.RemoveLegacyGeodata(root); len(removed) > 0 {
 		fmt.Fprintf(os.Stderr, "helper: removed legacy geodata: %v\n", removed)
 	}
+	// 规则集缓存：列表换过之后旧文件不会自己消失，且"序号复用"会让它被
+	// 误当成新列表加载。现在 provider 用语义名做文件名，不认识的都清掉。
+	if removed := mihomo.RemoveStaleRuleSetFiles(root); len(removed) > 0 {
+		fmt.Fprintf(os.Stderr, "helper: removed stale rule sets: %v\n", removed)
+	}
 	// 上一轮已经实测跑通过的内核不需要再留回滚位：磁盘收敛到一份 38MB。
 	// 这里只是提前回收——即使不做，下一次启动免流成功时也会收敛。
 	if store := mihomo.NewCoreStore(root); store.Verified() {

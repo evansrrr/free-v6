@@ -30,3 +30,34 @@ func RemoveLegacyGeodata(root string) []string {
 	}
 	return removed
 }
+
+// RemoveStaleRuleSetFiles 删除 state/ruleset/ 下不再被引用的规则集缓存。
+//
+// 规则集只在文件过期时才重新下载，列表换过之后旧文件不会自己消失；留着既
+// 占空间，也会在"序号复用"的写法下被误当成新列表加载。现在 provider 用
+// 语义名做文件名，清理就是"不认识的都删"。
+func RemoveStaleRuleSetFiles(root string) []string {
+	if root == "" {
+		root = "."
+	}
+	dir := filepath.Join(root, "state", "ruleset")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	keep := make(map[string]bool, len(ruleSets))
+	for _, name := range RuleSetFileNames() {
+		keep[name] = true
+	}
+	var removed []string
+	for _, entry := range entries {
+		if entry.IsDir() || keep[entry.Name()] {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if err := os.Remove(path); err == nil {
+			removed = append(removed, path)
+		}
+	}
+	return removed
+}
