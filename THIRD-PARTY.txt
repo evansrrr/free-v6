@@ -75,13 +75,17 @@ LOADED AT RUNTIME, NOT SHIPPED WITH THIS PRODUCT
    Note: official latin unicode-range variable subsets; bundled locally so
    text renders offline. Chinese/system fallbacks unchanged.
 
-11. mihomo (Clash.Meta core)
+11. f6-core (Clash.Meta core, mihomo fork)
    License:   GPL-3.0-only
-   Copyright: MetaCubeX contributors
-   Source:    https://github.com/MetaCubeX/mihomo
-   NOTE: mihomo is downloaded at first use by freev6-helper and is NOT part
+   Copyright: MetaCubeX contributors; fork modifications by the freev6 authors
+   Source:    https://github.com/evansrrr/f6-core (fork of
+              https://github.com/MetaCubeX/mihomo)
+   NOTE: the core is downloaded at first use by freev6-helper and is NOT part
    of this repository or of the setup.exe; its use is governed by GPL-3.0.
-   Do not bundle mihomo into this product without accepting GPL obligations.
+   The fork only changes build tags and removes outbound protocols that the
+   client never uses; every release publishes the exact source tarball of the
+   commit it was built from, which satisfies the GPL-3.0 source requirement.
+   Do not bundle the core into this product without accepting GPL obligations.
 
 --------------------------------------------------------------------------
 BUILD TOOLCHAINS (build/test time only, not redistributed)
