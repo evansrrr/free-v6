@@ -63,6 +63,10 @@ const state = {
   // Runtime
   runtimePresent: false,
   runtimeChecked: false,
+  runtimeVersion: '',
+  runtimeLegacy: false,
+  // 内核更新检查结果：null 表示没有可用更新（或尚未检查成功）
+  coreUpdate: null,
   warpRegistered: false,
   warpRegistering: false,
   warpAutoTried: false,
@@ -376,9 +380,7 @@ async function startProxyFlow(auto = false) {
     // 核心与 IPv6 检测阶段按钮显示「检测中…」（auto 同样走这套反馈）
     fabPhase('检测中…');
     try {
-      const runtime = await api('/runtime');
-      state.runtimePresent = Boolean(runtime.present);
-      state.runtimeChecked = true;
+      applyRuntimeInfo(await api('/runtime'));
     } catch (_) { /* 保持上次已知状态 */ }
     if (!state.runtimePresent) return { ok: false, reason: 'core', message: '未检测到运行核心' };
 
@@ -1639,6 +1641,37 @@ function toggleNoticeHint() {
 
 /* ── mihomo core download (设置页核心行 + 启动拦截弹窗共用) ─── */
 
+// 把 GET /runtime 的结果落到前端状态。三处调用点（启动前检查、状态轮询、
+// 重连）共用，避免各写一份字段映射。
+function applyRuntimeInfo(runtime) {
+  if (!runtime) return;
+  state.runtimePresent = Boolean(runtime.present);
+  state.runtimeChecked = true;
+  state.runtimeVersion = String(runtime.versionDisplay || runtime.version || '');
+  state.runtimeLegacy = Boolean(runtime.legacy);
+}
+
+// 检查内核更新：与软件更新同一套节奏（启动后静默查一次），失败静默。
+// force=true 用于用户主动点「检查」。
+async function checkCoreUpdate(force = false) {
+  try {
+    const res = await api(`/runtime/check${force ? '?force=1' : ''}`);
+    if (!res?.ok) return state.coreUpdate; // 网络问题：保留上次结论
+    state.coreUpdate = res.available
+      ? {
+        latest: res.latest || '',
+        downloadMB: res.downloadMB || 0,
+        legacy: Boolean(res.legacy),
+        minApp: res.minApp || '',
+      }
+      : null;
+  } catch (_) {
+    return state.coreUpdate;
+  }
+  updateSettingsUI();
+  return state.coreUpdate;
+}
+
 // 渲染核心下载进度。active=false 时隐藏进度、恢复按钮文案。进度同时落到
 // 弹窗进度条与两个入口按钮（设置页「下载」、弹窗「下载」），保证两个入口
 // 都有可见反馈。total>0 时显示百分比，否则（Content-Length 未知）只显示
@@ -1650,7 +1683,8 @@ function renderCoreDownloadProgress(pct, active) {
   if (prog) prog.hidden = !active;
   if (spinner) spinner.value = pct;
   if (text) text.textContent = `${pct}%`;
-  const label = active ? (pct > 0 ? `下载中 ${pct}%` : '下载中…') : '下载';
+  const idleLabel = state.runtimePresent ? '更新' : '下载';
+  const label = active ? (pct > 0 ? `下载中 ${pct}%` : '下载中…') : idleLabel;
   for (const sel of ['#downloadCore', '#coreDialogDownload']) {
     const b = $(sel);
     if (!b) continue;
@@ -1694,13 +1728,21 @@ async function downloadCore(btn) {
   if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
   if (btn) btn.disabled = true;
   renderCoreDownloadProgress(0, true);
+  const wasRunning = state.proxyRunning;
   try {
-    await api('/runtime/download', { method: 'POST' }); // 立即返回，下载在后台
+    // POST 立即返回，安装（下载→校验→自检→切指针）在后台跑
+    await api('/runtime/download', { method: 'POST', body: JSON.stringify({}) });
     const result = await pollCoreDownloadProgress();
     if (!result) return false;
     state.runtimePresent = true;
     state.runtimeChecked = true;
-    addLog(`核心下载完成${result.version ? `: ${result.version}` : ''}`);
+    state.runtimeVersion = displayCoreVersion(result.version) || state.runtimeVersion;
+    state.runtimeLegacy = false;
+    state.coreUpdate = null;
+    addLog(`内核就绪${result.version ? `: ${displayCoreVersion(result.version)}` : ''}`);
+    if (result.warning) addLog(result.warning, true);
+    // 内核正在跑时换的是磁盘上的文件，进程还是旧的，重启免流才生效
+    if (wasRunning) addLog('内核已更新，重启免流后生效');
     return true;
   } catch (e) {
     addLog(`下载失败: ${e.message}`, true);
@@ -1708,9 +1750,14 @@ async function downloadCore(btn) {
     return false;
   } finally {
     renderCoreDownloadProgress(0, false);
-    if (btn) { btn.disabled = false; btn.textContent = '下载'; }
+    if (btn) btn.disabled = false;
     updateSettingsUI();
   }
+}
+
+// 内核版本对外显示成 v0.1.0 这种短格式（去掉发布 tag 的 core- 前缀）。
+function displayCoreVersion(version) {
+  return String(version || '').replace(/^core-/, '');
 }
 
 /* ── WARP registration (手动按钮 + 首次使用自动注册) ────────── */
@@ -1888,9 +1935,9 @@ async function pollStatus() {
     try {
       const runtime = await api('/runtime');
       const present = Boolean(runtime.present);
-      if (firstConnect || !state.runtimeChecked || state.runtimePresent !== present) {
-        state.runtimePresent = present;
-        state.runtimeChecked = true;
+      const versionChanged = String(runtime.versionDisplay || runtime.version || '') !== state.runtimeVersion;
+      if (firstConnect || !state.runtimeChecked || state.runtimePresent !== present || versionChanged) {
+        applyRuntimeInfo(runtime);
         updateSettingsUI();
       }
     } catch (_) { /* 保持上次已知状态 */ }
@@ -2506,20 +2553,32 @@ function updateSettingsUI() {
   const pill = $('#runtimePill');
   const dlBtn = $('#downloadCore');
   const checked = state.helperOnline && state.runtimeChecked;
+  const update = state.coreUpdate;
+  const hasUpdate = Boolean(update);
+  // 内核可能要求更高的客户端版本（例如它砍掉了老客户端仍在用的协议），
+  // 这种情况不给「更新」按钮，避免装上之后连不上。
+  const blockedByApp = Boolean(update?.minApp)
+    && cmpVersion(currentAppVersion() || '0.0.0', update.minApp) < 0;
+  if (blockedByApp && !state.coreUpdateBlockedLogged) {
+    state.coreUpdateBlockedLogged = true;
+    addLog(`新内核需要 FreeV6 ${update.minApp} 或更高版本，请先更新软件`);
+  }
   if (pill) {
     if (checked && !state.runtimePresent) {
       pill.hidden = true;
     } else {
       pill.hidden = false;
-      pill.textContent = checked ? '已安装' : '--';
+      // 装上之后 pill 显示内核版本，比"已安装"信息量大得多
+      pill.textContent = checked ? (state.runtimeVersion || '已安装') : '--';
       pill.className = checked ? 'setting-pill ready' : 'setting-pill';
     }
   }
   if (dlBtn) {
-    dlBtn.hidden = !(checked && !state.runtimePresent);
+    const showButton = checked && (!state.runtimePresent || (hasUpdate && !blockedByApp));
+    dlBtn.hidden = !showButton;
     if (!dlBtn.hidden) {
       dlBtn.disabled = false;
-      dlBtn.textContent = '下载';
+      dlBtn.textContent = state.runtimePresent ? '更新' : '下载';
     }
   }
 
@@ -3757,6 +3816,9 @@ function init() {
 
   // 后台检查 GitHub 正式版更新（离线/私有仓库 404 → 静默跳过，不阻塞启动）
   setTimeout(() => { checkForUpdate(); }, 1500);
+
+  // 内核更新检查：与软件更新同一节奏，命中更新时才在设置页露出「更新」按钮
+  setTimeout(() => { checkCoreUpdate(); }, 2500);
 
   // 每次启动检查一次公告（helper 就绪前静默等待，见 ensureNoticeChecked）
   setTimeout(() => { ensureNoticeChecked(); }, 1200);
