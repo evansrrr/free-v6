@@ -26,6 +26,26 @@ var endpoints = []struct {
 	{"2606:4700:104::2", 4443}, {"2606:4700:104::2", 8443}, {"2606:4700:104::2", 8095},
 }
 
+// lanCIDRs / lanCIDRs6 是"内网直连"覆盖的地址段：RFC1918、环回、链路本地、
+// CGNAT、组播，以及 IPv6 的 ULA / 链路本地 / 环回 / 组播。
+var (
+	lanCIDRs = []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"100.64.0.0/10",
+		"224.0.0.0/4",
+	}
+	lanCIDRs6 = []string{
+		"fc00::/7",
+		"fe80::/10",
+		"::1/128",
+		"ff00::/8",
+	}
+)
+
 var ruleSets = []struct {
 	Group string
 	URL   string
@@ -84,15 +104,6 @@ unified-delay: true
 tcp-concurrent: true
 find-process-mode: 'always'
 
-# 地理数据下载地址走大陆可达镜像（实测最快的 v6 入口；与
-# internal/mihomo/geodata.go 的预置镜像链同族）。正常情况下启动前
-# geosite/geoip/mmdb 已被 EnsureGeodata 预置，这里只在文件被删除
-# 或 geo-auto-update 开启时生效。
-geox-url:
-  geoip: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
-  geosite: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
-  mmdb: "https://v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb"
-
 profile:
   store-selected: true
   store-fake-ip: true
@@ -140,17 +151,15 @@ dns:
     - https://223.5.5.5/dns-query
     - 2606:4700:4700::1111
     - 2400:3200::1
+  # 只对真正需要"境外解析"的少数域名单独指定 DoH（规则集与内核发布
+  # 都挂在 GitHub / gh-proxy 家族上）。其余域名一律走上面的 nameserver：
+  # 被代理的域名由 masque 出站远端解析，本地结果用不到；直连域名基本都是
+  # 校园网内的国内域名。所以这里不需要 geosite 全量分流。
   nameserver-policy:
-    'geosite:cn,private':
-      - https://223.5.5.5/dns-query
-      - https://1.12.12.12/dns-query
-      - 2400:3200::1
-      - 2400:3200:baba::1
-    'geosite:geolocation-!cn':
+    '+.github.com,+.githubusercontent.com,+.githubassets.com,+.gh-proxy.com,+.gh-proxy.org':
       - https://1.1.1.1/dns-query
       - https://8.8.8.8/dns-query
       - 2606:4700:4700::1111
-      - 2606:4700:4700::1001
 
 `
 
@@ -262,7 +271,15 @@ func RenderWithOptions(w warp.Device, options RenderOptions) (string, error) {
 			fmt.Fprintf(&b, "  - RULE-SET,rule%02d,%s\n", i, ruleSet.Group)
 		}
 	}
-	b.WriteString("  - GEOIP,LAN,DIRECT,no-resolve\n")
+	// 内网直连：以前是 GEOIP,LAN，为这一条规则要背一个 15.7MB 的 geoip.dat。
+	// 私网就是这十几个段，写死更省事，也免得启动时还要准备地理数据。
+	// 注意不要加入 198.18.0.0/15：那是本配置自己的 fake-ip 段。
+	for _, cidr := range lanCIDRs {
+		fmt.Fprintf(&b, "  - IP-CIDR,%s,DIRECT,no-resolve\n", cidr)
+	}
+	for _, cidr := range lanCIDRs6 {
+		fmt.Fprintf(&b, "  - IP-CIDR6,%s,DIRECT,no-resolve\n", cidr)
+	}
 	// 链式启用时全部流量（白名单/黑名单除外）先过自有代理；
 	// 未启用保持原状。
 	matchTarget := "🚀 节点选择"

@@ -37,15 +37,37 @@ func TestRenderMasqueConfig(t *testing.T) {
 	if !strings.Contains(config, "external-controller: 127.0.0.1:9090") {
 		t.Fatal("renderer must expose only the loopback mihomo controller")
 	}
-	// 地理数据下载地址必须走大陆可达镜像（新机器缺 GeoSite.dat 时的兜底）
-	if !strings.Contains(config, "geox-url:") || !strings.Contains(config, "v6.gh-proxy.org/https://github.com/MetaCubeX/meta-rules-dat") {
-		t.Fatal("config must point geox-url at the reachable mirror")
+	// 渲染产物不能再依赖地理数据：geosite/geoip 每条都是几 MB，而它们只
+	// 支撑一条私网直连规则和一段 DNS 分流。
+	for _, forbidden := range []string{"geox-url:", "geosite:", "GeoIP", "GEOIP"} {
+		if strings.Contains(config, forbidden) {
+			t.Fatalf("config must not reference geodata anymore, found %q", forbidden)
+		}
+	}
+	// 私网直连改成显式地址段
+	for _, cidr := range lanCIDRs {
+		if want := "IP-CIDR," + cidr + ",DIRECT,no-resolve"; !strings.Contains(config, want) {
+			t.Fatalf("config missing private-network direct rule %q", want)
+		}
+	}
+	for _, cidr := range lanCIDRs6 {
+		if want := "IP-CIDR6," + cidr + ",DIRECT,no-resolve"; !strings.Contains(config, want) {
+			t.Fatalf("config missing private-network direct rule %q", want)
+		}
+	}
+	// fake-ip 段绝不能被当成内网直连
+	if strings.Contains(config, "198.18.0.0/15") {
+		t.Fatal("fake-ip range must not be routed DIRECT")
+	}
+	// 只有 GitHub / gh-proxy 家族走境外 DoH，其余交给默认 nameserver
+	if !strings.Contains(config, "'+.github.com,+.githubusercontent.com") {
+		t.Fatal("config must resolve GitHub hosts through a dedicated DoH policy")
 	}
 	if strings.Contains(config, "GEOIP,CN") || strings.Contains(config, "🎯 全球直连") {
 		t.Fatal("external traffic must not have a direct route")
 	}
-	if strings.Count(config, "DIRECT") != 1 {
-		t.Fatalf("expected only the LAN direct route, got %d DIRECT entries", strings.Count(config, "DIRECT"))
+	if got := strings.Count(config, ",DIRECT,no-resolve"); got != len(lanCIDRs)+len(lanCIDRs6) {
+		t.Fatalf("expected %d private-network DIRECT routes, got %d", len(lanCIDRs)+len(lanCIDRs6), got)
 	}
 }
 
