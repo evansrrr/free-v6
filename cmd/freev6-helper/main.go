@@ -47,11 +47,10 @@ const (
 	icsOpTimeout     = 120 * time.Second
 	icsDetectTimeout = 30 * time.Second
 
-	// tunOffTimeout 覆盖「PATCH 关 TUN + 等适配器从系统消失」。正常百毫秒级；
-	// 内核不认这个字段时最多拖这么久，然后照旧硬杀，不会把停止卡住。
-	tunOffTimeout = 1500 * time.Millisecond
-	// tunAdapterGoneTimeout 是"TUN 关闭后适配器多久从系统里消失"的上限。
-	tunAdapterGoneTimeout = 600 * time.Millisecond
+	// tunStageTimeout 是"让内核关 TUN 并等适配器从系统消失"的总预算。内核
+	// 同步关闭 wintun 会话、实测 ~1s 才回响应，偶尔更久；给足 4s——把"关到
+	// 一半"当成失败去硬杀，才是留下幽灵适配器、网络长时间不恢复的根因。
+	tunStageTimeout = 4 * time.Second
 	// stopExitTimeout 等内核进程真正退出的上限。等的是 9090 端口释放——不等
 	// 它，紧接着的启动会在端口自检上撞出"端口被占用"。
 	stopExitTimeout = 2 * time.Second
@@ -967,36 +966,53 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	// FreeV6TUN 连接仍然存在。任何一步失败只记日志、照旧硬杀，不退化。
 	stopStarted := time.Now()
 	tunAttempted := false
-	adapterGone := false
-	var tunTook time.Duration
+	adapterGone := true
+	var teardownTook time.Duration
+	var patchErr error
 	if _, running, statusErr := mihomo.Status(pidPath); statusErr == nil && running {
 		tunAttempted = true
 		secret, _ := mihomo.ReadControllerSecret(filepath.Join(h.root, "state"))
-		tunCtx, tunCancel := context.WithTimeout(context.Background(), tunOffTimeout)
-		tunStarted := time.Now()
-		if tunErr := mihomo.DisableTun(tunCtx, mihomo.ControllerAddress, secret); tunErr != nil {
-			fmt.Fprintf(os.Stderr, "helper: stop: tun off skipped: %v\n", tunErr)
-		} else {
-			// 上限给得很短：wintun 会话关闭是同步的，适配器正常在百毫秒内消失。
-			// 等不到就说明这条路在这台机器上不通，硬杀兜底，绝不让停止陪着等。
-			goneCtx, goneCancel := context.WithTimeout(context.Background(), tunAdapterGoneTimeout)
-			adapterGone = network.WaitAdapterGone(goneCtx, network.TunDeviceName, 10*time.Millisecond)
-			goneCancel()
+		// PATCH 与"等适配器消失"并发做，以适配器消失为准：内核要花 ~1s 才回
+		// 这个请求，串行等它只是白等。
+		stageCtx, stageCancel := context.WithTimeout(context.Background(), tunStageTimeout)
+		patchDone := make(chan error, 1)
+		go func() {
+			patchDone <- mihomo.DisableTun(stageCtx, mihomo.ControllerAddress, secret)
+		}()
+		stageStarted := time.Now()
+		// 不管 PATCH 成没成，都要等适配器真的消失再杀进程。
+		// PATCH 超时往往不是"没生效"，而是内核正关到一半：这时 TerminateProcess
+		// 会把它停在半路，wintun 适配器连同 auto-route 写进去的 ::/1、8000::/1
+		// 一起留下，网络在它被系统回收之前一直是死的——用户实测的"等很久也连
+		// 不上、提示有 IPv6 地址但出站不通"就是这一步。宁可多等一秒，也不在
+		// 拆到一半时动手。
+		adapterGone = network.WaitAdapterGone(stageCtx, network.TunDeviceName, 10*time.Millisecond)
+		if !adapterGone {
+			// 还没消失才需要知道 PATCH 的结果（用于排障），消失就不用等了。
+			select {
+			case patchErr = <-patchDone:
+			case <-stageCtx.Done():
+				patchErr = stageCtx.Err()
+			}
 		}
-		tunTook = time.Since(tunStarted)
-		tunCancel()
+		teardownTook = time.Since(stageStarted)
+		stageCancel()
 	}
 	stopWaited, stopExited, stopErr := mihomo.StopAndWait(pidPath, stopExitTimeout)
 	if stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
 		return
 	}
-	// 一行阶段耗时进 helper.log：以后"停止很慢"能直接看出是 TUN 收尾、进程
-	// 退出还是下游还原吃掉的，不用再靠猜。
+	// 一行阶段耗时进 helper.log：teardown（内核关 TUN + 适配器消失）与 exit
+	// （进程退出）分开记，才看得出时间花在哪一步。
 	if tunAttempted {
-		fmt.Fprintf(os.Stderr, "helper: stop: tun off %v (adapter gone=%v), exit %v (exited=%v), total %v\n",
-			tunTook.Round(time.Millisecond), adapterGone, stopWaited.Round(time.Millisecond), stopExited,
-			time.Since(stopStarted).Round(time.Millisecond))
+		fmt.Fprintf(os.Stderr, "helper: stop: tun teardown %v (adapter gone=%v, patch err=%v), exit %v (exited=%v), total %v\n",
+			teardownTook.Round(time.Millisecond), adapterGone, patchErr,
+			stopWaited.Round(time.Millisecond), stopExited, time.Since(stopStarted).Round(time.Millisecond))
+		if !adapterGone {
+			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失，下次启动前会清理残留路由\n",
+				network.TunDeviceName, tunStageTimeout)
+		}
 	} else {
 		fmt.Fprintf(os.Stderr, "helper: stop: core not running, total %v\n", time.Since(stopStarted).Round(time.Millisecond))
 	}

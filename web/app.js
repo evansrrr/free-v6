@@ -200,9 +200,10 @@ async function stopProxyApi() {
   // 发出的陈旧 /status」与「停止后发出的」——若在发起时递增，停止前发出的
   // 请求会在发起后才快照到新代数，其 running=true 不会被丢弃。
   proxyOpGen += 1;
-  // 正常应在 1s 内（内核退出 + TUN 收尾）。超过就记一行，用户报"停止很慢"
-  // 时这条日志和 helper.log 的 stop 行能直接对上。
-  if (elapsedMs >= 1000) {
+  // 正常应在 1s 出头收尾（内核自己关 TUN 要 ~1s，这是它的固有耗时）。超过
+  // 2s 才是异常，记一行：用户报"停止很慢"时这条日志和 helper.log 的 stop
+  // 行能直接对上。
+  if (elapsedMs >= 2000) {
     addLog(`停止免流耗时 ${(elapsedMs / 1000).toFixed(1)}s`);
   }
   if (payload.restoreSkipped) {

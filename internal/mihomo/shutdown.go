@@ -27,7 +27,10 @@ func DisableTun(ctx context.Context, address, secret string) error {
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		baseURL = "http://" + baseURL
 	}
-	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	// 内核关 TUN 是同步的但不算快：wintun 会话关闭要等挂起的读写收尾，实测
+	// 0.9–1.1s，偶尔更久。这里给足时间——1.5s 的旧值会让调用方"以为失败"，
+	// 而它其实正关到一半，这时候杀进程正是留下幽灵适配器的原因。
+	client := &http.Client{Timeout: 4 * time.Second}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPatch, baseURL+"/configs",
 		strings.NewReader(`{"tun":{"enable":false}}`))
 	if err != nil {

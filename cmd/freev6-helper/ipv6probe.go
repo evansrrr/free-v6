@@ -24,9 +24,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/yourname/freev6/internal/mihomo"
+	"github.com/yourname/freev6/internal/network"
 )
 
 const (
@@ -273,8 +278,24 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	// 上一次停止如果被强杀在"关 TUN 的中途"，会留下一个没有会话的 FreeV6TUN：
+	// 会话没了，auto-route 写进去的半段默认路由还在，出站全被它吸走。这种残留
+	// 不会自愈，探测只会全部超时，然后把责任推给"校园网 v6 不通"。免流没在跑
+	// 就不该留着它——先清掉残留路由再测，机器能立刻恢复。
+	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
+	if _, running, statusErr := mihomo.Status(pidPath); statusErr == nil && !running &&
+		network.AdapterPresent(network.TunDeviceName) {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if removed := network.ClearTunRoutes(cleanupCtx, network.TunDeviceName); removed > 0 {
+			fmt.Fprintf(os.Stderr, "helper: ipv6 probe: cleared %d leftover %s route(s)\n", removed, network.TunDeviceName)
+		}
+		cleanupCancel()
+	}
 	result, attempts, err := probeIPv6Sources(request.Context(), ipv6ProbeClient, ipv6EchoSources)
 	if err != nil {
+		// 失败原因也落一行 helper.log：前端只显示一句结论，排障要看每个源的
+		// 具体表现（超时 / HTTP 错误 / 反爬页），否则只能猜。
+		fmt.Fprintf(os.Stderr, "helper: ipv6 probe failed (%d attempt(s)): %v\n", attempts, err)
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": "", "error": err.Error(), "attempts": attempts})
 		return
 	}

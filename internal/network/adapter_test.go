@@ -23,3 +23,11 @@ func TestWaitAdapterGoneReturnsForAbsentAdapter(t *testing.T) {
 		t.Errorf("耗时 %v，第一次轮询就该返回", elapsed)
 	}
 }
+
+// 名字对不上就什么都不删：残留清理只允许动 FreeV6 自己的 TUN，绝不能碰
+// 别的接口上的默认路由。
+func TestClearTunRoutesIgnoresUnknownAdapter(t *testing.T) {
+	if removed := ClearTunRoutes(context.Background(), "FreeV6TUN-not-present-in-this-test"); removed != 0 {
+		t.Errorf("删掉了 %d 条不该动的路由", removed)
+	}
+}
