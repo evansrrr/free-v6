@@ -157,6 +157,7 @@ func main() {
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
 	mux.HandleFunc("/api/v1/notice", h.notice)
+	mux.HandleFunc("/api/v1/ipv6/probe", h.ipv6Probe)
 	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
 	mux.HandleFunc("/api/v1/cloud-config", h.cloudConfig)
 	// Per-launch bearer token minted by the desktop shell: without it the

@@ -1,0 +1,212 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestExtractIPv6(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want string
+	}{
+		"纯文本 ip.sb":    {"2408:8207:1234::1\n", "2408:8207:1234::1"},
+		"getIP.php 新版": {`{"processedString":"2408:8207:abcd::5 - China Mobile","rawIspInfo":""}`, "2408:8207:abcd::5"},
+		"getIP.php 旧版": {`{"ip":"2001:da8:1::2","country":"CN"}`, "2001:da8:1::2"},
+		"JSONP 包装":     {`freev6probe({"ip":"2408:8000:1::9","type":"ipv6"});`, "2408:8000:1::9"},
+		"只回 IPv4":      {`{"processedString":"1.2.3.4 - China"}`, ""},
+		"没有地址的 HTML":   {`<html><body>14:30:05</body></html>`, ""},
+		"链路本地/ULA 忽略":  {`fe80::1 fd00:1234::5`, ""},
+		"句末尾冒号":        {`addr: 2001:250:1006::1: ok`, "2001:250:1006::1"},
+		"压缩形式统一为规范写法":  {`2001:0DB8:0000:0000:0000:0000:0000:0001`, "2001:db8::1"},
+		"私网前缀不误判为端口":   {`connect 127.0.0.1:8080 via ::1`, ""},
+	}
+	for name, testCase := range cases {
+		if got := extractIPv6(testCase.body); got != testCase.want {
+			t.Errorf("%s: extractIPv6(%q) = %q, want %q", name, testCase.body, got, testCase.want)
+		}
+	}
+}
+
+// 反爬校验页里也带着本机地址（Anubis 会把 X-Real-IP 塞进调试 JSON），
+// 绝不能当成回显得出结论。
+func TestFetchIPv6RejectsBotWallHTML(t *testing.T) {
+	page := `<!doctype html><html><head><title>Making sure you&#39;re not a bot!</title></head>
+<body><script type="application/json">{"headers":{"X-Real-IP":"2001:da8:208:38::1"}}</script></body></html>`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html")
+		_, _ = writer.Write([]byte(page))
+	}))
+	defer server.Close()
+
+	_, err := fetchIPv6(context.Background(), server.Client(), server.URL)
+	if err == nil {
+		t.Fatal("校验页被当成了回显")
+	}
+	if !strings.Contains(err.Error(), "反爬校验页") {
+		t.Errorf("错误信息应指出是校验页: %v", err)
+	}
+}
+
+// 竞速：慢的那个即使先返回也不能挡住快的；胜出结果带上来源主机。
+func TestProbeIPv6SourcesPicksFastest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/slow":
+			time.Sleep(300 * time.Millisecond)
+			_, _ = writer.Write([]byte("2408:8207:aaaa::1"))
+		case "/broken":
+			writer.WriteHeader(http.StatusInternalServerError)
+		case "/empty":
+			_, _ = writer.Write([]byte("no address here"))
+		case "/fast":
+			_, _ = writer.Write([]byte(`{"processedString":"2001:250:1006::2 - CERNET"}`))
+		}
+	}))
+	defer server.Close()
+
+	started := time.Now()
+	result, err := probeIPv6Sources(context.Background(), server.Client(), []string{
+		server.URL + "/slow",
+		server.URL + "/broken",
+		server.URL + "/empty",
+		server.URL + "/fast",
+	})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("probeIPv6Sources 出错: %v", err)
+	}
+	if result.IP != "2001:250:1006::2" {
+		t.Errorf("IP = %q, want 2001:250:1006::2", result.IP)
+	}
+	if !strings.HasPrefix(result.Source, "127.0.0.1:") {
+		t.Errorf("Source = %q, 应为 httptest 主机", result.Source)
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("耗时 %v：没有在最快的结果上返回，慢点挡住了竞速", elapsed)
+	}
+}
+
+// 全部失败要返回带原因的错误，而不是一句裸的超时。
+func TestProbeIPv6SourcesReportsFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	_, err := probeIPv6Sources(context.Background(), server.Client(), []string{
+		server.URL + "/a",
+		server.URL + "/b",
+	})
+	if err == nil {
+		t.Fatal("全部失败却返回成功")
+	}
+	if !strings.Contains(err.Error(), "全部 2 个检测地址失败") || !strings.Contains(err.Error(), "HTTP 403") {
+		t.Errorf("错误信息不够具体: %v", err)
+	}
+}
+
+// 全都连不上 = 本机没有 IPv6 出口：给一句直白结论，而不是五条技术细节。
+func TestProbeIPv6SourcesReportsMissingPath(t *testing.T) {
+	closed := "http://127.0.0.1:1/probe"
+	_, err := probeIPv6Sources(context.Background(), http.DefaultClient, []string{closed, closed + "2"})
+	if err == nil {
+		t.Fatal("全部连不上却返回成功")
+	}
+	if !strings.Contains(err.Error(), "本机可能没有 IPv6 出口") {
+		t.Errorf("错误信息应给出「没有 IPv6 出口」的结论: %v", err)
+	}
+}
+
+// 全部挂住则按整体超时收尾，错误里明确是超时。
+func TestProbeIPv6SourcesTimesOut(t *testing.T) {
+	blocked := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		select {
+		case <-blocked:
+		case <-request.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(blocked)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := probeIPv6Sources(ctx, server.Client(), []string{server.URL + "/hang"})
+	if err == nil {
+		t.Fatal("全部挂住却返回成功")
+	}
+	if !strings.Contains(err.Error(), "超时") {
+		t.Errorf("错误信息应说明超时: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("耗时 %v，未按请求上下文及时收尾", elapsed)
+	}
+}
+
+// 处理函数：探测失败是「网络条件不具备」，返回 200 + 空 ip + error。
+func TestIPv6ProbeHandler(t *testing.T) {
+	original := ipv6EchoSources
+	originalClient := ipv6ProbeClient
+	defer func() { ipv6EchoSources = original; ipv6ProbeClient = originalClient }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte("2408:8207:1234::1"))
+	}))
+	defer server.Close()
+	ipv6EchoSources = []string{server.URL}
+	ipv6ProbeClient = server.Client()
+
+	handler := &helper{}
+	recorder := httptest.NewRecorder()
+	handler.ipv6Probe(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/ipv6/probe", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, want 200", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"ip":"2408:8207:1234::1"`) || !strings.Contains(body, `"source"`) {
+		t.Errorf("响应缺少 ip/source: %s", body)
+	}
+
+	// 非 GET 一律 405
+	recorder = httptest.NewRecorder()
+	handler.ipv6Probe(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/ipv6/probe", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST 状态码 = %d, want 405", recorder.Code)
+	}
+
+	// 探测失败：200 + 空 ip + error
+	failing := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	defer failing.Close()
+	ipv6EchoSources = []string{failing.URL}
+	ipv6ProbeClient = failing.Client()
+	recorder = httptest.NewRecorder()
+	handler.ipv6Probe(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/ipv6/probe", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("失败路径状态码 = %d, want 200", recorder.Code)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, `"ip":""`) || !strings.Contains(body, `"error"`) {
+		t.Errorf("失败响应应带空 ip 与 error: %s", body)
+	}
+}
+
+// 生产客户端必须只走 IPv6：拿到的是 IPv4 字面量就说明约束失效了。
+func TestProductionProbeClientIsIPv6Only(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}))
+	defer server.Close()
+	_, err := fetchIPv6(context.Background(), ipv6ProbeClient, server.URL)
+	if err == nil {
+		t.Fatal("IPv4 地址被 tcp6 客户端连上了，约束没有生效")
+	}
+	if !strings.Contains(err.Error(), "连接失败") && !strings.Contains(err.Error(), "超时") {
+		t.Logf("失败原因（可接受）: %v", fmt.Sprint(err))
+	}
+}

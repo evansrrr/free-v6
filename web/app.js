@@ -402,7 +402,7 @@ async function startProxyFlow(auto = false) {
       if (!isInCampusIPv6(ip)) {
         return { ok: false, reason: 'net', message: `当前网络不支持免流${detail}`, detail };
       }
-      if (!auto) addLog(`IPv6 检测通过: ${ip}`);
+      if (!auto) addLog(`IPv6 检测通过: ${ip}${ipv6EchoSource ? `（${ipv6EchoSource}）` : ''}`);
     } else if (!auto) {
       addLog('开发者模式：跳过 IPv6 检测');
     }
@@ -665,17 +665,18 @@ function isInCampusIPv6(ip) {
   return MIULIU_IPV6_PREFIX32.some(([a, b]) => groups[0] === a && groups[1] === b);
 }
 
-// Ask a public echo service for this machine's IPv6 (CORS: * verified).
-async function detectPublicIPv6(timeoutMs = 8000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const resp = await fetch('https://api-ipv6.ip.sb/ip', { signal: controller.signal });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return (await resp.text()).trim();
-  } finally {
-    clearTimeout(timer);
-  }
+// 最近一次检测胜出的地址，仅用于日志：让「IPv6 检测通过」能看出哪个检测点
+// 在实际生效，某个源长期不可用时一眼能看出来。
+let ipv6EchoSource = '';
+
+// IPv6 出口检测。走 helper 的 /ipv6/probe：它用 tcp6 直连、竞速多个检测地址，
+// 既没有 CORS/混合内容限制（高校 speedtest 后端才用得上），也不会因为某一个
+// 地址超时就把可用的校园 IPv6 判成「不支持免流」。
+async function detectPublicIPv6() {
+  const res = await api('/ipv6/probe');
+  if (!res || !res.ip) throw new Error((res && res.error) || '未取得 IPv6');
+  ipv6EchoSource = res.source || '';
+  return res.ip;
 }
 
 function showNetGateDialog() {
