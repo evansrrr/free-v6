@@ -68,7 +68,7 @@ const state = {
   // 内核更新检查结果：null 表示没有可用更新（或尚未检查成功）
   coreUpdate: null,
   coreChecking: false,
-  coreDownloading: false,
+  coreChecked: false,
   warpRegistered: false,
   warpRegistering: false,
   warpAutoTried: false,
@@ -1655,6 +1655,11 @@ function applyRuntimeInfo(runtime) {
 
 // 检查内核更新：与软件更新同一套节奏（启动后静默查一次），失败静默。
 // force=true 用于用户主动点「检查」。
+// 与 ensureNoticeChecked 同构：helper 就绪前那次检查会失败，连上后补一次。
+function ensureCoreChecked() {
+  if (!state.coreChecked) checkCoreUpdate();
+}
+
 // 默认实时拉清单：6 小时缓存只作"网络失败时的兜底"。否则新版本会被压在
 // 缓存里看不见——发版后用户要等半天才收到提示，和软件更新的体验不一致。
 async function checkCoreUpdate(force = true) {
@@ -1663,6 +1668,7 @@ async function checkCoreUpdate(force = true) {
   try {
     const res = await api(`/runtime/check${force ? '?force=1' : ''}`);
     if (!res?.ok) return state.coreUpdate; // 网络问题：保留上次结论
+    state.coreChecked = true;
     state.coreUpdate = res.available
       ? {
         latest: res.latest || '',
@@ -1735,7 +1741,6 @@ async function pollCoreDownloadProgress() {
 async function downloadCore(btn) {
   if (!state.helperOnline) { addLog('helper 未连接', true); return false; }
   if (btn) btn.disabled = true;
-  state.coreDownloading = true;
   renderCoreDownloadProgress(0, true);
   const wasRunning = state.proxyRunning;
   try {
@@ -1763,7 +1768,6 @@ async function downloadCore(btn) {
     showToast('核心下载失败', 'error');
     return false;
   } finally {
-    state.coreDownloading = false;
     renderCoreDownloadProgress(0, false);
     if (btn) btn.disabled = false;
     updateSettingsUI();
@@ -1958,16 +1962,15 @@ async function pollStatus() {
     } catch (_) { /* 保持上次已知状态 */ }
     if (firstConnect) {
       addLog('已连接 freev6 helper');
-      // helper 冷启动晚于启动时那次检查的话，这里补一次（命中缓存，代价是一次 GET）
-      setTimeout(() => { checkCoreUpdate(); }, 800);
       // Helper is up: retry a dynamic-color seed fetch that failed at load
       if (state.dynamicColor && !state.dynamicSeed) refreshDynamicColor(true);
       // 首次连上：同步 WARP 注册状态，未注册则自动注册一次
       state.warpRegistered = Boolean(status.warp?.registered);
       updateSettingsUI();
       maybeAutoRegisterWarp();
-      // 首次连上：公告还没查过的话补查一次（启动瞬间的检查可能早于 helper 就绪）
+      // 首次连上：公告与内核版本各补查一次（启动瞬间的检查可能早于 helper 就绪）
       ensureNoticeChecked();
+      ensureCoreChecked();
     }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
@@ -3831,14 +3834,13 @@ function init() {
   initChart();
   refreshBackendState();
 
-  // 后台检查 GitHub 正式版更新（离线/私有仓库 404 → 静默跳过，不阻塞启动）
-  setTimeout(() => { checkForUpdate(); }, 1500);
-
-  // 内核更新检查：与软件更新同一节奏，命中更新时才在设置页露出「更新」按钮
-  setTimeout(() => { checkCoreUpdate(); }, 2500);
-
-  // 每次启动检查一次公告（helper 就绪前静默等待，见 ensureNoticeChecked）
-  setTimeout(() => { ensureNoticeChecked(); }, 1200);
+  // 公告 / 软件更新 / 内核更新：同一批远程检查，同一个时机触发。三个都是
+  // 一次轻量请求、失败都静默，分成三个定时器只会让"什么时候该查"变得难追。
+  setTimeout(() => {
+    ensureNoticeChecked();
+    checkForUpdate();
+    ensureCoreChecked();
+  }, 1200);
 
   // Show proxy FAB on initial dashboard view
   $('#proxyToggle')?.classList.add('visible');
@@ -3849,12 +3851,6 @@ function init() {
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
-  // 内核更新：启动后那一次之外，每 30 分钟实时复查一次（清单只有几 KB）。
-  // 窗口在后台时不查；正在安装内核时跳过，别和安装抢网络。
-  setInterval(() => {
-    if (document.hidden || state.coreDownloading || !state.helperOnline) return;
-    checkCoreUpdate();
-  }, 30 * 60 * 1000);
 
   // 自动运行免流：网络恢复后立即重试（离线期间按间隔静默等待）
   window.addEventListener('online', () => {
