@@ -1742,7 +1742,12 @@ async function downloadCore(btn) {
     addLog(`内核就绪${result.version ? `: ${displayCoreVersion(result.version)}` : ''}`);
     if (result.warning) addLog(result.warning, true);
     // 内核正在跑时换的是磁盘上的文件，进程还是旧的，重启免流才生效
-    if (wasRunning) addLog('内核已更新，重启免流后生效');
+    // 内核是磁盘上的文件，正在跑的进程还是旧的那份：必须让用户看见"要重启"，
+    // 只写日志会被忽略（日志面板默认是收起的）。
+    if (wasRunning) {
+      addLog('内核已更新，重启免流后生效');
+      showToast('内核已更新，重启免流后生效');
+    }
     return true;
   } catch (e) {
     addLog(`下载失败: ${e.message}`, true);
