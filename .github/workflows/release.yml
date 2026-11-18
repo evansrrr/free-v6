@@ -155,3 +155,5 @@ jobs:
             src-tauri/target/release/bundle/nsis/*-setup.exe
             version.json
           fail_on_unmatched_files: true
+          # Upload assets one by one to avoid GitHub dropping parallel upload connections.
+          preserve_order: true
