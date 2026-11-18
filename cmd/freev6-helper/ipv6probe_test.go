@@ -154,6 +154,11 @@ func (f *flakyTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestProbeIPv6SourcesRetriesTransientFailure(t *testing.T) {
+	// CI 的 Windows runner 没有全球 IPv6 地址：真去问本机会走进"没有出口"的
+	// 快速失败分支，重试逻辑根本跑不到。这里把判定固定成 true。
+	localIPv6Present = func() bool { return true }
+	t.Cleanup(func() { localIPv6Present = hasLocalIPv6 })
+
 	transport := &flakyTransport{failTimes: 1, body: "2408:8207:1234::1"}
 	started := time.Now()
 	result, _, err := probeIPv6Sources(context.Background(), &http.Client{Transport: transport}, []string{"http://probe.invalid/ip"})
