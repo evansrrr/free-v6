@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -294,4 +295,10 @@ func TestFetchIPv6MarksDNSFailure(t *testing.T) {
 	if err.reason != "域名解析失败" {
 		t.Errorf("reason = %q", err.reason)
 	}
+}
+
+// 探测日志是给 helper.log 的，用例里只会把 CI 输出刷满。
+func TestMain(m *testing.M) {
+	probeLogf = func(string, ...any) {}
+	os.Exit(m.Run())
 }

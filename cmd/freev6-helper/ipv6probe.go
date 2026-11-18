@@ -107,6 +107,15 @@ func dialIPv6(ctx context.Context, dialer *net.Dialer, addr string) (net.Conn, e
 	return nil, lastErr
 }
 
+// probeLogf 是探测的日志出口。用例里换成 no-op——这些行是给 helper.log 看的，
+// 测试输出里只会变成噪音。
+var probeLogf = func(format string, args ...any) { fmt.Fprintf(os.Stderr, format, args...) }
+
+// localIPv6Present 报告本机是否配了全球单播 IPv6。做成变量是为了让"过渡态
+// 重试"这条分支在**没有 IPv6 的机器**上也能被验证：CI 的 Windows runner 没有
+// 全球 v6 地址，写死调用 hasLocalIPv6 会让重试用例直接走快速失败分支。
+var localIPv6Present = hasLocalIPv6
+
 // 探测专用客户端：只走 IPv6，且不读系统代理——免流运行时系统代理指向 mihomo，
 // 走代理只会拿到代理出口的地址，测不出本机 IPv6。
 var ipv6ProbeClient = func() *http.Client {
@@ -332,9 +341,9 @@ func probeIPv6Sources(ctx context.Context, client *http.Client, sources []string
 		}
 		// 每轮全败都落一行：前端只显示一句汇总，"到底每个源是超时、解析失败
 		// 还是没地址"只有这里看得到。没有这一行，排障就只剩猜。
-		fmt.Fprintf(os.Stderr, "helper: ipv6 probe round %d: %s\n", attempts, failure.describe())
+		probeLogf("helper: ipv6 probe round %d: %s\n", attempts, failure.describe())
 		// 真没有 v6 出口时重试只会让用户干等（校外、手机热点走这条快速失败）
-		if !failure.transient() || !hasLocalIPv6() {
+		if !failure.transient() || !localIPv6Present() {
 			return ipv6ProbeResult{}, attempts, failure.error()
 		}
 		select {
@@ -382,7 +391,7 @@ func logProbeNetworkState() {
 	defer cancel()
 	snapshot, err := network.CaptureSnapshot(ctx, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "helper: ipv6 probe net: snapshot failed: %v\n", err)
+		probeLogf("helper: ipv6 probe net: snapshot failed: %v\n", err)
 		return
 	}
 	parts := make([]string, 0, len(snapshot.Interfaces))
@@ -397,7 +406,7 @@ func logProbeNetworkState() {
 	if len(parts) == 0 {
 		parts = append(parts, "没有任何接口报告默认网关")
 	}
-	fmt.Fprintf(os.Stderr, "helper: ipv6 probe net: %s；%s=%v\n", strings.Join(parts, "；"),
+	probeLogf("helper: ipv6 probe net: %s；%s=%v\n", strings.Join(parts, "；"),
 		network.TunDeviceName, network.AdapterPresent(network.TunDeviceName))
 }
 
@@ -417,7 +426,7 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		network.AdapterPresent(network.TunDeviceName) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if removed := network.ClearTunRoutes(cleanupCtx, network.TunDeviceName); removed > 0 {
-			fmt.Fprintf(os.Stderr, "helper: ipv6 probe: cleared %d leftover %s route(s)\n", removed, network.TunDeviceName)
+			probeLogf("helper: ipv6 probe: cleared %d leftover %s route(s)\n", removed, network.TunDeviceName)
 		}
 		cleanupCancel()
 	}
@@ -425,7 +434,7 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		// 失败原因也落一行 helper.log：前端只显示一句结论，排障要看每个源的
 		// 具体表现（超时 / HTTP 错误 / 反爬页），否则只能猜。
-		fmt.Fprintf(os.Stderr, "helper: ipv6 probe failed (%d attempt(s)): %v\n", attempts, err)
+		probeLogf("helper: ipv6 probe failed (%d attempt(s)): %v\n", attempts, err)
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "ip": "", "error": err.Error(), "attempts": attempts})
 		return
 	}
