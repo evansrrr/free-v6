@@ -362,6 +362,124 @@ fn hotkey_set(enabled: bool) -> Result<(), String> {
     }
 }
 
+/* ── Memory usage (dashboard performance card) ─────────────────────── */
+// 应用段 = 主进程 + 全部后代进程（WebView2 的 browser / 渲染 / GPU 进程
+// 都挂在主进程下）；内核段 = state/mihomo.pid 指向的 mihomo 进程。
+// 指标统一取 Working Set，与任务管理器「内存」列口径一致。
+
+#[derive(serde::Serialize)]
+struct MemoryUsage {
+    app: u64,
+    kernel: u64,
+}
+
+#[cfg(windows)]
+fn kernel_pid() -> Option<u32> {
+    let exe = std::env::current_exe().ok()?;
+    let raw = std::fs::read_to_string(exe.parent()?.join("state").join("mihomo.pid")).ok()?;
+    raw.trim().parse::<u32>().ok()
+}
+
+#[cfg(windows)]
+mod process_memory {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS, PROCESSENTRY32W,
+    };
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    };
+
+    fn working_set(pid: u32) -> u64 {
+        if pid == 0 {
+            return 0;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+            if handle.is_null() {
+                return 0;
+            }
+            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ok = K32GetProcessMemoryInfo(handle, &mut counters, counters.cb);
+            CloseHandle(handle);
+            if ok == 0 {
+                0
+            } else {
+                counters.WorkingSetSize as u64
+            }
+        }
+    }
+
+    /// 一次进程快照 → 父 pid 到子 pid 列表的映射。
+    fn child_map() -> HashMap<u32, Vec<u32>> {
+        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return map;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snapshot, &mut entry) != 0 {
+                loop {
+                    map.entry(entry.th32ParentProcessID)
+                        .or_default()
+                        .push(entry.th32ProcessID);
+                    if Process32NextW(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snapshot);
+        }
+        map
+    }
+
+    /// 当前进程及其所有后代进程的 Working Set 合计。
+    pub fn app_total() -> u64 {
+        let root = unsafe { GetCurrentProcessId() };
+        let children = child_map();
+        let mut seen: HashSet<u32> = HashSet::from([root]);
+        let mut queue: VecDeque<u32> = VecDeque::from([root]);
+        let mut total = working_set(root);
+        while let Some(parent) = queue.pop_front() {
+            if let Some(kids) = children.get(&parent) {
+                for &pid in kids {
+                    if seen.insert(pid) {
+                        total += working_set(pid);
+                        queue.push_back(pid);
+                    }
+                }
+            }
+        }
+        total
+    }
+
+    pub fn of_pid(pid: u32) -> u64 {
+        working_set(pid)
+    }
+}
+
+#[tauri::command]
+fn get_memory_usage() -> MemoryUsage {
+    #[cfg(windows)]
+    {
+        MemoryUsage {
+            app: process_memory::app_total(),
+            kernel: kernel_pid().map(process_memory::of_pid).unwrap_or(0),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        MemoryUsage { app: 0, kernel: 0 }
+    }
+}
+
 /* ── Window background (液态玻璃主题) ─────────────────────────────── */
 // 应用/清除窗口级背景效果。mode ∈ { default, wallpaper, acrylic, mica }。
 // default/wallpaper：清除 OS 模糊，由网页 CSS 绘制背景（不透明）；
@@ -565,7 +683,8 @@ fn main() {
             get_helper_port,
             hotkey_set,
             set_background,
-            update_apply
+            update_apply,
+            get_memory_usage
         ])
         .build(tauri::generate_context!())
         .expect("error while building freev6")
@@ -799,3 +918,4 @@ mod tests {
         hotkey_set(false).expect("final unregister should succeed");
     }
 }
+

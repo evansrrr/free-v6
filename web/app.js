@@ -1952,6 +1952,43 @@ function resetTrafficDisplay(clearCounters) {
 
 /* ── Status Polling ───────────────────────────────────────────── */
 
+/* ── Memory card (dashboard) ───────────────────────────────────── */
+// 数据来自 Rust get_memory_usage（Working Set）。浏览器直接调试时没有
+// Tauri bridge，调用返回 undefined —— 保持占位符，且不写日志以免刷屏。
+async function refreshMemory() {
+  let usage;
+  try {
+    usage = await tauriInvoke('get_memory_usage');
+  } catch (_) {
+    return;
+  }
+  if (!usage) return;
+  renderMemory(Number(usage.app) || 0, Number(usage.kernel) || 0);
+}
+
+function renderMemory(appBytes, kernelBytes) {
+  const MB = 1024 * 1024;
+  const total = appBytes + kernelBytes;
+  const setText = (selector, text) => {
+    const el = $(selector);
+    if (el) el.textContent = text;
+  };
+  // 一位小数，整数值不补 .0（与参考版式一致：175 / 47.1）
+  const formatMB = (bytes) => {
+    const value = Math.round((bytes / MB) * 10) / 10;
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  };
+  setText('#memTotal', total > 0 ? String(Math.round(total / MB)) : '--');
+  setText('#memApp', formatMB(appBytes));
+  setText('#memKernel', formatMB(kernelBytes));
+
+  const appPct = total > 0 ? (appBytes / total) * 100 : 0;
+  const appBar = $('#memBarApp');
+  if (appBar) appBar.style.width = `${appPct}%`;
+  const kernelBar = $('#memBarKernel');
+  if (kernelBar) kernelBar.style.width = `${total > 0 ? 100 - appPct : 0}%`;
+}
+
 async function pollStatus() {
   const genAtStart = settingsWriteGen;
   const opGenAtStart = proxyOpGen;
@@ -3614,6 +3651,8 @@ function init() {
   setInterval(pollStatus, 3000);
   setInterval(pollTraffic, 1000);
   setInterval(fetchProxies, 5000);
+  refreshMemory();
+  setInterval(refreshMemory, 3000);
 
   // 自动运行免流：网络恢复后立即重试（离线期间按间隔静默等待）
   window.addEventListener('online', () => {

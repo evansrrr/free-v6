@@ -214,6 +214,42 @@
             </div>
           </div>
 
+          <!-- 性能卡：与公告卡同尺寸并排，纯展示（不可点击、无展开箭头）。
+               数据来自 Rust get_memory_usage：应用 = 主进程 + WebView2 子进程，
+               内核 = state/mihomo.pid 指向的 mihomo 进程，指标为 Working Set。 -->
+          <div class="card card-memory" id="memoryCard">
+            <div class="card-header">
+              <div class="card-header-icon">
+                <md-icon>memory</md-icon>
+              </div>
+              <div class="card-header-text">
+                <h3>内存信息</h3>
+              </div>
+            </div>
+            <div class="memory-row">
+              <div class="memory-total">
+                <span class="memory-total-value" id="memTotal">--</span>
+                <span class="memory-total-unit">MB</span>
+              </div>
+              <div class="memory-bar" role="img" aria-label="应用与内核内存占比">
+                <span class="memory-bar-app" id="memBarApp"></span>
+                <span class="memory-bar-kernel" id="memBarKernel"></span>
+              </div>
+            </div>
+            <div class="memory-legend">
+              <div class="memory-legend-row">
+                <span class="memory-legend-dot memory-dot-app"></span>
+                <span class="memory-legend-name">应用</span>
+                <b class="memory-legend-value"><span id="memApp">--</span><span class="memory-legend-unit">MB</span></b>
+              </div>
+              <div class="memory-legend-row">
+                <span class="memory-legend-dot memory-dot-kernel"></span>
+                <span class="memory-legend-name">内核</span>
+                <b class="memory-legend-value"><span id="memKernel">--</span><span class="memory-legend-unit">MB</span></b>
+              </div>
+            </div>
+          </div>
+
         </div>
 
       </section>

@@ -552,6 +552,88 @@ md-icon-button > md-icon {
   font-weight: 700;
 }
 
+/* ── Memory Card ── */
+
+/* 与公告卡同尺寸并排；纯展示，不加 hover / cursor / 展开箭头 */
+.card-memory {
+  width: 236px;
+  flex: 0 0 236px;
+  max-width: 100%;
+}
+/* 总数字与分段条同一行：数字定宽贴左，条向右压缩占据剩余空间 */
+.memory-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 12px;
+}
+.memory-total {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.memory-total-value {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -.02em;
+  color: var(--md-on-surface);
+  font-variant-numeric: tabular-nums;
+}
+.memory-total-unit {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--md-on-surface-variant);
+}
+/* 分段条：应用段实色，内核段同色降透明度，与图例圆点一一对应 */
+.memory-bar {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--md-primary) 12%, transparent);
+}
+.memory-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  transition: width 400ms var(--ease-decelerate);
+}
+.memory-bar-app { background: var(--md-primary); }
+.memory-bar-kernel { background: color-mix(in srgb, var(--md-primary) 32%, transparent); }
+.memory-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+}
+.memory-legend-row { display: flex; align-items: center; gap: 6px; }
+.memory-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.memory-dot-app { background: var(--md-primary); }
+.memory-dot-kernel { background: color-mix(in srgb, var(--md-primary) 32%, transparent); }
+.memory-legend-name { font-weight: 500; }
+.memory-legend-value {
+  color: var(--md-on-surface);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.memory-legend-unit {
+  margin-left: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--md-on-surface-variant);
+}
+
 /* ── Traffic Chart ── */
 
 .traffic-chart-wrap {
