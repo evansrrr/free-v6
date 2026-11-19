@@ -284,17 +284,12 @@ function showView(view) {
     // FABs are window-anchored: proxy toggle on dashboard, delay test on proxies
     $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
     syncDelayFab();
-    // 刚显示出来的 FAB 尺寸从 0 变成实际值，库只会重设 canvas 尺寸、不会重绘，
-    // 必须主动标脏，否则要等鼠标悬停（button 模式）才会出现玻璃
-    if (bgState.liquidGlass) kickGlassRefresh();
   }, oldView ? 80 : 0);
 
   // Update nav highlighting immediately
   $$('.nav-item[data-view]').forEach(item => {
     item.classList.toggle('active', item.dataset.view === view);
   });
-  // 玻璃滑块跟到新的选中项（与官网 tab 指示器同样的滑动动画）
-  syncRailIndicator(true);
 }
 
 /* ── Proxy Toggle ── */
@@ -3360,13 +3355,10 @@ function loadAppearancePrefs() {
 
 const bgState = {
   mode: 'default',          // default | wallpaper | acrylic | mica
-  webglGlass: true,         // WebGL 折射增强（仅壁纸模式生效）
   wallpaper: null,          // data URL；null = 未设置
-  liquidGlass: null,        // @ybouane/liquidglass 实例
 };
 
 const BG_MODE_KEY = 'freev6-bg-mode';
-const BG_GLASS_KEY = 'freev6-webgl-glass';
 const BG_WALLPAPER_KEY = 'freev6-wallpaper';
 
 // 当前深浅色（亚克力/云母 dark 参数）
@@ -3392,8 +3384,6 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
   const select = $('#bgModeSelect');
   if (select) select.value = mode;
 
-  syncLiquidGlass(); // 仅壁纸 + 开关开启时启用 WebGL 折射
-
   const dark = bgIsDark();
   try {
     const applied = await tauriInvoke('set_background', { mode, dark });
@@ -3404,7 +3394,6 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
       if (select) select.value = 'acrylic';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'acrylic'); } catch (_) {} }
       addLog('云母不可用，已自动降级为亚克力');
-      syncLiquidGlass();
     } else if ((mode === 'acrylic' || mode === 'mica') && applied === 'default') {
       // 系统完全不支持 → 回退默认
       bgState.mode = 'default';
@@ -3412,7 +3401,6 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
       if (select) select.value = 'default';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
       addLog('该背景效果在当前系统不可用', true);
-      syncLiquidGlass();
     }
   } catch (e) {
     addLog(`背景模式切换失败: ${e}`, true);
@@ -3421,7 +3409,6 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
       document.documentElement.setAttribute('data-bg-mode', 'default');
       if (select) select.value = 'default';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
-      syncLiquidGlass();
     }
   }
 }
@@ -3451,29 +3438,10 @@ function compressWallpaper(file) {
   });
 }
 
-// 同步各 liquidglass 根的壁纸副本（导轨 / FAB 层），供折射捕获
-function setWallpaperCopies(src) {
-  [
-    ['#railBg', () => bgState.railGlass],
-    ['#fabBg', () => bgState.liquidGlass],
-  ].forEach(([sel, getInst]) => {
-    const el = $(sel);
-    if (!el) return;
-    if (!src) { el.removeAttribute('src'); return; }
-    // 壁纸副本换图后库感知不到 → 手动失效重渲
-    el.onload = () => {
-      const inst = getInst();
-      if (inst) { try { inst.markChanged(); } catch (_) {} }
-    };
-    el.src = src;
-  });
-}
-
 function applyWallpaper(dataUrl) {
   bgState.wallpaper = dataUrl;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.src = dataUrl;
-  setWallpaperCopies(dataUrl);
   try {
     localStorage.setItem(BG_WALLPAPER_KEY, dataUrl);
   } catch (_) {
@@ -3490,216 +3458,12 @@ function clearWallpaper() {
   bgState.wallpaper = null;
   const imgEl = $('#bgImage');
   if (imgEl) imgEl.removeAttribute('src');
-  setWallpaperCopies(null);
   try { localStorage.removeItem(BG_WALLPAPER_KEY); } catch (_) {}
   const clearBtn = $('#clearWallpaperBtn');
   if (clearBtn) clearBtn.hidden = true;
   const desc = $('#wallpaperDesc');
   if (desc) desc.textContent = '选择一张图片作为背景';
   if (bgState.mode === 'wallpaper') applyBackgroundMode('default');
-}
-
-// WebGL 液态玻璃：仅壁纸模式 + 开关开启时，对浮动面板应用
-async function syncLiquidGlass() {
-  const enable = bgState.mode === 'wallpaper' && bgState.webglGlass && !!bgState.wallpaper;
-  clearTimeout(bgState._initTimer);
-  if (!enable) {
-    document.documentElement.setAttribute('data-webgl-glass', 'off');
-    destroyLiquidGlass();
-    return;
-  }
-  // 延迟到首屏渲染后初始化，避免 html-to-image 预捕获阻塞 UI；
-  // 仅 init 成功才接管（否则保持 CSS 磨砂，避免透明无底的闪帧）
-  bgState._initTimer = setTimeout(async () => {
-    const ok = await initLiquidGlass();
-    document.documentElement.setAttribute('data-webgl-glass', ok ? 'on' : 'off');
-  }, 300);
-}
-
-/* ── 导航玻璃指示器（对应官网 .hero-tabs + #glass-tab-indicator） ──
-   单个玻璃滑块在导航项之间滑动；导航项本身无色，图标留在玻璃内被折射，
-   文字压在玻璃之上保持清晰。 */
-function railIndicatorRect() {
-  const rail = $('.rail');
-  const indicator = $('#railIndicator');
-  const active = $('.nav-group .nav-item.active') || $('.nav-group .nav-item');
-  if (!rail || !indicator || !active) return null;
-  const railRect = rail.getBoundingClientRect();
-  const itemRect = active.getBoundingClientRect();
-  if (!itemRect.width) return null;
-  return {
-    indicator,
-    w: itemRect.width,
-    h: itemRect.height,
-    x: itemRect.left - railRect.left,
-    y: itemRect.top - railRect.top,
-  };
-}
-
-// 预置尺寸：库在 init 时按元素尺寸分配 canvas，必须先把滑块放到正确的一格
-function primeRailIndicator() {
-  const r = railIndicatorRect();
-  if (!r) return;
-  r.indicator.style.transition = 'none';
-  r.indicator.style.width = `${r.w}px`;
-  r.indicator.style.height = `${r.h}px`;
-  r.indicator.style.transform = `translate(${r.x}px, ${r.y}px)`;
-  r.indicator.offsetHeight; // 强制 reflow，避免从屏幕外哨兵值动画过来
-  r.indicator.style.transition = '';
-}
-
-function syncRailIndicator(animate) {
-  if (!bgState.railGlass) return;
-  const r = railIndicatorRect();
-  if (!r) return;
-  if (!animate) r.indicator.style.transition = 'none';
-  r.indicator.style.width = `${r.w}px`;
-  r.indicator.style.height = `${r.h}px`;
-  r.indicator.style.transform = `translate(${r.x}px, ${r.y}px)`;
-  if (!animate) {
-    r.indicator.offsetHeight;
-    r.indicator.style.transition = '';
-  } else {
-    pulseRailIndicator();
-  }
-}
-
-/* 库的渲染帧有 `_glassDirty` 门槛：没有元素标脏就整帧跳过。
-   CSS transform 平移滑块不会自动标脏，canvas 会带着旧贴图整体搬走 —— 
-   所以滑动期间逐帧 markChanged，让折射按新位置重算。
-   约 30fps 节流：每帧都要重新栅格化滑块背后的内容，不必满帧跑。 */
-function pulseRailIndicator() {
-  if (!bgState.railGlass) return;
-  cancelAnimationFrame(bgState._railPulse);
-  const started = performance.now();
-  let last = 0;
-  const tick = (now) => {
-    const ind = $('#railIndicator');
-    if (!ind || !bgState.railGlass) return;
-    if (now - last > 32) {
-      last = now;
-      try { bgState.railGlass.markChanged(ind); } catch (_) {}
-    }
-    if (now - started < 520) {
-      bgState._railPulse = requestAnimationFrame(tick);
-    } else {
-      // 落位后再补一帧，保证最终位置是准的
-      try { bgState.railGlass.markChanged(ind); } catch (_) {}
-    }
-  };
-  bgState._railPulse = requestAnimationFrame(tick);
-}
-
-function wireRailIndicator() {
-  if (bgState._railResize) return;
-  bgState._railResize = () => {
-    if (bgState.railGlass) syncRailIndicator(false);
-  };
-  window.addEventListener('resize', bgState._railResize);
-  // 图标字体 / 自定义元素升级会改变导航项尺寸，库和 window.resize 都不会察觉
-  const group = $('.nav-group');
-  if (group && window.ResizeObserver) {
-    bgState._railRO = new ResizeObserver(() => {
-      if (bgState.railGlass) syncRailIndicator(false);
-    });
-    bgState._railRO.observe(group);
-  }
-}
-
-async function initLiquidGlass() {
-  if (bgState.liquidGlass && bgState.railGlass) return true;
-  const fabLayer = $('#fabLayer');
-  const fabs = $$('.fab-item');
-  const indicator = $('#railIndicator');
-  const logsBtn = $('#logsButton');
-  try {
-    const { LiquidGlass } = await import('@ybouane/liquidglass');
-
-    // 基准取自官网 site/index.html，只按深色壁纸做两处微调：
-    // - 按钮（#glass-btn）：button 模式 + 适度模糊；去掉 demo 的 brightness -.1，
-    //   那档是为浅色竹林照片压亮度用的，深色壁纸上会把按钮压成灰块
-    // - 滑块（#glass-tab-indicator）：blur 0 保持图标锐利，圆角对齐导航项
-    const FAB_CFG = { button: true, cornerRadius: 16, blurAmount: 0.28 };
-    // 官网默认 edgeHighlight .2 是为浅色照片调的；深色壁纸上滑块会「沉」进底槽，
-    // 这里略微提亮度 + 加强边缘高光，保证选中态一眼可辨（其余仍是库默认）
-    const INDICATOR_CFG = {
-      cornerRadius: 20, zRadius: 16, blurAmount: 0,
-      edgeHighlight: 0.32, shadowOpacity: 0.18, brightness: 0.1, tintStrength: 0,
-    };
-    const LOGS_CFG = { button: true, cornerRadius: 20, blurAmount: 0.28 };
-
-    // FAB 实例（root=#fabLayer：只含壁纸副本 + FAB，小 root 初始化快）
-    if (!bgState.liquidGlass && fabLayer && fabs.length) {
-      fabs.forEach((f) => { f.dataset.config = JSON.stringify(FAB_CFG); });
-      bgState.liquidGlass = await LiquidGlass.init({
-        root: fabLayer,
-        glassElements: fabs,
-      });
-      kickGlassRefresh();
-    }
-
-    // 导轨实例（root=.rail）：玻璃滑块 + 日志按钮
-    if (!bgState.railGlass && indicator) {
-      indicator.dataset.config = JSON.stringify(INDICATOR_CFG);
-      if (logsBtn) logsBtn.dataset.config = JSON.stringify(LOGS_CFG);
-      primeRailIndicator(); // 必须先定尺寸再 init
-      const targets = [indicator, logsBtn].filter(Boolean);
-      bgState.railGlass = await LiquidGlass.init({
-        root: $('.rail'),
-        glassElements: targets,
-      });
-      syncRailIndicator(false);
-      wireRailIndicator();
-      kickGlassRefresh();
-      // 图标字体/自定义元素升级后导航项尺寸可能变化，库不会察觉 → 再对齐一次
-      const settle = () => requestAnimationFrame(() => requestAnimationFrame(() => syncRailIndicator(false)));
-      if (document.fonts && document.fonts.ready) document.fonts.ready.then(settle);
-      settle();
-    }
-    return true;
-  } catch (e) {
-    // WebGL 不可用（老机器/驱动）→ 回退 CSS 磨砂
-    bgState.liquidGlass = null;
-    bgState.railGlass = null;
-    addLog(`WebGL 液态玻璃不可用，已回退磨砂效果（${e}）`, true);
-    return false;
-  }
-}
-
-/* 全量重绘一次。两个用途：
-   1) init 完成时壁纸副本可能还没解码完，首帧会拿到空白场景；
-   2) FAB 一开始是 display:none（canvas 被定成 0 尺寸），显示后尺寸变了
-      但没有任何东西标脏，库不会重绘 —— 只在 hover 时靠 button 模式才亮起来。 */
-function kickGlassRefresh() {
-  const kick = () => {
-    try { bgState.liquidGlass?.markChanged(); } catch (_) {}
-    try { bgState.railGlass?.markChanged(); } catch (_) {}
-  };
-  requestAnimationFrame(kick);
-  setTimeout(kick, 120);
-  setTimeout(kick, 480);
-}
-
-function destroyLiquidGlass() {
-  if (bgState.liquidGlass) {
-    try { bgState.liquidGlass.destroy(); } catch (_) {}
-    bgState.liquidGlass = null;
-  }
-  if (bgState.railGlass) {
-    try { bgState.railGlass.destroy(); } catch (_) {}
-    bgState.railGlass = null;
-  }
-  // 清理滑块残留的 canvas 与尺寸，避免关掉玻璃后留一块陈旧贴图
-  const ind = $('#railIndicator');
-  if (ind) {
-    ind.querySelectorAll('canvas').forEach((c) => c.remove());
-    ind.style.transition = 'none';
-    ind.style.width = '0';
-    ind.style.height = '0';
-    ind.style.transform = 'translate(-9999px, -9999px)';
-    ind.offsetHeight;
-    ind.style.transition = '';
-  }
 }
 
 // 玻璃开关兼容 md-switch API：.selected 属性 + click 派发 change，
@@ -3723,7 +3487,6 @@ function setupGlassSwitches() {
 function loadBackgroundPrefs() {
   try {
     bgState.mode = localStorage.getItem(BG_MODE_KEY) || 'default';
-    bgState.webglGlass = localStorage.getItem(BG_GLASS_KEY) !== '0';
     bgState.wallpaper = localStorage.getItem(BG_WALLPAPER_KEY);
   } catch (_) {}
   if (!['default', 'wallpaper', 'acrylic', 'mica'].includes(bgState.mode)) {
@@ -3734,7 +3497,6 @@ function loadBackgroundPrefs() {
   if (bgState.wallpaper) {
     const imgEl = $('#bgImage');
     if (imgEl) imgEl.src = bgState.wallpaper;
-    setWallpaperCopies(bgState.wallpaper);
     const clearBtn = $('#clearWallpaperBtn');
     if (clearBtn) clearBtn.hidden = false;
     const desc = $('#wallpaperDesc');
@@ -3742,8 +3504,6 @@ function loadBackgroundPrefs() {
   }
   const select = $('#bgModeSelect');
   if (select) select.value = bgState.mode;
-  const glassSwitch = $('#liquidGlassSwitch');
-  if (glassSwitch) glassSwitch.selected = bgState.webglGlass;
 
   document.documentElement.setAttribute('data-bg-mode', bgState.mode);
   applyBackgroundMode(bgState.mode, { persist: false });
@@ -3781,13 +3541,6 @@ function wireBackgroundEvents() {
     } catch (err) {
       addLog(`壁纸设置失败: ${err.message}`, true);
     }
-  });
-
-  $('#liquidGlassSwitch')?.addEventListener('change', (e) => {
-    bgState.webglGlass = e.target.selected;
-    try { localStorage.setItem(BG_GLASS_KEY, bgState.webglGlass ? '1' : '0'); } catch (_) {}
-    syncLiquidGlass();
-    addLog(bgState.webglGlass ? '已开启液态玻璃' : '已关闭液态玻璃');
   });
 
   // 显式切换主题由 applyTheme -> syncNativeVibrancy 负责（顺序可控）；

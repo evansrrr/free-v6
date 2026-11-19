@@ -242,19 +242,7 @@ a { color: var(--md-primary); text-decoration: none; }
   z-index: 2;
 }
 
-/* 壁纸副本：仅用于 liquidglass 折射捕获，视觉不可见（opacity 0），
-   但保留全屏矩形使 getBoundingClientRect 非零、可被折射采样 */
-.bg-copy {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* FAB 玻璃层：独立 liquidglass 根（只含壁纸副本 + FAB），避免光栅化整页 */
+/* FAB 层：窗口锚定的悬浮按钮容器 */
 #fabLayer {
   position: fixed;
   inset: 0;
@@ -287,24 +275,6 @@ a { color: var(--md-primary); text-decoration: none; }
   margin: 0 0 8px;
   border-radius: var(--radius-lg);
   flex-shrink: 0;
-}
-
-/* 液态玻璃指示器（参考官网 #glass-tab-indicator）：尺寸/位置由 JS 计算，
-   默认停在屏幕外，避免首帧在 (0,0) 闪一下 */
-#railIndicator {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  z-index: 5;
-  pointer-events: none;
-  border-radius: var(--radius-lg);
-  transform: translate(-9999px, -9999px);
-  transition: transform 450ms cubic-bezier(.65, 0, .35, 1),
-              width 450ms cubic-bezier(.65, 0, .35, 1),
-              height 450ms cubic-bezier(.65, 0, .35, 1);
-  will-change: transform;
 }
 
 .nav-item {
@@ -1175,7 +1145,7 @@ md-filled-button.danger {
     flex-direction: row; justify-content: space-around; gap: 0; padding: 0;
     border-right: none; border-top: 1px solid var(--md-outline-variant); z-index: 50;
   }
-  .brand-mark, .bottom-item, .bg-copy { display: none; }
+  .brand-mark, .bottom-item { display: none; }
   .nav-group {
     flex: 1; flex-direction: row; gap: 0; padding: 0; margin: 0;
     border-radius: 0; background: transparent;
@@ -1255,8 +1225,6 @@ md-filled-button.danger {
    - 背景层：壁纸 <img> + 主题遮罩（body 顶层，z-index 0）
    - 背景模式：default / wallpaper / acrylic / mica（data-bg-mode）
    - CSS 磨砂玻璃：backdrop-filter 覆盖主要表面，保证全 UI 流畅
-   - WebGL 液态玻璃：app.js 经 @ybouane/liquidglass 应用到浮动面板
-     （data-webgl-glass="on" 时接管，见 app.js）
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── 背景层 ── */
@@ -1398,7 +1366,7 @@ md-filled-button.danger {
   background: transparent;
   color: var(--md-on-surface);
 }
-/* 未启用 WebGL 时的选中态：实心玻璃胶囊。
+/* 导航选中态：实心玻璃胶囊。
    底色用 surface-container-highest（暗色主题比底槽更亮、亮色主题比底槽更暗），
    配上主色文字 + 一圈描边，色阶与色相双重区分，两套主题都一眼可辨。 */
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .nav-group .nav-item.active {
@@ -1485,72 +1453,6 @@ md-filled-button.danger {
 :root:is([data-bg-mode="wallpaper"], [data-bg-mode="acrylic"], [data-bg-mode="mica"]) .proxy-fab.running {
   background: color-mix(in srgb, var(--md-surface-container-high) 40%, transparent);
   color: var(--green);
-}
-
-/* ── WebGL 液态玻璃接管（仅壁纸 + 开关开启） ── */
-/* liquidglass 把折射 canvas 注入为玻璃元素第一个子节点，元素自身背景
-   须透明、关闭 CSS 磨砂与阴影，避免与 WebGL 输出叠加。 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item {
-  background: transparent !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  box-shadow: none !important;
-}
-/* 指示器存在时，选中态不再需要 CSS 底色与描边（玻璃由滑块提供） */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active {
-  background: transparent !important;
-  box-shadow: none !important;
-}
-/* 图标与文字都压在滑块 canvas 之上：md-icon 走 Shadow DOM，
-   html-to-image 抓不到图标字形，留在玻璃后面会整块消失 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item > * {
-  position: relative;
-  z-index: 6;
-}
-/* 透明底下的文字可读性（玻璃自身无填充，靠投影保证深/浅壁纸下都可读） */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item {
-  color: var(--md-on-surface);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, .55);
-}
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-group .nav-item.active { color: var(--md-primary); }
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .proxy-fab.running { color: var(--green); }
-/* WebGL 玻璃的底色蒙层：canvas 形状内不透明，元素自身背景被它完全盖住，
-   只能用伪元素叠在 canvas（z-index:-1）之上、内容（z-index:1）之下。
-   底色与 CSS 面板共用 --glass-bg，浅色主题下两者才不会一个发白一个裸透。 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item::after,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--glass-bg);
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* 折射 canvas 溢出色差/阴影，玻璃元素不能裁剪 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .nav-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] #railIndicator { overflow: visible; }
-/* 玻璃层内的图标/文字需压在 canvas(z-index:-1) 之上 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item > * { position: relative; z-index: 1; }
-/* 玻璃态下不做位移动效：canvas 会跟着位移重采样，叠出第二层「蒙版」观感。
-   悬停/按下的反馈交给库自身的 button 模式（hover 提亮、press 压平），
-   这里只补一档极轻的整体提亮，保证鼠标进出的反馈可感知 */
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:hover,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:active { transform: none; }
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .bottom-item {
-  transition: filter 160ms ease, opacity 250ms, color 150ms;
-}
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:hover,
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .bottom-item:hover {
-  filter: brightness(1.08);
-}
-:root[data-bg-mode="wallpaper"][data-webgl-glass="on"] .fab-item:active {
-  filter: brightness(0.96);
 }
 
 /* ── 纯黑背景（OLED）优先级高于玻璃 ── */

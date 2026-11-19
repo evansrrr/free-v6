@@ -22,15 +22,14 @@
         "lit-element/": "./vendor/lit-element/",
         "@lit/reactive-element": "./vendor/@lit/reactive-element/reactive-element.js",
         "@lit/reactive-element/": "./vendor/@lit/reactive-element/",
-        "tslib": "./vendor/tslib/tslib.es6.js",
-        "@ybouane/liquidglass": "./vendor/liquidglass/index.js"
+        "tslib": "./vendor/tslib/tslib.es6.js"
       }
     }
   </script>
   <script type="module" src="material.js"></script>
 </head>
 <body>
-  <!-- 液态玻璃背景层：壁纸 + 主题遮罩（z-index 0，其余内容在其上） -->
+  <!-- 背景层：壁纸 + 主题遮罩（z-index 0，其余内容在其上） -->
   <img class="bg-image" id="bgImage" alt="" aria-hidden="true">
   <div class="bg-tint" id="bgTint" aria-hidden="true"></div>
 
@@ -51,7 +50,6 @@
 
   <!-- Navigation Rail -->
     <aside class="rail" aria-label="主导航">
-      <img class="bg-copy" id="railBg" alt="" aria-hidden="true">
       <div class="brand-mark" aria-label="freev6">F 6</div>
       <!-- 非玻璃容器（对应官网 .hero-tabs）：只承载图标，玻璃滑块在其上方滑动 -->
       <div class="nav-group">
@@ -68,8 +66,7 @@
           <span>设置</span>
         </button>
       </div>
-      <!-- 液态玻璃指示器（对应官网 #glass-tab-indicator）：尺寸/位置由 JS 计算 -->
-      <div id="railIndicator" aria-hidden="true"></div>
+      <!-- 玻璃指示器已移除：选中态由 .nav-item.active 的 CSS 胶囊提供 -->
       <button class="nav-item bottom-item" id="logsButton" aria-label="日志">
         <md-icon class="nav-icon">receipt_long</md-icon>
         <span>日志</span>
@@ -301,17 +298,6 @@
               <md-text-button id="clearWallpaperBtn" hidden>清除</md-text-button>
             </div>
             <input type="file" id="wallpaperFileInput" accept="image/*" hidden>
-            <md-divider></md-divider>
-            <div class="setting-item">
-              <div class="setting-icon">
-                <md-icon><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3C15.6 7.2 18.6 10.5 18.6 13.7A6.6 6.6 0 1 1 5.4 13.7C5.4 10.5 8.4 7.2 12 3Z"/><path d="M9.1 13.7a3.1 3.1 0 0 1 2.4-2.7"/></svg></md-icon>
-              </div>
-              <div class="setting-text">
-                <div class="setting-label">液态玻璃</div>
-                <div class="setting-desc">为浮动面板启用 WebGL 折射效果</div>
-              </div>
-              <button class="glass-switch" id="liquidGlassSwitch" role="switch" aria-checked="false" aria-label="液态玻璃"><span class="gs-handle"></span></button>
-            </div>
           </div>
 
           <div class="settings-group">
@@ -612,9 +598,8 @@
     <div class="log-list" id="logList"></div>
   </aside>
 
-  <!-- 玻璃层：FAB + 壁纸副本（独立 liquidglass 根，避免光栅化整页） -->
+  <!-- FAB 层：窗口锚定的悬浮按钮容器 -->
   <div id="fabLayer">
-    <img class="bg-copy" id="fabBg" alt="" aria-hidden="true">
     <button id="proxyToggle" class="fab-item glass-fab proxy-fab" aria-label="启动/停止免流">
       <md-icon id="toggleIcon"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="9.1,5.6 17.9,12 9.1,18.4" fill="currentColor" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round"/></svg></md-icon>
       <span class="fab-label">启动免流</span>
