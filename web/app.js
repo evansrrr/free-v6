@@ -2525,11 +2525,6 @@ async function autoDelayTestAfterStart() {
 /* ── Settings Page ────────────────────────────────────────────── */
 
 function renderCidrs() {
-  const desc = $('#cidrDesc');
-  if (desc) desc.textContent = state.cidrs.length
-    ? `${state.cidrs.length} 个网段/域名`
-    : '管理绕过免流的网段与域名';
-
   const list = $('#cidrList');
   if (!list) return;
   if (!state.cidrs.length) {
