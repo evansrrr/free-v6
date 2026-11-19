@@ -268,12 +268,29 @@ function showView(view) {
   const newView = $(`#${view}View`);
   if (!newView) return;
 
+  // 切换期间锁住滚动条：新旧视图会短暂同时占位（约 40ms），内容高度
+  // 翻倍会让滚动条闪现。scrollbar-gutter 已预留槽位，锁定不引起宽度抖动。
+  const main = $('#mainContent');
+  if (main) {
+    main.classList.add('switching');
+    clearTimeout(showView._unlockTimer);
+    showView._unlockTimer = setTimeout(() => main.classList.remove('switching'), 420);
+  }
+
   // Exit animation on old view
   if (oldView) {
+    const oldId = state.activeView;
     oldView.classList.add('exiting');
-    oldView.addEventListener('animationend', () => {
-      oldView.classList.remove('active', 'exiting');
-    }, { once: true });
+    // 不依赖 animationend：溢出锁定会改动 overflow，可能让动画被取消，
+    // 事件不来就会留下 opacity:0 的旧视图，下次切回整页空白。
+    // 固定 160ms（动画 120ms + 新视图 80ms 激活）收尾，且只在它确实
+    // 已被新视图取代时才摘掉 active，避免快速来回切换把当前页藏掉。
+    setTimeout(() => {
+      oldView.classList.remove('exiting');
+      if (state.activeView !== oldId && newView.classList.contains('active')) {
+        oldView.classList.remove('active');
+      }
+    }, 160);
   }
 
   // Enter new view after short delay

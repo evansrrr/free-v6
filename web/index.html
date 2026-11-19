@@ -226,26 +226,28 @@
                 <h3>内存信息</h3>
               </div>
             </div>
-            <div class="memory-row">
-              <div class="memory-total">
-                <span class="memory-total-value" id="memTotal">--</span>
-                <span class="memory-total-unit">MB</span>
+            <div class="memory-body">
+              <div class="memory-row">
+                <div class="memory-total">
+                  <span class="memory-total-value" id="memTotal">--</span>
+                  <span class="memory-total-unit">MB</span>
+                </div>
+                <div class="memory-bar" role="img" aria-label="应用与内核内存占比">
+                  <span class="memory-bar-app" id="memBarApp"></span>
+                  <span class="memory-bar-kernel" id="memBarKernel"></span>
+                </div>
               </div>
-              <div class="memory-bar" role="img" aria-label="应用与内核内存占比">
-                <span class="memory-bar-app" id="memBarApp"></span>
-                <span class="memory-bar-kernel" id="memBarKernel"></span>
-              </div>
-            </div>
-            <div class="memory-legend">
-              <div class="memory-legend-row">
-                <span class="memory-legend-dot memory-dot-app"></span>
-                <span class="memory-legend-name">应用</span>
-                <b class="memory-legend-value"><span id="memApp">--</span><span class="memory-legend-unit">MB</span></b>
-              </div>
-              <div class="memory-legend-row">
-                <span class="memory-legend-dot memory-dot-kernel"></span>
-                <span class="memory-legend-name">内核</span>
-                <b class="memory-legend-value"><span id="memKernel">--</span><span class="memory-legend-unit">MB</span></b>
+              <div class="memory-legend">
+                <div class="memory-legend-row">
+                  <span class="memory-legend-dot memory-dot-app"></span>
+                  <span class="memory-legend-name">应用</span>
+                  <b class="memory-legend-value"><span id="memApp">--</span><span class="memory-legend-unit">MB</span></b>
+                </div>
+                <div class="memory-legend-row">
+                  <span class="memory-legend-dot memory-dot-kernel"></span>
+                  <span class="memory-legend-name">内核</span>
+                  <b class="memory-legend-value"><span id="memKernel">--</span><span class="memory-legend-unit">MB</span></b>
+                </div>
               </div>
             </div>
           </div>
