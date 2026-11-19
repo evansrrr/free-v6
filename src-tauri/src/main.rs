@@ -363,9 +363,11 @@ fn hotkey_set(enabled: bool) -> Result<(), String> {
 }
 
 /* ── Memory usage (dashboard performance card) ─────────────────────── */
-// 应用段 = 主进程 + 全部后代进程（WebView2 的 browser / 渲染 / GPU 进程
-// 都挂在主进程下）；内核段 = state/mihomo.pid 指向的 mihomo 进程。
-// 指标统一取 Working Set，与任务管理器「内存」列口径一致。
+// 口径与任务管理器「内存」列一致：专用工作集（Private Working Set），只算
+// 进程独占的物理页。总工作集会把共享 DLL 页在每个进程里重复计入，多进程
+// 相加后严重虚高，所以必须逐页查询。
+// 应用段 = 主进程 + 其下所有 msedgewebview2 子进程（browser/渲染/GPU），
+// 不含 helper 与内核；内核段 = state/mihomo.pid 指向的 mihomo 进程。
 
 #[derive(serde::Serialize)]
 struct MemoryUsage {
@@ -388,80 +390,137 @@ mod process_memory {
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS, PROCESSENTRY32W,
     };
     use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        K32GetProcessMemoryInfo, QueryWorkingSet, PSAPI_WORKING_SET_BLOCK,
+        PSAPI_WORKING_SET_INFORMATION, PROCESS_MEMORY_COUNTERS,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+        GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
     };
 
-    fn working_set(pid: u32) -> u64 {
+    const PAGE_SIZE: u64 = 4096;
+    const WEBVIEW_EXE: &str = "msedgewebview2.exe";
+    // PSAPI_WORKING_SET_BLOCK 位域：Protection:5, ShareCount:3, Shared:1
+    // → Shared = bit8；置位表示该页与其它进程共享，不计入专用工作集
+    const SHARED_BIT: usize = 1 << 8;
+
+    struct ProcInfo {
+        parent: u32,
+        name: String,
+    }
+
+    fn private_working_set(pid: u32) -> u64 {
         if pid == 0 {
             return 0;
         }
         unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+            let handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
             if handle.is_null() {
                 return 0;
             }
-            let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
-            counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-            let ok = K32GetProcessMemoryInfo(handle, &mut counters, counters.cb);
+            let bytes = private_working_set_of(handle);
             CloseHandle(handle);
-            if ok == 0 {
-                0
-            } else {
-                counters.WorkingSetSize as u64
-            }
+            bytes
         }
     }
 
-    /// 一次进程快照 → 父 pid 到子 pid 列表的映射。
-    fn child_map() -> HashMap<u32, Vec<u32>> {
-        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+    unsafe fn private_working_set_of(handle: *mut std::ffi::c_void) -> u64 {
+        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        if K32GetProcessMemoryInfo(handle, &mut counters, counters.cb) == 0 {
+            return 0;
+        }
+        // QueryWorkingSet 自行枚举全部驻留页并按 Shared 位标注共享页；
+        // 缓冲按页数 + 8k 页余量准备，用 Vec<u64> 承载保证 8 字节对齐。
+        let estimate = counters.WorkingSetSize / PAGE_SIZE as usize + 8192;
+        let bytes = std::mem::size_of::<usize>()
+            + estimate * std::mem::size_of::<PSAPI_WORKING_SET_BLOCK>();
+        let mut buf: Vec<u64> = vec![0; (bytes + 7) / 8];
+        let info = buf.as_mut_ptr() as *mut PSAPI_WORKING_SET_INFORMATION;
+        if QueryWorkingSet(handle, info as *mut std::ffi::c_void, bytes as u32) == 0 {
+            // 缓冲区不足（期间工作集暴涨）→ 退回总工作集，宁可偏高也不报 0
+            return counters.WorkingSetSize as u64;
+        }
+        let entries = (*info).NumberOfEntries;
+        let pages = (*info).WorkingSetInfo.as_ptr();
+        let mut private_pages = 0u64;
+        for i in 0..entries {
+            if (*pages.add(i)).Flags & SHARED_BIT == 0 {
+                private_pages += 1;
+            }
+        }
+        private_pages * PAGE_SIZE
+    }
+
+    fn snapshot() -> HashMap<u32, ProcInfo> {
+        let mut map: HashMap<u32, ProcInfo> = HashMap::new();
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snapshot == INVALID_HANDLE_VALUE {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
                 return map;
             }
             let mut entry: PROCESSENTRY32W = std::mem::zeroed();
             entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            if Process32FirstW(snapshot, &mut entry) != 0 {
+            if Process32FirstW(snap, &mut entry) != 0 {
                 loop {
-                    map.entry(entry.th32ParentProcessID)
-                        .or_default()
-                        .push(entry.th32ProcessID);
-                    if Process32NextW(snapshot, &mut entry) == 0 {
+                    let len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    map.insert(
+                        entry.th32ProcessID,
+                        ProcInfo {
+                            parent: entry.th32ParentProcessID,
+                            name: String::from_utf16_lossy(&entry.szExeFile[..len]),
+                        },
+                    );
+                    if Process32NextW(snap, &mut entry) == 0 {
                         break;
                     }
                 }
             }
-            CloseHandle(snapshot);
+            CloseHandle(snap);
         }
         map
     }
 
-    /// 当前进程及其所有后代进程的 Working Set 合计。
-    pub fn app_total() -> u64 {
+    /// 主进程 + 其下所有 WebView2 子进程的专用工作集合计。
+    /// kernel_pid 已由内核段单独统计，这里跳过以免重复计入应用。
+    pub fn app_private_working_set(kernel_pid: Option<u32>) -> u64 {
         let root = unsafe { GetCurrentProcessId() };
-        let children = child_map();
+        let procs = snapshot();
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for (&pid, info) in &procs {
+            children.entry(info.parent).or_default().push(pid);
+        }
+
         let mut seen: HashSet<u32> = HashSet::from([root]);
         let mut queue: VecDeque<u32> = VecDeque::from([root]);
-        let mut total = working_set(root);
+        let mut total = private_working_set(root);
         while let Some(parent) = queue.pop_front() {
-            if let Some(kids) = children.get(&parent) {
-                for &pid in kids {
-                    if seen.insert(pid) {
-                        total += working_set(pid);
-                        queue.push_back(pid);
-                    }
+            let Some(kids) = children.get(&parent) else {
+                continue;
+            };
+            for &pid in kids {
+                if pid == 0 || !seen.insert(pid) || Some(pid) == kernel_pid {
+                    continue;
                 }
+                let is_webview = procs
+                    .get(&pid)
+                    .map(|info| info.name.eq_ignore_ascii_case(WEBVIEW_EXE))
+                    .unwrap_or(false);
+                if !is_webview {
+                    continue;
+                }
+                total += private_working_set(pid);
+                queue.push_back(pid);
             }
         }
         total
     }
 
-    pub fn of_pid(pid: u32) -> u64 {
-        working_set(pid)
+    pub fn private_of(pid: u32) -> u64 {
+        private_working_set(pid)
     }
 }
 
@@ -469,9 +528,10 @@ mod process_memory {
 fn get_memory_usage() -> MemoryUsage {
     #[cfg(windows)]
     {
+        let kernel = kernel_pid();
         MemoryUsage {
-            app: process_memory::app_total(),
-            kernel: kernel_pid().map(process_memory::of_pid).unwrap_or(0),
+            app: process_memory::app_private_working_set(kernel),
+            kernel: kernel.map(process_memory::private_of).unwrap_or(0),
         }
     }
     #[cfg(not(windows))]

@@ -574,7 +574,7 @@ md-icon-button > md-icon {
   flex-shrink: 0;
 }
 .memory-total-value {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
   line-height: 1;
   letter-spacing: -.02em;
