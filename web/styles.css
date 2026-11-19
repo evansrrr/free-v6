@@ -375,6 +375,15 @@ md-icon-button > md-icon {
 
 /* ── View Transitions ── */
 
+/* 三个视图叠放在同一网格单元：切换时旧视图仍占位 160ms，若按文档流
+   排布，新视图会先被挤到下方、等旧视图隐藏后再跳回顶部（视觉瞬移）。
+   叠放后两者互不推挤，进场动画始终从自己的起始位置播放。 */
+.view-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.view-stack > .view { grid-area: 1 / 1; }
+
 .view {
   display: none;
   animation: view-enter 250ms var(--ease-decelerate) both;

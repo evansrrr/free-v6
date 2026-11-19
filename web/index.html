@@ -85,6 +85,10 @@
         </div>
       </header>
 
+      <!-- 视图叠放层：三个视图占同一网格单元，切换时互不推挤，
+           进场动画不会因为旧视图突然消失而位移 -->
+      <div class="view-stack">
+
       <!-- Dashboard -->
       <section class="view active" id="dashboardView">
 
@@ -622,6 +626,8 @@
           </div>
         </div>
       </section>
+
+      </div><!-- /view-stack -->
 
     </main>
 
