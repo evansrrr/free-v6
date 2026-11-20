@@ -118,7 +118,7 @@
           </div>
         </div>
 
-        <!-- 两张信息卡并排：流量统计 + 公告（等宽 236px、等高对齐） -->
+        <!-- 三张信息卡并排（等宽 236px、等高对齐） -->
         <div class="dashboard-pair">
 
           <div class="card card-stats" id="statsCard" role="button" tabindex="0"
@@ -187,40 +187,8 @@
             </div>
           </div>
 
-          <!-- 公告卡：与流量统计卡同尺寸并排，点击展开详情；内容来自 helper
-               /api/v1/notice（仓库 notice.json），启动时检查一次 -->
-          <div class="card card-notice" id="noticeCard" role="button" tabindex="0"
-               aria-haspopup="dialog" aria-expanded="false" aria-controls="noticeHint"
-               aria-label="公告，点击查看详情">
-            <div class="card-header">
-              <div class="card-header-icon">
-                <md-icon>info</md-icon>
-              </div>
-              <div class="card-header-text">
-                <h3>公告</h3>
-              </div>
-              <span class="notice-dot" id="noticeDot" hidden aria-label="有未读公告"></span>
-              <md-icon class="stats-expand" aria-hidden="true">expand_more</md-icon>
-            </div>
-            <div class="notice-preview">
-              <p class="notice-preview-title" id="noticePreviewTitle">暂无公告</p>
-              <span class="notice-preview-time" id="noticePreviewTime"></span>
-            </div>
-
-            <div class="traffic-hint notice-hint" id="noticeHint" role="dialog" aria-label="公告详情" hidden>
-              <div class="notice-hint-head">
-                <span class="notice-hint-title" id="noticeHintTitle">--</span>
-                <span class="notice-hint-time" id="noticeHintTime"></span>
-              </div>
-              <div class="notice-hint-body" id="noticeHintBody"></div>
-              <md-text-button class="notice-hint-link" id="noticeHintLink" hidden>查看详情</md-text-button>
-              <div class="notice-hint-history" id="noticeHintHistory" hidden></div>
-            </div>
-          </div>
-
-          <!-- 性能卡：与公告卡同尺寸并排，纯展示（不可点击、无展开箭头）。
-               数据来自 Rust get_memory_usage：应用 = 主进程 + WebView2 子进程，
-               内核 = state/mihomo.pid 指向的 mihomo 进程，指标为 Working Set。 -->
+          <!-- 性能卡：数据来自 Rust get_memory_usage：应用 = 主进程 + WebView2 子进程，
+               内核 = state/mihomo.pid 指向的 mihomo 进程，指标为 Working Set -->
           <div class="card card-memory" id="memoryCard">
             <div class="card-header">
               <div class="card-header-icon">
@@ -253,6 +221,36 @@
                   <b class="memory-legend-value"><span id="memKernel">--</span><span class="memory-legend-unit">MB</span></b>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- 公告卡：内容来自 helper /api/v1/notice（仓库 notice.json），启动时检查一次 -->
+          <div class="card card-notice" id="noticeCard" role="button" tabindex="0"
+               aria-haspopup="dialog" aria-expanded="false" aria-controls="noticeHint"
+               aria-label="公告，点击查看详情">
+            <div class="card-header">
+              <div class="card-header-icon">
+                <md-icon>info</md-icon>
+              </div>
+              <div class="card-header-text">
+                <h3>公告</h3>
+              </div>
+              <span class="notice-dot" id="noticeDot" hidden aria-label="有未读公告"></span>
+              <md-icon class="stats-expand" aria-hidden="true">expand_more</md-icon>
+            </div>
+            <div class="notice-preview">
+              <p class="notice-preview-title" id="noticePreviewTitle">暂无公告</p>
+              <span class="notice-preview-time" id="noticePreviewTime"></span>
+            </div>
+
+            <div class="traffic-hint notice-hint" id="noticeHint" role="dialog" aria-label="公告详情" hidden>
+              <div class="notice-hint-head">
+                <span class="notice-hint-title" id="noticeHintTitle">--</span>
+                <span class="notice-hint-time" id="noticeHintTime"></span>
+              </div>
+              <div class="notice-hint-body" id="noticeHintBody"></div>
+              <md-text-button class="notice-hint-link" id="noticeHintLink" hidden>查看详情</md-text-button>
+              <div class="notice-hint-history" id="noticeHintHistory" hidden></div>
             </div>
           </div>
 
@@ -370,7 +368,6 @@
               </div>
               <div class="setting-text">
                 <div class="setting-label">自动运行免流</div>
-                <div class="setting-desc">应用打开时自动尝试启动免流模式</div>
               </div>
               <button class="glass-switch" id="autoRunSwitch" role="switch" aria-checked="false" aria-label="自动运行免流"><span class="gs-handle"></span></button>
             </div>
@@ -403,7 +400,6 @@
               </div>
               <div class="setting-text">
                 <div class="setting-label">重置设置</div>
-                <div class="setting-desc">恢复全部设置到默认值</div>
               </div>
               <md-icon class="setting-arrow">chevron_right</md-icon>
             </div>
