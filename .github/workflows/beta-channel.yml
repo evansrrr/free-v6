@@ -8,24 +8,36 @@ name: beta channel
 #
 # Runs on publish, not on the draft the build step creates: a release stops
 # being a draft only when a human clicks "publish", and that is the moment the
-# pointer should move.
+# pointer should move. Also dispatchable by hand so a failed sync (or a beta
+# published before this workflow existed) can be repaired without publishing
+# anything new.
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要镜像的测试版 tag（例如 v0.5.6-beta.2）"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   sync:
-    if: github.event.release.prerelease
+    # 手动手发时不看 prerelease 标记：调用方已经明确指定了 tag。
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease
     runs-on: ubuntu-latest
     steps:
       - name: Point beta-channel at the new prerelease
         env:
+          # gh 需要仓库上下文：这个 job 没有 checkout（不下载整个仓库），
+          # 所以显式给 GH_REPO，否则 gh 会去跑 git 并报 "not a git repository"。
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           set -euo pipefail
           mkdir -p out
