@@ -8,13 +8,15 @@
 <br />
 
 <a href="https://github.com/evansrrr/free-v6/stargazers">
-<img alt="Stargazers" src="https://img.shields.io/github/stars/evansrrr/free-v6?style=for-the-badge&logo=github&color=f4dbd6&logoColor=D9E0EE&labelColor=302D41"></a>
+<img alt="Stargazers" src="https://img.shields.io/github/stars/evansrrr/free-v6?style=for-the-badge&logo=github&color=f9e2af&logoColor=D9E0EE&labelColor=302D41" /></a>
 <a href="https://github.com/evansrrr/free-v6/releases/latest">
-<img alt="Releases" src="https://img.shields.io/github/release/evansrrr/free-v6.svg?style=for-the-badge&logo=semantic-release&color=f5bde6&logoColor=D9E0EE&labelColor=302D41"/></a>
+<img alt="Releases" src="https://img.shields.io/github/release/evansrrr/free-v6.svg?style=for-the-badge&logo=semantic-release&color=cba6f7&logoColor=D9E0EE&labelColor=302D41" /></a>
+<a href="https://github.com/evansrrr/free-v6/releases">
+<img alt="Downloads" src="https://img.shields.io/github/downloads/evansrrr/free-v6/total?style=for-the-badge&logo=github&color=a6e3a1&logoColor=D9E0EE&labelColor=302D41" /></a>
 <a href="https://github.com/evansrrr/free-v6/blob/main/LICENSE">
-<img alt="License" src="https://img.shields.io/github/license/evansrrr/free-v6?style=for-the-badge&logo=conventionalcommits&color=ee99a0&logoColor=D9E0EE&labelColor=302D41"></a>
+<img alt="License" src="https://img.shields.io/github/license/evansrrr/free-v6?style=for-the-badge&logo=opensourceinitiative&color=94e2d5&logoColor=D9E0EE&labelColor=302D41" /></a>
 <a href="https://github.com/evansrrr/free-v6/issues">
-<img alt="Issues" src="https://img.shields.io/github/issues/evansrrr/free-v6?style=for-the-badge&color=a6da95"></a>
+<img alt="Issues" src="https://img.shields.io/github/issues/evansrrr/free-v6?style=for-the-badge&logo=github&color=eba0ac&logoColor=D9E0EE&labelColor=302D41" /></a>
 </div>
 
 <br />
@@ -27,20 +29,31 @@
 >
 > 详细功能及使用说明请访问 [FreeV6 官网](https://freev6.cc.cd)
 
-支持以下桌面平台：
+### 运行系统
 
 - Windows 11 x64
-- Windows 10 x64 部分支持
+- Windows 10 x64 部分支持（需安装Webview2）
 
-macOS 与 Android 设备可以使用 [Flux6](https://github.com/study-233/flux6) (@study-233)
+macOS 与 Android 设备可以使用 [Flux6](https://github.com/study-233/flux6) ([@study-233](https://github.com/study-233))
 
-由于软件未签名，下载或首次运行如被拦截可选择 “更多信息” -> “仍要继续”
+**由于软件未签名，下载或首次运行如被拦截可选择 “更多信息” -> “仍要继续”**
 
-首次运行需要下载核心（~14MB），点击**启动免流**并按照提示点击**下载**，程序会自动完成下载安装
+### 功能特色
 
-启动免流后可在**接入点**页进行延迟测试，更换延迟较低的接入点
-
-**设置**页包含其他功能，例如“绕过校园网/白名单”、“共享移动热点”、“开机自启”等等
+- 无需注册账户，无需手动配置，一键启动免流
+- 自动测试延迟，28个接入点可选，根据实际情况随时调整线路
+- 上下行流量的实时视图，本月及累计流量统计数据
+- 应用及内核内存占用实时数据，了解性能开销
+- 设置白名单网段和域名，开着免流也能访问校内资源
+- 向连接 Windows 热点的设备共享免流，手机等设备无需配置，即连即用
+- 支持启用链式代理，可导入自有订阅配置
+- 开机自启、静默启动、自动运行、快捷键等多种功能设置
+- GUI 图形化客户端，Material 3 及多种材质配色可选，具有简洁美观的 UI/UX
+- f6-core 核心，专为 FreeV6 定制的精简版内核，以更小的体积实现出色的性能
+- 软件内自动检查更新，一键自动下载安装更新，独立测试版更新通道
+- 公告板展示最新公告消息，同步重要信息和通知，无主动打扰
+- 隐私安全，不收集任何个人信息，所有流量均加密交由 Cloudflare 处理
+- 开源无广告，采用 MIT 授权，你可以随意修改发行，但需遵守第三方库许可
 
 bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issues)，再点点 **star** 喵
 
@@ -70,3 +83,13 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 **鸣谢**：
 
 `仍需妙手` `别说了，困` `星汉灿烂` `匿名`
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=evansrrr%2Ffree-v6&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=evansrrr/free-v6&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=evansrrr/free-v6&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=evansrrr/free-v6&type=date&legend=top-left" />
+ </picture>
+</a>
