@@ -167,6 +167,13 @@ fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, Stri
     // the last line of defence for the desktop exe.
     stop_helper(&app);
     wait_helper_terminated(Duration::from_secs(5));
+    // A mixed build left behind by an earlier failed update still runs a helper
+    // this shell never spawned, so stop_helper cannot reach it: it sits on
+    // :13335 holding freev6-helper.exe open, NSIS's File copy fails again and
+    // the update "succeeds" without repairing anything. Exactly one app
+    // instance can exist (single-instance mutex) and it just stopped its own
+    // helper, so anything left with that image name is a stray.
+    kill_stray_helpers();
 
     std::process::Command::new(&installer)
         .args(["/S", "/FREEV6REL"])
@@ -658,6 +665,20 @@ fn warn_already_running() {
             MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
         );
     }
+}
+
+// Kill every remaining freev6-helper.exe by image name. Used right before the
+// silent installer runs, when any live helper is by definition a leftover that
+// would block the file replacement. Errors are ignored: if the process is gone
+// taskkill reports "not found", which is the outcome we want anyway.
+fn kill_stray_helpers() {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/IM", "freev6-helper.exe"])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 fn main() {
