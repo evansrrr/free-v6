@@ -1,17 +1,32 @@
 # Changelog
 
 <!--
-发布流程（.github/workflows/release.yml）
-1. 递增 tauri.conf.json 与 Cargo.toml 的版本号
-2. 对应版本号新建 `## [x.y.z] - YYYY-MM-DD` 小节
-3. tag 并推送：
-     git tag vX.Y.Z
-     git push origin vX.Y.Z
-   （带 -beta / -alpha 后缀的 tag 会自动标记为 Pre-release）
-工作流按 tag 提取对应小节作为 Release 描述：
-先匹配完整版本（如 0.3.0-beta.1），再匹配基础版本（0.3.0）
-两者都没有会构建失败
-Release 先建为草稿，需要手动发布
+发布流程（.github/workflows/release.yml + beta-channel.yml）
+
+版本号写法（测试版以 v0.5.6-beta.2 为例）：
+
+| 位置 | 正式版 v0.5.7 | 测试版 v0.5.6-beta.2 |
+|---|---|---|
+| git tag | `v0.5.7` | `v0.5.6-beta.2` |
+| src-tauri/tauri.conf.json `version` | `0.5.7` | `0.5.6`（只写基础版本） |
+| src-tauri/Cargo.toml `version` | `0.5.7` | `0.5.6`（只写基础版本） |
+| web/index.html `#versionValue` | `FreeV6 v0.5.7` | `FreeV6 v0.5.6-beta.2`（写全） |
+| CHANGELOG 小节 | `## [0.5.7] - 日期` | `## [0.5.6-beta.2] - 日期` |
+
+tag 与 tauri/Cargo 的对应关系由工作流的守卫检查：tag 去掉 `-xxx` 后的基础
+版本必须等于这两处的 version，不一致直接失败。CHANGELOG 先匹配完整版本
+（`0.5.6-beta.2`），再回退到基础版本（`0.5.6`），两者都没有会构建失败。
+
+发布步骤：
+1. 改上面四处版本号 + 补 CHANGELOG 小节
+2. tag 并推送（带 -beta / -alpha 的 tag 会自动标记为 Pre-release）
+3. 工作流建草稿 → 手动点发布
+4. 预发布发布后，beta-channel 工作流会把它的 version.json 复制到滚动指针
+   发布 `beta-channel`，测试版客户端从那里发现新测试版
+
+通道规则：正式版客户端只认正式版；测试版客户端同时看正式版和 beta 通道，
+取较新者。正式版构建里 `releases/latest` 本来就不含预发布，前端还会再过滤
+一次。指向测试版的内核（core.json 的 minApp/maxApp）同样按这条规则生效。
 -->
 ## [0.5.6-beta.2] - 2026-11-20
 
