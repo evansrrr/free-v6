@@ -72,7 +72,7 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 
 本项目采用 [MIT](LICENSE) 许可，第三方组件许可见 [THIRD-PARTY.txt](THIRD-PARTY.txt) 与 [LICENSES/](LICENSES/)
 
-## 赞赏
+## 赞助
 
 感谢支持！请我杯喝的QwQ
 
@@ -80,9 +80,13 @@ bug、问题和建议欢迎提 [issue](https://github.com/evansrrr/free-v6/issue
 
 <br />
 
-**鸣谢**：
+**鸣谢：**
 
 `仍需妙手` `别说了，困` `星汉灿烂` `匿名`
+
+**BKNetwork赞助者：**
+
+`Hikio` `匿名` `清风` `匿名` `SanchoTian` `Gordon` `·` `Debuci` `听枫`
 
 ## Star History
 
