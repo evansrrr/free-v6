@@ -79,7 +79,10 @@ const state = {
 
 // Helper API base. The port is reserved per launch by the desktop shell
 // (get_helper_port) so no leftover process can keep it pinned; the historical
-// 13335 is only the fallback for a browser preview or an older shell.
+// 13335 is the fallback for a browser preview, an older shell, or — crucially —
+// a mixed build left by a failed in-place update (new shell/UI but an old
+// helper still on 13335). The shell passes the same per-launch token to
+// whichever helper it spawns, so retrying on 13335 stays authenticated.
 const DEFAULT_API_BASE = 'http://127.0.0.1:13335/api/v1';
 let apiBase = null;
 
@@ -158,8 +161,8 @@ async function loadApiToken() {
 async function api(path, options = {}) {
   if (apiToken === null) apiToken = await loadApiToken();
   if (apiBase === null) apiBase = (await loadApiBase()) || DEFAULT_API_BASE;
-  const doFetch = (token) =>
-    fetch(`${apiBase}${path}`, {
+  const doFetch = (base, token) =>
+    fetch(`${base}${path}`, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -167,14 +170,35 @@ async function api(path, options = {}) {
         ...(options.headers || {}),
       },
     });
-  let response = await doFetch(apiToken);
+  let response;
+  try {
+    response = await doFetch(apiBase, apiToken);
+  } catch (err) {
+    // A dead reserved port means either a not-yet-up helper or a mixed build:
+    // the shell dials a random port but the un-replaced old helper still sits
+    // on 13335. Retry once on the legacy port and remember it for this session
+    // so every later request (status polling, start/stop) reaches the helper.
+    // Both helpers read FREEV6_API_TOKEN from the shell, so the token still
+    // matches — no need to reload it here.
+    const legacy = DEFAULT_API_BASE;
+    if (apiBase !== legacy) {
+      try {
+        response = await doFetch(legacy, apiToken);
+        apiBase = legacy;
+      } catch (_) {
+        throw err; // original error: the reserved port is the expected one
+      }
+    } else {
+      throw err;
+    }
+  }
   // 401 → the token may be stale (shell reloaded) or was never fetched
   // (invoke raced startup): re-load once and retry once, never loop.
   if (response.status === 401) {
     const fresh = await loadApiToken();
     if (fresh && fresh !== apiToken) {
       apiToken = fresh;
-      response = await doFetch(apiToken);
+      response = await doFetch(apiBase, apiToken);
     }
   }
   const payload = await response.json();

@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Mutex,
 };
+use std::time::{Duration, Instant};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -31,6 +32,14 @@ struct HelperPort(u16);
 // Set when the app is exiting for real (tray 退出 → app.exit). Close requests
 // arriving during teardown must not be swallowed by the close-to-tray handler.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+
+// Set true when the helper process has actually exited (the Terminated event
+// landed). update_apply waits on this before letting NSIS overwrite files: the
+// child.kill() signal is asynchronous, so without the wait the old helper can
+// still hold freev6-helper.exe open while NSIS reaches its File copy. On
+// Windows a running exe cannot be overwritten; the copy fails and the update
+// leaves a mixed build (new shell/web + old fixed-port helper) -> "helper 连不上".
+static HELPER_TERMINATED: AtomicBool = AtomicBool::new(false);
 
 // Custom window controls for the frameless (decorations: false) window.
 // Invoked from the web UI through __TAURI_INTERNALS__.invoke.
@@ -133,13 +142,18 @@ fn reserve_helper_port() -> u16 {
         .unwrap_or(0)
 }
 
-// In-app update: spawn the downloaded NSIS package detached (/S = silent,
-// /FREEV6REL = our POSTINSTALL hook relaunched the new build with the token
-// this elevated process passes on — no UAC, single instance), then kill the
-// helper so freev6-helper.exe is unlocked long before NSIS reaches its File
-// copies, then exit (the desktop exe lock drops within ms; the stock silent
-// check force-kills it as a last resort). Spawn happens first: if it fails
-// the app and its helper stay alive so the UI can show the error.
+// In-app update: stop the helper and wait until it has REALLY exited, then
+// spawn the NSIS package detached (/S = silent, /FREEV6REL = our POSTINSTALL
+// hook relaunched the new build), then exit.
+//
+// The wait is the whole point. `child.kill()` only signals termination; if
+// NSIS reaches its `File /a /oname=freev6-helper.exe` copy while the old helper
+// still holds the image mapped, Windows refuses to overwrite the exe, the copy
+// fails, and the user is left with a MIXED build: 0.5.4 shell + web UI (which
+// dial a reserved random port) but a 0.5.2 helper still pinned to :13335.
+// Restarting can't fix that — only a clean reinstall could — which matches the
+// field report. Waiting for the Exit event guarantees the file is unlocked
+// before NSIS copies, so every component is replaced in the same run.
 #[tauri::command]
 fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
@@ -147,15 +161,30 @@ fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, Stri
     if !std::path::Path::new(&installer).is_file() {
         return Err(format!("安装包不存在: {installer}"));
     }
+    // Stop first and reap the child before touching the filesystem. If the
+    // helper ignores the kill (defender hook, stuck syscall), don't hang the
+    // UI forever — a bounded wait then proceeds; NSIS's own process guard is
+    // the last line of defence for the desktop exe.
+    stop_helper(&app);
+    wait_helper_terminated(Duration::from_secs(5));
+
     std::process::Command::new(&installer)
         .args(["/S", "/FREEV6REL"])
         // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — installer survives us
         .creation_flags(0x0000_0008 | 0x0000_0200)
         .spawn()
         .map_err(|e| format!("启动安装器失败: {e}"))?;
-    stop_helper(&app);
     app.exit(0);
     Ok("ok".into())
+}
+
+// Poll the flag set by the helper's event loop on CommandEvent::Terminated.
+// Bounded by `timeout` so a stuck child can never block an update forever.
+fn wait_helper_terminated(timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while !HELPER_TERMINATED.load(Ordering::Acquire) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 // Show (or restore) the main GUI window — shared by the tray menu item and
@@ -825,6 +854,7 @@ fn start_helper(
     if helper_port > 0 {
         command = command.env("FREEV6_API_PORT", helper_port.to_string());
     }
+    HELPER_TERMINATED.store(false, Ordering::Release);
     let (mut events, child) = command.spawn()?;
     let stopping = Arc::new(AtomicBool::new(false));
     app.manage(HelperState {
@@ -849,6 +879,9 @@ fn start_helper(
                     }
                 }
                 CommandEvent::Terminated(status) => {
+                    // Publish the real exit before any dialog: update_apply
+                    // waits on this to know freev6-helper.exe is unlocked.
+                    HELPER_TERMINATED.store(true, Ordering::Release);
                     eprintln!("freev6-helper exited: {status:?}");
                     if !stopping.load(Ordering::Acquire) {
                         // 非主动停止：helper 自己退出了。端口被占、被 WFP/杀软
@@ -926,6 +959,29 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(first, second, "consecutive tokens must differ");
+    }
+
+    // update_apply must not hang when the helper never confirms termination,
+    // and must return promptly once it does. Guards the bounded-wait contract
+    // that keeps NSIS from copying over a still-running freev6-helper.exe.
+    #[test]
+    fn wait_helper_terminated_is_bounded_and_reacts_to_flag() {
+        HELPER_TERMINATED.store(false, Ordering::Release);
+        let start = Instant::now();
+        wait_helper_terminated(Duration::from_millis(60));
+        assert!(
+            start.elapsed() < Duration::from_millis(300),
+            "wait must respect its timeout"
+        );
+
+        HELPER_TERMINATED.store(true, Ordering::Release);
+        let start = Instant::now();
+        wait_helper_terminated(Duration::from_secs(2));
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "wait must return as soon as the flag is set"
+        );
+        HELPER_TERMINATED.store(false, Ordering::Release);
     }
 
     // End-to-end over the real Win32 thread: enable → register, WM_HOTKEY →
