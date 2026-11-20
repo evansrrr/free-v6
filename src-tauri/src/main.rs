@@ -712,6 +712,12 @@ fn main() {
             // 绑定失败（见 claim_single_instance / listenOrTakeOver）。
             let helper_port = reserve_helper_port();
             app.manage(HelperPort(helper_port));
+            // 启动前先清掉上一条命留下的 helper：单实例互斥成立时，任何还在
+            // 跑的 freev6-helper.exe 都是孤儿。混合构建（新壳 + 旧 helper）
+            // 正卡在这里——旧 helper 占着 :13335 且用的是上一任壳的 token，
+            // 新壳连不上它，UI 直接显示"组件异常"，用户连更新按钮都点不到。
+            // 杀掉之后本次会拉起与当前版本配套的 helper，无需重装即可自愈。
+            kill_stray_helpers();
             // Spawn 失败（helper 被杀软隔离/删除）→ 弹窗告知用户并退出。
             // 不能 `?`：那会一路传播成 panic（release panic=abort，用户只
             // 看到"打不开"）。return Ok(()) 跳过后续热键/托盘初始化。
