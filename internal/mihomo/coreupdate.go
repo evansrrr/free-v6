@@ -70,6 +70,7 @@ type CoreManifest struct {
 	Version   string               `json:"version"`
 	Channel   string               `json:"channel"`
 	MinApp    string               `json:"minApp"`
+	MaxApp    string               `json:"maxApp"`
 	Notes     string               `json:"notes"`
 	Platforms map[string]CoreAsset `json:"platforms"`
 
@@ -214,9 +215,11 @@ type UpdateCheck struct {
 	Latest    string
 	Available bool
 	Notes     string
-	// MinApp 是这版内核要求的最低客户端版本：内核可能砍掉某个协议/字段，
-	// 老客户端渲染出来的配置它不认，必须先升级客户端。
+	// MinApp / MaxApp 是这版内核兼容的客户端区间：内核可能要求更新的客户端
+	// （砍了协议、换了 TUN 栈），也可能只验证到某个客户端版本为止。区间外
+	// 一律不提示更新——装上就是"能启动但没网"。
 	MinApp     string
+	MaxApp     string
 	FetchedAt  time.Time
 	DownloadMB int64
 	// Legacy 表示当前可用内核是老版本遗留的上游 mihomo（尚未换成 f6-core）。
@@ -239,6 +242,7 @@ func CheckCoreUpdate(root string, force bool) (UpdateCheck, error) {
 	check.Latest = manifest.Version
 	check.Notes = manifest.Notes
 	check.MinApp = manifest.MinApp
+	check.MaxApp = manifest.MaxApp
 	check.FetchedAt = manifest.FetchedAt
 	if asset, ok := manifest.Asset(); ok && asset.Size > 0 {
 		check.DownloadMB = asset.Size >> 20

@@ -968,17 +968,44 @@ function proxiedGitHub(url) {
 }
 
 // Version source: the 关于 row (kept in sync with tauri.conf.json / Cargo.toml
-// by the release workflow's tag-version guard).
+// by the release workflow's tag-version guard). The prerelease suffix matters:
+// beta.1 and beta.2 share the numeric part, so dropping "-beta.N" would make
+// the updater treat them as the same build and never offer the newer one.
 function currentAppVersion() {
-  const m = /v(\d+\.\d+\.\d+)/.exec($('#versionValue')?.textContent || '');
+  const m = /v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/.exec($('#versionValue')?.textContent || '');
   return m ? m[1] : '';
 }
 
+function splitVersion(value) {
+  const [core, ...pre] = String(value || '').split('-');
+  const parts = core.split('.').map((n) => parseInt(n, 10) || 0);
+  return [parts, pre.join('-')];
+}
+
+// semver 顺序：数字段优先；无预发布 > 有预发布；预发布按段比（数字段按数值，
+// 其余按字典序）。beta.1 < beta.2 < 0.5.6。
 function cmpVersion(a, b) {
-  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  const [pa, preA] = splitVersion(a);
+  const [pb, preB] = splitVersion(b);
   for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+    const delta = (pa[i] || 0) - (pb[i] || 0);
+    if (delta !== 0) return delta;
+  }
+  if (preA === preB) return 0;
+  if (!preA) return 1;
+  if (!preB) return -1;
+  const sa = preA.split('.');
+  const sb = preB.split('.');
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    if (sa[i] === undefined) return -1;
+    if (sb[i] === undefined) return 1;
+    if (sa[i] === sb[i]) continue;
+    const na = parseInt(sa[i], 10);
+    const nb = parseInt(sb[i], 10);
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+    if (!Number.isNaN(na)) return -1;
+    if (!Number.isNaN(nb)) return 1;
+    return sa[i] < sb[i] ? -1 : 1;
   }
   return 0;
 }
@@ -1726,6 +1753,7 @@ async function checkCoreUpdate(force = true) {
         downloadMB: res.downloadMB || 0,
         legacy: Boolean(res.legacy),
         minApp: res.minApp || '',
+        maxApp: res.maxApp || '',
       }
       : null;
   } catch (_) {
@@ -2658,13 +2686,17 @@ function updateSettingsUI() {
   const checked = state.helperOnline && state.runtimeChecked;
   const update = state.coreUpdate;
   const hasUpdate = Boolean(update);
-  // 内核可能要求更高的客户端版本（例如它砍掉了老客户端仍在用的协议），
-  // 这种情况不给「更新」按钮，避免装上之后连不上。
-  const blockedByApp = Boolean(update?.minApp)
-    && cmpVersion(currentAppVersion() || '0.0.0', update.minApp) < 0;
+  // 内核和客户端是成对发布的：内核可能要求更新的客户端（砍了协议、换了 TUN
+  // 栈），也可能只验证到某个客户端版本为止。落在区间外都不提示更新。
+  const appVersion = currentAppVersion() || '0.0.0';
+  const tooOld = Boolean(update?.minApp) && cmpVersion(appVersion, update.minApp) < 0;
+  const tooNew = Boolean(update?.maxApp) && cmpVersion(appVersion, update.maxApp) > 0;
+  const blockedByApp = Boolean(update) && (tooOld || tooNew);
   if (blockedByApp && !state.coreUpdateBlockedLogged) {
     state.coreUpdateBlockedLogged = true;
-    addLog(`新内核需要 FreeV6 ${update.minApp} 或更高版本，请先更新软件`);
+    addLog(tooOld
+      ? `新内核需要 FreeV6 ${update.minApp} 或更高版本，请先更新软件`
+      : `这版内核只验证到 FreeV6 ${update.maxApp}，请更新客户端后再安装`, true);
   }
   if (pill) {
     if (checked && !state.runtimePresent) {

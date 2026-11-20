@@ -280,6 +280,7 @@ func (h *helper) runtimeCheck(writer http.ResponseWriter, request *http.Request)
 		"legacy":     check.Legacy,
 		"notes":      check.Notes,
 		"minApp":     check.MinApp,
+		"maxApp":     check.MaxApp,
 		"downloadMB": check.DownloadMB,
 		"error":      errorText(err),
 	})
