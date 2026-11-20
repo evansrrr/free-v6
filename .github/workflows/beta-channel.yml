@@ -28,7 +28,7 @@ permissions:
 jobs:
   sync:
     # 手动手发时不看 prerelease 标记：调用方已经明确指定了 tag。
-    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease
+    if: github.event_name == 'workflow_dispatch' || (github.event.release && github.event.release.prerelease)
     runs-on: ubuntu-latest
     steps:
       - name: Point beta-channel at the new prerelease
