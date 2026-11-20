@@ -335,9 +335,24 @@ var updateLatestURLs = func() []string {
 	return append(urls, direct)
 }
 
-// stableVersionPattern accepts a plain x.y.z base (any suffix allowed for
-// forward compatibility; /releases/latest never returns prereleases anyway).
-var stableVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+`)
+// updateBetaLatestURLs points at the rolling "beta-channel" release: a
+// permanent prerelease whose version.json asset is replaced on every beta
+// publish. GitHub's /releases/latest ignores prereleases, so this is the only
+// API-free way for a beta client to discover a newer beta -- the API itself is
+// 403 through the mirrors and rate-limited anyway.
+var updateBetaLatestURLs = func() []string {
+	direct := fmt.Sprintf("https://github.com/%s/releases/download/beta-channel/version.json", updateRepoSlug)
+	urls := make([]string, 0, len(updateMirrorPrefixes)+1)
+	for _, prefix := range updateMirrorPrefixes {
+		urls = append(urls, prefix+direct)
+	}
+	return append(urls, direct)
+}
+
+// stableVersionPattern accepts a plain x.y.z base and an optional prerelease
+// suffix: the channel decision (beta builds may see betas, stable builds may
+// not) is made by the client, which knows which side of the fence it is on.
+var stableVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
 
 type latestVersionInfo struct {
 	Version  string `json:"version"`
@@ -383,6 +398,29 @@ func fetchVersionJSON(client *http.Client, rawURL string, allowed []string) ([]b
 	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
+// fetchLatestManifest walks one mirror chain and returns the first manifest it
+// can parse. nil + error means "this channel is unreachable"; the caller
+// decides what that means for the other channel.
+func fetchLatestManifest(client *http.Client, urls []string) (*latestVersionInfo, error) {
+	var lastErr error
+	for _, rawURL := range urls {
+		// Cache-bust so the mirror's edge cache can't pin an old "latest".
+		u := rawURL + "?ts=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		body, err := fetchVersionJSON(client, u, updateAllowedHosts)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		info, err := parseVersionJSON(body)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return info, nil
+	}
+	return nil, lastErr
+}
+
 // updateLatest answers the frontend update check:
 //
 //	{ok:true, update:true, version, tag, notes, sha256, download} or
@@ -394,30 +432,26 @@ func (h *helper) updateLatest(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	var info *latestVersionInfo
-	var lastErr error
-	for _, rawURL := range updateLatestURLs() {
-		// Cache-bust so the mirror's edge cache can't pin an old "latest".
-		u := rawURL + "?ts=" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		body, err := fetchVersionJSON(client, u, updateAllowedHosts)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		info, err = parseVersionJSON(body)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		break
+	info, stableErr := fetchLatestManifest(client, updateLatestURLs())
+	// 测试版客户端要多查一路：stable 通道永远看不到预发布，beta-channel 是唯一
+	// 入口。两路都返回，由前端按"自己是哪个通道"挑（Go 侧不做版本比较）。
+	var betaInfo *latestVersionInfo
+	var betaErr error
+	if request.URL.Query().Get("channel") == "beta" {
+		betaInfo, betaErr = fetchLatestManifest(client, updateBetaLatestURLs())
 	}
-	if info == nil {
+	if info == nil && betaInfo == nil {
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"ok": true, "update": false, "error": errorText(lastErr),
+			"ok": true, "update": false, "error": errorText(stableErr),
 		})
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	if info == nil {
+		// stable 拉不到（离线/镜像挂）但 beta 通道通了：仍然回一个空 stable，
+		// 让前端按 beta 判断，而不是整体判成"没有更新"。
+		info = &latestVersionInfo{}
+	}
+	payload := map[string]any{
 		"ok":       true,
 		"update":   true,
 		"version":  info.Version,
@@ -425,5 +459,19 @@ func (h *helper) updateLatest(writer http.ResponseWriter, request *http.Request)
 		"notes":    info.Notes,
 		"sha256":   info.SHA256,
 		"download": info.Download,
-	})
+	}
+	// beta 通道候选：只对测试版客户端返回，稳定版客户端连这次请求都不会发。
+	// 两路都给出去，由前端用完整的 semver 比较决定装哪个。
+	if betaInfo != nil {
+		payload["beta"] = map[string]any{
+			"version":  betaInfo.Version,
+			"tag":      betaInfo.Tag,
+			"notes":    betaInfo.Notes,
+			"sha256":   betaInfo.SHA256,
+			"download": betaInfo.Download,
+		}
+	} else if betaErr != nil {
+		payload["betaError"] = betaErr.Error()
+	}
+	writeJSON(writer, http.StatusOK, payload)
 }

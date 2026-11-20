@@ -1023,31 +1023,47 @@ function renderUpdateBadge() {
   }
 }
 
-// 版本信息来自 release 里的 version.json（稳定地址 releases/latest/download，
-// 只命中正式版），由 helper 代理获取——完全绕开 api.github.com（共享配额会
-// 间歇403），且 helper 侧无 CORS 问题。所有失败静默：离线、私有仓库(404)、
-// 代理/直连都不可用都不阻塞启动。
+// 当前构建是不是测试版：版本串里带 -beta/-alpha 即视为测试通道。
+function isPreviewBuild() {
+  return /-(beta|alpha)/i.test(currentAppVersion());
+}
+
+// 版本信息来自 release 里的 version.json，由 helper 代理获取——完全绕开
+// api.github.com（共享配额会间歇403，镜像也不给代理），且 helper 侧无 CORS。
+//
+// 通道规则：正式版只看 stable（releases/latest 本来就不含预发布，这里再过滤
+// 一次是防御）；测试版额外拿一路 beta-channel，两路都参与比较，谁新用谁。
+// 所有失败静默：离线、私有仓库(404)、代理/直连都不可用都不阻塞启动。
 async function checkForUpdate(autoOpen = true) {
   try {
-    const res = await api('/update/latest');
+    const preview = isPreviewBuild();
+    const res = await api(`/update/latest${preview ? '?channel=beta' : ''}`);
     if (!res?.update) {
       state.updateInfo = null;
       renderUpdateBadge();
       return null;
     }
-    const remote = String(res.version || '').trim();
     const current = currentAppVersion();
-    if (!/^\d+\.\d+\.\d+/.test(remote) || !current || cmpVersion(remote, current) <= 0) {
+    const candidates = [];
+    if (res.version) candidates.push({ version: String(res.version).trim(), source: res });
+    if (preview && res.beta?.version) candidates.push({ version: String(res.beta.version).trim(), source: res.beta });
+    // 正式版构建永不采纳预发布：即使某天 latest 指到了 beta 也不升级。
+    const usable = candidates.filter((item) => preview || !/-/.test(item.version));
+    const best = usable.reduce((acc, item) => (
+      !acc || cmpVersion(item.version, acc.version) > 0 ? item : acc
+    ), null);
+    const remote = best ? best.version : '';
+    if (!best || !/^\d+\.\d+\.\d+/.test(remote) || !current || cmpVersion(remote, current) <= 0) {
       state.updateInfo = null;
       renderUpdateBadge();
       return null;
     }
     state.updateInfo = {
       version: remote,
-      url: res.download,
-      sha: /^[0-9a-f]{64}$/i.test(res.sha256 || '') ? res.sha256 : '',
-      notes: res.notes || '',
-      htmlUrl: `https://github.com/${UPDATE_OWNER_REPO}/releases/tag/${encodeURIComponent(res.tag || `v${remote}`)}`,
+      url: best.source.download,
+      sha: /^[0-9a-f]{64}$/i.test(best.source.sha256 || '') ? best.source.sha256 : '',
+      notes: best.source.notes || '',
+      htmlUrl: `https://github.com/${UPDATE_OWNER_REPO}/releases/tag/${encodeURIComponent(best.source.tag || `v${remote}`)}`,
     };
     renderUpdateBadge();
     if (autoOpen && localStorage.getItem(SKIP_VERSION_KEY) !== remote) openUpdateDialog();

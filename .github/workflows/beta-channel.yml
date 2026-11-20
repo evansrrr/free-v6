@@ -1,0 +1,42 @@
+name: beta channel
+
+# GitHub's releases/latest only ever points at a non-prerelease, so a beta
+# client has no API-free way to discover a newer beta. This workflow keeps a
+# rolling "beta-channel" release whose version.json asset always mirrors the
+# newest published prerelease; the client fetches it from the same asset URL
+# scheme as the stable one (and the gh-proxy mirrors handle it too).
+#
+# Runs on publish, not on the draft the build step creates: a release stops
+# being a draft only when a human clicks "publish", and that is the moment the
+# pointer should move.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point beta-channel at the new prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gh release download "$TAG" --pattern version.json --dir out --clobber
+          if gh release view beta-channel >/dev/null 2>&1; then
+            gh release upload beta-channel out/version.json --clobber
+          else
+            gh release create beta-channel \
+              --prerelease \
+              --title "beta-channel" \
+              --notes "滚动指针：每次发布测试版都会替换这里的 version.json。不要删除。" \
+              out/version.json
+          fi
+          echo "beta-channel -> $TAG"
