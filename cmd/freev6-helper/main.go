@@ -742,7 +742,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
-	healLeftoverSnapshot(snapshotPath)
+	leftover := healLeftoverSnapshot(snapshotPath, network.RestoreSnapshot)
+	if leftover.warning != "" {
+		fmt.Fprintf(os.Stderr, "helper: %s\n", leftover.warning)
+	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
 	// ICS 共享基线只在热点共享开启时需要：跳过它的 COM 枚举能省掉一次
 	// powershell.exe 冷启动（默认关闭热点共享时，启动免流只做一次 GetAdaptersAddresses
@@ -753,7 +756,19 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
+	// 基线：正常情况下就是刚抓到的这份。上次自愈没能还原成功时沿用旧基线 ——
+	// 把「还原失败的现状」重新抓成基线，等于让残留的切换状态从此变成正式
+	// 配置，那之后再没有干净基线可回。
+	baseline := snapshot
+	if leftover.preserved != nil {
+		baseline = *leftover.preserved
+		// 共享角色例外：本次会话按现状切换热点，停止时必须按本次现状还原，
+		// 旧基线里没有 ICS 信息时用这次的补上。
+		if len(baseline.Sharing) == 0 {
+			baseline.Sharing = snapshot.Sharing
+		}
+	}
+	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -824,26 +839,54 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	_ = h.saveSettings(mergeStartSettings(stored, input))
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
-	hotspotResult := applyHotspotShare(snapshot, snapshotPath, stored.HotspotShare)
-	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret, "core": core.Version})
+	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, stored.HotspotShare)
+	// 自愈结果随响应回给前端（过期快照跳过 / 上次基线还原失败）：都只影响
+	// 历史残留，本次免流照常，因此前端只记日志、不弹窗。
+	var networkNotice any
+	if leftover.warning != "" {
+		networkNotice = map[string]any{"warning": leftover.warning, "failed": leftover.failed}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret, "core": core.Version, "network": networkNotice})
+}
+
+// leftoverBaseline 是启动前自愈的结果。
+type leftoverBaseline struct {
+	// preserved 非 nil：上次会话的基线还在，且这次没能还原成功。它必须继续
+	// 当本次会话的基线，绝不能被「还原失败的现状」覆盖。
+	preserved *network.Snapshot
+	// warning 非空：需要告知用户的自愈结论（快照过期被跳过 / 还原失败）。
+	warning string
+	// failed 为真表示 warning 是一个失败（前端按错误样式记录）。
+	failed bool
 }
 
 // healLeftoverSnapshot 先按上次会话残留的快照还原，再让 startProxy 重新
 // 抓取基线——否则新基线会把“已切换状态”记成原状，停止时永远还原不回去。
 // 但任何读不出来的快照（0 字节/截断/被外部清空改坏、权限异常）都只告警不
 // 阻断：曾有线上问题是一个损坏的 network-snapshot.json 把启动和停止同时
-// 永久卡死。还原失败（外部改掉热点/共享配置时是永久性的）同样继续启动，
-// 残留文件保留，供瞬时失败下次重试或被新基线覆盖。
-func healLeftoverSnapshot(snapshotPath string) {
+// 永久卡死。
+//
+// 两种「不还原」的情况必须区分开：
+//   - 快照过期（> SnapshotMaxAge）：里面的 DNS/网关属于另一个网络，套上去
+//     就是一次人为解析故障，直接丢弃，让本次启动重新抓。
+//   - 还原失败：基线本身可能还是对的（外部改掉热点/共享配置导致的永久
+//     失败），必须原样留着 —— 交回给自己的调用方继续当基线。
+func healLeftoverSnapshot(snapshotPath string, restore func(context.Context, network.Snapshot) error) leftoverBaseline {
 	old, healErr := network.LoadSnapshot(snapshotPath)
 	switch {
 	case healErr == nil:
+		if old.StaleAt(time.Now()) {
+			_ = os.Remove(snapshotPath)
+			return leftoverBaseline{warning: fmt.Sprintf(
+				"上次会话的网络快照记录于 %s（已超过 %d 小时），未自动还原；若无法上网请重新连接一次网络",
+				old.CapturedAt.Local().Format("2006-01-02 15:04"), int(network.SnapshotMaxAge.Hours()))}
+		}
 		healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		err := network.RestoreSnapshot(healCtx, old)
+		err := restore(healCtx, old)
 		healCancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "helper: leftover network snapshot restore failed (continuing): %v\n", err)
-			return
+			return leftoverBaseline{preserved: &old, failed: true, warning: fmt.Sprintf(
+				"上次会话的网络基线还原失败（已保留该基线）：%v", err)}
 		}
 		_ = os.Remove(snapshotPath)
 	case errors.Is(healErr, network.ErrCorruptSnapshot):
@@ -853,13 +896,17 @@ func healLeftoverSnapshot(snapshotPath string) {
 	default:
 		fmt.Fprintf(os.Stderr, "helper: unreadable network snapshot (continuing): %v\n", healErr)
 	}
+	return leftoverBaseline{}
 }
 
 // applyHotspotShare 执行移动热点上游切换（ICS 拓扑方案）。开关关 → disabled；
 // 热点未运行 → not-running；切换失败 → 回滚基线并返回 failed。成功时把
 // Hotspot 元数据写回快照，供 /status 探测与停止免流时还原。任何失败都只
 // 体现在返回值里，不影响免流本身（非阻断决策）。
-func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled bool) map[string]any {
+//
+// snapshot 是本次会话刚抓的现状（判断/切换都用它）；baseline 是要落盘的
+// 基线，正常与 snapshot 相同，上次自愈失败时是保留下来的旧基线。
+func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, snapshotPath string, enabled bool) map[string]any {
 	if !enabled {
 		return map[string]any{"applied": false, "reason": "disabled"}
 	}
@@ -887,8 +934,8 @@ func applyHotspotShare(snapshot network.Snapshot, snapshotPath string, enabled b
 		}
 		return map[string]any{"applied": false, "reason": "failed", "error": switchErr.Error()}
 	}
-	snapshot.Hotspot = meta
-	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
+	baseline.Hotspot = meta
+	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		// 元数据落不了盘 → 停止时无法还原 → 也算失败并回滚。
 		if meta.Path == "winrt" {
 			_ = network.RestoreWinRT(switchCtx, meta.OriginalProfile)

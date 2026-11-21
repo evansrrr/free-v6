@@ -78,9 +78,9 @@ func LoadSnapshot(path string) (Snapshot, error) {
 // （set dnsservers 在前、add dnsservers 在后）有顺序依赖，但接口之间互不相干，
 // 可并行执行。停止免流时用它把串行的 netsh 还原并行化，缩短停止耗时。
 //
-// 只为「启动前有静态 DNS」的协议生成还原命令：mihomo 的 TUN + dns-hijack
-// 不改系统 DNS 配置，dhcp/无 DNS 的接口（虚拟网卡、Loopback、蓝牙等）没有
-// 还原点，跳过 —— 否则每个接口都跑一条 source=dhcp 的 netsh（几十条串行/
+// 只为「快照里有地址、且来源已判定」的协议生成还原命令：mihomo 的 TUN +
+// dns-hijack 不改系统 DNS 配置，dhcp/无 DNS 的接口（虚拟网卡、Loopback、
+// 蓝牙等）没有还原点，跳过 —— 否则每个接口都跑一条 netsh（几十条串行/
 // 并发 spawn），是停止免流「还要三秒」的主因。
 func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 	plans := make([][]RestoreCommand, 0, len(snapshot.Interfaces))
@@ -90,10 +90,12 @@ func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 		}
 		var commands []RestoreCommand
 		if len(interfaceSnapshot.IPv4DNSServers) > 0 {
-			commands = append(commands, buildDNSRestoreCommand("ipv4", interfaceSnapshot.Alias, interfaceSnapshot.IPv4DNSServers)...)
+			commands = append(commands, buildDNSRestoreCommand(protocolIPv4, interfaceSnapshot.Alias,
+				interfaceSnapshot.IPv4DNSServers, interfaceSnapshot.IPv4DNSSource)...)
 		}
 		if len(interfaceSnapshot.IPv6DNSServers) > 0 {
-			commands = append(commands, buildDNSRestoreCommand("ipv6", interfaceSnapshot.Alias, interfaceSnapshot.IPv6DNSServers)...)
+			commands = append(commands, buildDNSRestoreCommand(protocolIPv6, interfaceSnapshot.Alias,
+				interfaceSnapshot.IPv6DNSServers, interfaceSnapshot.IPv6DNSSource)...)
 		}
 		if len(commands) > 0 {
 			plans = append(plans, commands)
@@ -102,8 +104,23 @@ func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 	return plans
 }
 
-func buildDNSRestoreCommand(protocol, alias string, servers []string) []RestoreCommand {
+// buildDNSRestoreCommand 按快照记录的 DNS 来源生成还原命令：
+//   - 静态：set source=static + 依次 add，保持原来的多地址顺序；
+//   - DHCP：一条 set source=dhcp，把接口交还给 DHCP（地址由租约提供）；
+//   - 未知：不生成命令。旧版本快照没有来源字段，在那种快照上按 static
+//     还原正是「把 DHCP DNS 固化成静态」的成因，宁可不动。
+func buildDNSRestoreCommand(protocol, alias string, servers []string, source string) []RestoreCommand {
 	if len(servers) == 0 {
+		return nil
+	}
+	switch source {
+	case DNSSourceStatic:
+		// 落到下面的 set source=static + 逐个 add。
+	case DNSSourceDHCP:
+		return []RestoreCommand{{Executable: "netsh", Args: []string{
+			"interface", protocol, "set", "dnsservers", "name=" + alias, "source=dhcp",
+		}}}
+	default:
 		return nil
 	}
 	args := []string{"interface", protocol, "set", "dnsservers", "name=" + alias, "source=static", "address=" + servers[0], "validate=no"}

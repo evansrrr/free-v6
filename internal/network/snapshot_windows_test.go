@@ -4,6 +4,7 @@ package network
 
 import (
 	"net"
+	"reflect"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -99,6 +100,10 @@ func TestBuildSnapshotMapsAdapters(t *testing.T) {
 	if len(lb.IPv4DNSServers) != 0 || len(lb.IPv6DNSServers) != 0 {
 		t.Fatalf("loopback should have no DNS, got %+v", lb)
 	}
+	// 没有适配器 GUID（注册表查不到）→ 来源未知，绝不猜成 static。
+	if lb.IPv4DNSSource != DNSSourceUnknown || lb.IPv6DNSSource != DNSSourceUnknown {
+		t.Fatalf("adapter without GUID must keep an unknown DNS source, got %+v", lb)
+	}
 
 	w := snapshot.Interfaces[1]
 	if w.Alias != "Wi-Fi" || w.Index != 12 {
@@ -115,6 +120,47 @@ func TestBuildSnapshotMapsAdapters(t *testing.T) {
 	}
 	if got := joinStr(w.IPv6DefaultGateways); got != "fe80::1" {
 		t.Fatalf("unexpected IPv6 gateway: %q", got)
+	}
+}
+
+// 快照必须连 DNS 来源一起记：同一条地址「DHCP 下发的」和「用户写死的」
+// 还原方式相反，只看地址分不出来。用假 resolver 验证 GUID + 协议的映射，
+// 不必碰真实注册表。
+func TestBuildSnapshotDNSSource(t *testing.T) {
+	const guid = "{1c52aba0-4aff-4137-9da7-688712ab4bd3}"
+	dns4 := fakeSockaddr4("192.0.2.53")
+	dns6 := fakeSockaddr6("2001:db8::1")
+	adapterGUID := append([]byte(guid), 0)
+
+	wifi := &windows.IpAdapterAddresses{
+		IfIndex:               12,
+		FriendlyName:          utf16Ptr("Wi-Fi"),
+		AdapterName:           &adapterGUID[0],
+		FirstDnsServerAddress: &windows.IpAdapterDnsServerAdapter{Address: dns4},
+	}
+	wifi.FirstDnsServerAddress.Next = &windows.IpAdapterDnsServerAdapter{Address: dns6}
+
+	var asked []string
+	snapshot := buildSnapshotWithDNSSource(wifi, func(adapterGUID, protocol string) string {
+		asked = append(asked, adapterGUID+" "+protocol)
+		if protocol == protocolIPv4 {
+			return DNSSourceDHCP
+		}
+		return DNSSourceStatic
+	})
+	iface := snapshot.Interfaces[0]
+	if iface.IPv4DNSSource != DNSSourceDHCP || iface.IPv6DNSSource != DNSSourceStatic {
+		t.Fatalf("unexpected DNS sources: %+v", iface)
+	}
+	want := []string{guid + " " + protocolIPv4, guid + " " + protocolIPv6}
+	if !reflect.DeepEqual(asked, want) {
+		t.Fatalf("DNS source must be looked up per protocol with the adapter GUID: got %v want %v", asked, want)
+	}
+
+	// 没有 resolver（非 Windows 主机上的构建/测试）时来源留空 = 未知，
+	// 还原时不动 DNS；绝不默认成 static。
+	if got := buildSnapshotWithDNSSource(wifi, nil).Interfaces[0]; got.IPv4DNSSource != DNSSourceUnknown || got.IPv6DNSSource != DNSSourceUnknown {
+		t.Fatalf("missing resolver must leave sources unknown, got %+v", got)
 	}
 }
 

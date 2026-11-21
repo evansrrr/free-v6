@@ -12,9 +12,11 @@ import (
 // 让 netsh 找不到名字。若把它当致命错误，故障机上已损坏的旧快照会在每次
 // 启动的自愈里 500 卡死（线上故障：restore leftover network snapshot）。
 // 用必然不存在的别名触发 netsh 失败来守护该行为（netsh 只报错不改状态）。
+// 静态与 DHCP 两种还原命令都要走到真实的 netsh（来源未知会跳过，测不到东西）。
 func TestRestoreSnapshotDNSFailureIsNonFatal(t *testing.T) {
 	snapshot := Snapshot{Interfaces: []InterfaceSnapshot{
-		{Alias: "\uFFFD\uFFFDfreev6-nonexistent-if", IPv4DNSServers: nil, IPv6DNSServers: []string{"2001:db8::1"}},
+		{Alias: "\uFFFD\uFFFDfreev6-nonexistent-static", IPv6DNSServers: []string{"2001:db8::1"}, IPv6DNSSource: DNSSourceStatic},
+		{Alias: "\uFFFD\uFFFDfreev6-nonexistent-dhcp", IPv4DNSServers: []string{"192.0.2.53"}, IPv4DNSSource: DNSSourceDHCP},
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

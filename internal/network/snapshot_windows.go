@@ -96,9 +96,18 @@ func getAdaptersAddresses() (*windows.IpAdapterAddresses, error) {
 }
 
 // buildSnapshot walks the IpAdapterAddresses linked list into a Snapshot.
-// Pure (no syscalls, no context) so it is unit-testable against a hand-built
-// adapter list.
+// It reads each adapter's DNS source from the registry (DHCP vs. static), so
+// restore can hand DHCP interfaces back to DHCP instead of pinning their
+// current addresses as static.
 func buildSnapshot(adapters *windows.IpAdapterAddresses) Snapshot {
+	return buildSnapshotWithDNSSource(adapters, adapterDNSSource)
+}
+
+// buildSnapshotWithDNSSource is buildSnapshot with the DNS-source lookup
+// injected (nil = skip, leave the source unknown). Keeps the adapter → snapshot
+// mapping unit-testable against a hand-built adapter list without touching the
+// real registry.
+func buildSnapshotWithDNSSource(adapters *windows.IpAdapterAddresses, resolve func(adapterGUID, protocol string) string) Snapshot {
 	snapshot := Snapshot{CapturedAt: time.Now()}
 	for adapter := adapters; adapter != nil; adapter = adapter.Next {
 		alias := windows.UTF16PtrToString(adapter.FriendlyName)
@@ -137,6 +146,16 @@ func buildSnapshot(adapters *windows.IpAdapterAddresses) Snapshot {
 		iface.IPv6DNSServers = dedupe(iface.IPv6DNSServers)
 		iface.IPv4DefaultGateways = dedupe(iface.IPv4DefaultGateways)
 		iface.IPv6DefaultGateways = dedupe(iface.IPv6DefaultGateways)
+		// 来源只在真有地址时才需要判定：没有 DNS 的接口不会生成还原命令。
+		if resolve != nil {
+			guid := windows.BytePtrToString(adapter.AdapterName)
+			if len(iface.IPv4DNSServers) > 0 {
+				iface.IPv4DNSSource = resolve(guid, protocolIPv4)
+			}
+			if len(iface.IPv6DNSServers) > 0 {
+				iface.IPv6DNSSource = resolve(guid, protocolIPv6)
+			}
+		}
 		snapshot.Interfaces = append(snapshot.Interfaces, iface)
 	}
 	return snapshot

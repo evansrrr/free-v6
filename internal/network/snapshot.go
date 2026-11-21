@@ -5,6 +5,31 @@ import (
 	"time"
 )
 
+// DNS 来源标记。快照必须记住「这组 DNS 是用户写死的，还是 DHCP 下发的」：
+// 还原时无条件 source=static 会把 DHCP 拿到的地址固化进网卡（值相同，当下
+// 无感），换网络后静态 DNS 仍指向旧网段，表现是「Wi-Fi 已连接但打不开网页」，
+// 而且重启网卡也不会恢复 —— 静态配置会一直留着。
+const (
+	// DNSSourceStatic 用户在网卡属性 / 组策略里写死的静态 DNS。
+	DNSSourceStatic = "static"
+	// DNSSourceDHCP DNS 由 DHCP（IPv6 为 RA）下发，快照里只是当前生效值。
+	DNSSourceDHCP = "dhcp"
+	// DNSSourceUnknown 来源未知：旧版本快照没有这两个字段，或注册表读不到。
+	// 还原时一律不动 DNS —— 宁可少做一步，也不能把别人的 DHCP 配置写成静态。
+	DNSSourceUnknown = ""
+)
+
+// netsh interface <protocol> ... 用的协议名。
+const (
+	protocolIPv4 = "ipv4"
+	protocolIPv6 = "ipv6"
+)
+
+// SnapshotMaxAge 是残留快照还能被自动还原的最大年龄。超过它的基线不再代表
+// 「当前网络」：三天前的校园网 DNS 套到宿舍/热点上，等于人为制造一次解析
+// 故障（与把 DHCP DNS 固化成静态是同一类事故，只是方向相反）。
+const SnapshotMaxAge = 24 * time.Hour
+
 type Snapshot struct {
 	CapturedAt time.Time           `json:"capturedAt"`
 	Interfaces []InterfaceSnapshot `json:"interfaces"`
@@ -22,6 +47,20 @@ type InterfaceSnapshot struct {
 	IPv6DefaultGateways []string `json:"ipv6DefaultGateways"`
 	IPv4DNSServers      []string `json:"ipv4DnsServers"`
 	IPv6DNSServers      []string `json:"ipv6DnsServers"`
+	// IPv4DNSSource / IPv6DNSSource 记录上面两组地址的来源（DNSSourceStatic /
+	// DNSSourceDHCP / DNSSourceUnknown）。旧快照没有这两个字段 → 解出空值 =
+	// 未知，还原时跳过 DNS，向后兼容。
+	IPv4DNSSource string `json:"ipv4DnsSource,omitempty"`
+	IPv6DNSSource string `json:"ipv6DnsSource,omitempty"`
+}
+
+// StaleAt 报告快照是否老到不能再当作当前基线自动还原。没有时间戳的快照
+// （手改、极旧版本）同样算过期：来路不明的基线不值得信任。
+func (snapshot Snapshot) StaleAt(now time.Time) bool {
+	if snapshot.CapturedAt.IsZero() {
+		return true
+	}
+	return now.Sub(snapshot.CapturedAt) > SnapshotMaxAge
 }
 
 // firstString 从解析出的 JSON 值里取字符串字段（容错：非字符串返回空）。

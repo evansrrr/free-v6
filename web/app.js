@@ -477,6 +477,7 @@ async function startProxyFlow(auto = false) {
     // 轮询就位，紧随其后的流量/节点请求即可带上 Bearer
     if (typeof started.controllerSecret === 'string') state.controllerSecret = started.controllerSecret;
     reportHotspotResult(started?.hotspot, auto);
+    reportNetworkNotice(started?.network);
     addLog(auto ? '自动启动免流成功' : '免流模式已启动');
     autoDelayTestAfterStart();
     return { ok: true };
@@ -507,6 +508,14 @@ function reportHotspotResult(hs, auto = false) {
     $('#scrim')?.classList.add('open');
   }
   // disabled → 静默
+}
+
+// /proxy/start 响应里的网络自愈结果（非阻断）：上次会话的快照已过期被跳过，
+// 或旧基线还原失败。两者都只影响历史残留，本次免流照常，所以只记日志：
+// 前者按提示（信息），后者按错误（用户可能需要手动重新连一次网络）。
+function reportNetworkNotice(net) {
+  if (!net || !net.warning) return;
+  addLog(net.warning, Boolean(net.failed));
 }
 
 // 手动启动失败：按原因给出引导弹窗与日志（自动运行的失败见 autoRunFail）
