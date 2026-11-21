@@ -27,8 +27,13 @@ permissions:
 
 jobs:
   sync:
-    # 手动手发时不看 prerelease 标记：调用方已经明确指定了 tag。
-    if: github.event_name == 'workflow_dispatch' || (github.event.release && github.event.release.prerelease)
+    # 手动触发时不看 prerelease 标记：调用方已经明确指定了 tag。
+    # 自动触发时以 tag 为准（带 '-' 即预发布），不看 release 上那个可被手工
+    # 改错的复选框——发版脚本标错一次，测试版通道就会断一整轮。
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release &&
+       (github.event.release.prerelease || contains(github.event.release.tag_name, '-')))
     runs-on: ubuntu-latest
     steps:
       - name: Point beta-channel at the new prerelease

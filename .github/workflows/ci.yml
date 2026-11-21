@@ -19,6 +19,24 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # 版本漂移在发版前是看不见的：release.yml 的守卫只在 tag push 时跑，平时
+      # 没人会发现 web/index.html 和 tauri.conf / Cargo.toml 已经不同步。这里做
+      # 同一条只读校验（不带 tag：只要求 span 可解析、三处基础版本一致）。
+      - name: Validate version consistency
+        shell: pwsh
+        run: |
+          $html = Get-Content web/index.html -Raw
+          $pattern = '<span id="versionValue">FreeV6 (v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)</span>'
+          $m = [regex]::Match($html, $pattern)
+          if (-not $m.Success) { throw "web/index.html: #versionValue must look like 'FreeV6 v<semver>'" }
+          $ui = $m.Groups[1].Value.TrimStart('v')
+          $base = ($ui -split '-')[0]
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoLine = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          $cargo = $cargoLine.Matches[0].Groups[1].Value
+          if ($conf -ne $base) { throw "web/index.html shows $ui but tauri.conf.json says $conf" }
+          if ($cargo -ne $base) { throw "web/index.html shows $ui but Cargo.toml says $cargo" }
+          Write-Host "version OK: UI $ui / tauri $conf / cargo $cargo"
       # windows-latest images ship rustup/stable; print the resolved version
       # so a runner-image drift is visible in the log instead of silent.
       - name: Show Rust toolchain

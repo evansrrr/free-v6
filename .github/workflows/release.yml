@@ -164,7 +164,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          # 任何带后缀的 tag 都是预发布：只认 -beta / -alpha 时，v0.5.7-rc.1
+          # 会被标成正式版，releases/latest 随即指向 RC，正式版用户被推上去。
+          # 版本号本体不含 '-'，所以这个判断不会误伤正式版。
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: release-notes.md
           files: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
