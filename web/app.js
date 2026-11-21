@@ -29,8 +29,14 @@ const state = {
   trafficHistory: [],
   totalUpload: 0,
   totalDownload: 0,
+  // mihomo kernel counters from /connections (uploadTotal/downloadTotal), NOT
+  // the sum of live connections: a closed connection must not roll the
+  // baseline back. lastTrafficAt normalizes rates when a poll is delayed.
   lastUpload: 0,
   lastDownload: 0,
+  trafficBaselineReady: false,
+  lastTrafficAt: 0,
+  trafficPolling: false,
 
   // Notice（公告板）：启动时由 helper /api/v1/notice 拉取一次
   notices: [],
@@ -1979,36 +1985,33 @@ async function pollTraffic() {
     return;
   }
 
+  // A slow /connections response (many live connections) must not overlap the
+  // next tick: two snapshots could be applied out of order and look like a
+  // counter reset.
+  if (state.trafficPolling) return;
+  state.trafficPolling = true;
+  const abort = new AbortController();
+  const abortTimer = setTimeout(() => abort.abort(), 2500);
+
   try {
-    // mihomo controller connections API
-    const resp = await fetch('http://127.0.0.1:9090/connections', { headers: controllerHeaders() });
+    // mihomo controller connections API. The snapshot also carries the kernel's
+    // cumulative counters (uploadTotal/downloadTotal). Use those, never the
+    // per-connection sum: a connection disappears from the list when it closes,
+    // so summing live connections loses its last window (and, for connections
+    // shorter than the poll interval, every byte of it).
+    const resp = await fetch('http://127.0.0.1:9090/connections', {
+      headers: controllerHeaders(),
+      signal: abort.signal,
+    });
     if (!resp.ok) return;
     const data = await resp.json();
 
-    let upTotal = 0, downTotal = 0;
-    for (const conn of (data.connections || [])) {
-      upTotal += conn.upload || 0;
-      downTotal += conn.download || 0;
-    }
+    const upTotal = Number(data.uploadTotal);
+    const downTotal = Number(data.downloadTotal);
+    // Malformed/unsupported snapshot: keep the baseline and retry next second.
+    if (!Number.isFinite(upTotal) || !Number.isFinite(downTotal)) return;
 
-    const deltaUp = Math.max(0, upTotal - state.lastUpload);
-    const deltaDown = Math.max(0, downTotal - state.lastDownload);
-
-    if (state.lastUpload > 0) {
-      state.trafficHistory.push({ t: Date.now(), up: deltaUp, down: deltaDown });
-      if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
-      state.totalUpload += deltaUp;
-      state.totalDownload += deltaDown;
-      // 同一份增量同时计入本月 / 累计（跨会话持久化）
-      addTrafficStats(deltaUp, deltaDown);
-    }
-
-    state.lastUpload = upTotal;
-    state.lastDownload = downTotal;
-
-    // Update speed display
-    $('#speedUp').textContent = formatSpeed(deltaUp);
-    $('#speedDown').textContent = formatSpeed(deltaDown);
+    sampleTrafficTotals(upTotal, downTotal);
 
     // Update stats
     updateStatsRing();
@@ -2020,7 +2023,63 @@ async function pollTraffic() {
   } catch (_) {
     // mihomo not reachable: show zeros but keep the totals baseline
     resetTrafficDisplay(false);
+  } finally {
+    clearTimeout(abortTimer);
+    state.trafficPolling = false;
   }
+}
+
+// Apply one observation of mihomo's cumulative kernel counters. The counters
+// only grow while the core runs, so every forwarded byte is accounted exactly
+// once — including connections that lived shorter than one poll interval.
+function sampleTrafficTotals(upTotal, downTotal) {
+  // Monotonic clock: a wall-clock adjustment must not turn a normal interval
+  // into a negative (or absurdly large) rate.
+  const now = performance.now();
+
+  // First observation is a baseline only: the counters include traffic from
+  // before this window opened, which the persisted totals may already hold.
+  if (!state.trafficBaselineReady) {
+    state.trafficBaselineReady = true;
+    state.lastUpload = upTotal;
+    state.lastDownload = downTotal;
+    state.lastTrafficAt = now;
+    return;
+  }
+
+  const deltaUp = upTotal - state.lastUpload;
+  const deltaDown = downTotal - state.lastDownload;
+
+  // Negative deltas mean a different core instance (stop/start, crash, core
+  // update): counters restart at zero. Re-baseline instead of clamping; the
+  // gap's bytes are unknowable, but everything after the restart is counted.
+  if (deltaUp < 0 || deltaDown < 0) {
+    state.lastUpload = upTotal;
+    state.lastDownload = downTotal;
+    state.lastTrafficAt = now;
+    resetTrafficDisplay(false);
+    return;
+  }
+
+  const elapsedMs = Math.max(1, now - state.lastTrafficAt);
+  state.lastUpload = upTotal;
+  state.lastDownload = downTotal;
+  state.lastTrafficAt = now;
+
+  // Chart and speed are rates. A delayed poll (background throttling, system
+  // sleep, a slow snapshot) must not draw the whole gap as one second.
+  const upRate = Math.round((deltaUp * 1000) / elapsedMs);
+  const downRate = Math.round((deltaDown * 1000) / elapsedMs);
+
+  state.trafficHistory.push({ t: now, up: upRate, down: downRate });
+  if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
+  state.totalUpload += deltaUp;
+  state.totalDownload += deltaDown;
+  // 同一份增量同时计入本月 / 累计（跨会话持久化）
+  addTrafficStats(deltaUp, deltaDown);
+
+  $('#speedUp').textContent = formatSpeed(upRate);
+  $('#speedDown').textContent = formatSpeed(downRate);
 }
 
 function resetTrafficDisplay(clearCounters) {
@@ -2029,6 +2088,8 @@ function resetTrafficDisplay(clearCounters) {
   if (clearCounters) {
     state.lastUpload = 0;
     state.lastDownload = 0;
+    state.trafficBaselineReady = false;
+    state.lastTrafficAt = 0;
   }
   $('#speedUp').textContent = formatSpeed(0);
   $('#speedDown').textContent = formatSpeed(0);
