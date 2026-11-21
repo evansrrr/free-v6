@@ -70,7 +70,22 @@ jobs:
           $cargo = $cargoLine.Matches[0].Groups[1].Value
           if ($conf -ne $base) { throw "tag $tag implies version '$base' but tauri.conf.json says '$conf'" }
           if ($cargo -ne $base) { throw "tag $tag implies version '$base' but Cargo.toml says '$cargo'" }
-          Write-Host "tag $tag -> version $version (base $base) OK"
+
+          # The About row is the client's only idea of its own version: it parses
+          # #versionValue to decide the update channel (a "-beta" suffix opts into
+          # the beta channel) and renders it verbatim in 关于. tauri.conf/Cargo must
+          # stay on the bare base for NSIS, so this span is the only place the
+          # prerelease can live. If it disagrees with the tag, a stable build ships
+          # announcing itself as a beta -- wrong version in 关于 and permanently
+          # stuck requesting ?channel=beta.
+          $html = Get-Content web/index.html -Raw
+          $m = [regex]::Match($html, '<span id="versionValue">FreeV6 (v[^<]*)</span>')
+          if (-not $m.Success) { throw "web/index.html: #versionValue span not found; the version guard cannot run" }
+          $shown = $m.Groups[1].Value.TrimStart('v')
+          if ($shown -ne $version) {
+            throw "tag $tag implies UI version '$version' but web/index.html shows '$shown'"
+          }
+          Write-Host "tag $tag -> version $version (base $base), UI $shown OK"
 
       - name: Install pinned tauri-cli
         shell: pwsh
