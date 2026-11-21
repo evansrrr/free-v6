@@ -49,5 +49,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Frontend syntax
+        run: node --check web/app.js && node --check web/traffic.js
+      - name: Traffic accounting tests
+        run: node --test tests/traffic.test.js
       - name: Icon subset guard
         run: python3 scripts/check-icons.py

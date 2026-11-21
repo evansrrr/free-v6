@@ -29,14 +29,11 @@ const state = {
   trafficHistory: [],
   totalUpload: 0,
   totalDownload: 0,
-  // mihomo kernel counters from /connections (uploadTotal/downloadTotal), NOT
-  // the sum of live connections: a closed connection must not roll the
-  // baseline back. lastTrafficAt normalizes rates when a poll is delayed.
-  lastUpload: 0,
-  lastDownload: 0,
-  trafficBaselineReady: false,
-  lastTrafficAt: 0,
+  // Poll guard: a slow /connections response must not overlap the next tick.
   trafficPolling: false,
+  // Consecutive malformed snapshots, used to log one degradation warning.
+  trafficParseFailures: 0,
+  trafficParseWarned: false,
 
   // Notice（公告板）：启动时由 helper /api/v1/notice 拉取一次
   notices: [],
@@ -104,6 +101,10 @@ async function loadApiBase() {
 }
 const MAX_LOG = 100;
 const TRAFFIC_POINTS = 60;
+
+// Kernel-counter meter: baseline/reset/rate logic lives in traffic.js so it can
+// be unit-tested without a DOM.
+const trafficMeter = FreeV6Traffic.createMeter();
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -1989,7 +1990,7 @@ async function refreshBackendState() {
 
 async function pollTraffic() {
   if (!state.proxyRunning) {
-    // Stopped: zero the chart history, the totals baseline and the speed readout
+    // Stopped: zero the chart history, the kernel-counter baseline and the speed readout
     resetTrafficDisplay(true);
     return;
   }
@@ -2015,12 +2016,9 @@ async function pollTraffic() {
     if (!resp.ok) return;
     const data = await resp.json();
 
-    const upTotal = Number(data.uploadTotal);
-    const downTotal = Number(data.downloadTotal);
-    // Malformed/unsupported snapshot: keep the baseline and retry next second.
-    if (!Number.isFinite(upTotal) || !Number.isFinite(downTotal)) return;
-
-    sampleTrafficTotals(upTotal, downTotal);
+    // Malformed/unsupported snapshots are handled by sampleTrafficTotals so
+    // repeated failures can surface a single log line.
+    sampleTrafficTotals(Number(data.uploadTotal), Number(data.downloadTotal));
 
     // Update stats
     updateStatsRing();
@@ -2042,63 +2040,52 @@ async function pollTraffic() {
 // only grow while the core runs, so every forwarded byte is accounted exactly
 // once — including connections that lived shorter than one poll interval.
 function sampleTrafficTotals(upTotal, downTotal) {
-  // Monotonic clock: a wall-clock adjustment must not turn a normal interval
-  // into a negative (or absurdly large) rate.
-  const now = performance.now();
+  const sample = trafficMeter.observe(upTotal, downTotal);
 
-  // First observation is a baseline only: the counters include traffic from
-  // before this window opened, which the persisted totals may already hold.
-  if (!state.trafficBaselineReady) {
-    state.trafficBaselineReady = true;
-    state.lastUpload = upTotal;
-    state.lastDownload = downTotal;
-    state.lastTrafficAt = now;
-    return;
-  }
-
-  const deltaUp = upTotal - state.lastUpload;
-  const deltaDown = downTotal - state.lastDownload;
-
-  // Negative deltas mean a different core instance (stop/start, crash, core
-  // update): counters restart at zero. Re-baseline instead of clamping; the
-  // gap's bytes are unknowable, but everything after the restart is counted.
-  if (deltaUp < 0 || deltaDown < 0) {
-    state.lastUpload = upTotal;
-    state.lastDownload = downTotal;
-    state.lastTrafficAt = now;
+  if (sample.kind === 'invalid') {
+    state.trafficParseFailures += 1;
+    if (state.trafficParseFailures >= 3 && !state.trafficParseWarned) {
+      state.trafficParseWarned = true;
+      addLog('流量统计暂不可用：内核未返回 uploadTotal/downloadTotal（已连续 3 次）', true);
+    }
     resetTrafficDisplay(false);
     return;
   }
 
-  const elapsedMs = Math.max(1, now - state.lastTrafficAt);
-  state.lastUpload = upTotal;
-  state.lastDownload = downTotal;
-  state.lastTrafficAt = now;
+  state.trafficParseFailures = 0;
+  state.trafficParseWarned = false;
 
-  // Chart and speed are rates. A delayed poll (background throttling, system
-  // sleep, a slow snapshot) must not draw the whole gap as one second.
-  const upRate = Math.round((deltaUp * 1000) / elapsedMs);
-  const downRate = Math.round((deltaDown * 1000) / elapsedMs);
+  // First observation after a reload/helper reconnect is a baseline only: the
+  // counters include bytes already persisted before this window opened.
+  if (sample.kind === 'first') return;
 
-  state.trafficHistory.push({ t: now, up: upRate, down: downRate });
+  // A different core instance restarted the counters. The meter already
+  // re-baselined; just clear the readout.
+  if (sample.kind === 'reset') {
+    resetTrafficDisplay(false);
+    return;
+  }
+
+  // `t` is wall-clock for display/ordering; the rate was normalized with the
+  // meter's monotonic clock.
+  state.trafficHistory.push({ t: Date.now(), up: sample.upRate, down: sample.downRate });
   if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
-  state.totalUpload += deltaUp;
-  state.totalDownload += deltaDown;
+  state.totalUpload += sample.deltaUp;
+  state.totalDownload += sample.deltaDown;
   // 同一份增量同时计入本月 / 累计（跨会话持久化）
-  addTrafficStats(deltaUp, deltaDown);
+  addTrafficStats(sample.deltaUp, sample.deltaDown);
 
-  $('#speedUp').textContent = formatSpeed(upRate);
-  $('#speedDown').textContent = formatSpeed(downRate);
+  $('#speedUp').textContent = formatSpeed(sample.upRate);
+  $('#speedDown').textContent = formatSpeed(sample.downRate);
 }
 
 function resetTrafficDisplay(clearCounters) {
   state.trafficHistory.push({ t: Date.now(), up: 0, down: 0 });
   if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
   if (clearCounters) {
-    state.lastUpload = 0;
-    state.lastDownload = 0;
-    state.trafficBaselineReady = false;
-    state.lastTrafficAt = 0;
+    trafficMeter.reset();
+    state.trafficParseFailures = 0;
+    state.trafficParseWarned = false;
   }
   $('#speedUp').textContent = formatSpeed(0);
   $('#speedDown').textContent = formatSpeed(0);
