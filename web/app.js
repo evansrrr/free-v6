@@ -103,8 +103,9 @@ const MAX_LOG = 100;
 const TRAFFIC_POINTS = 60;
 
 // Kernel-counter meter: baseline/reset/rate logic lives in traffic.js so it can
-// be unit-tested without a DOM.
-const trafficMeter = FreeV6Traffic.createMeter();
+// be unit-tested without a DOM. A stale cached index.html without the script
+// must not blank the whole UI; traffic simply stays at zero.
+const trafficMeter = typeof FreeV6Traffic !== 'undefined' ? FreeV6Traffic.createMeter() : null;
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -2040,6 +2041,7 @@ async function pollTraffic() {
 // only grow while the core runs, so every forwarded byte is accounted exactly
 // once — including connections that lived shorter than one poll interval.
 function sampleTrafficTotals(upTotal, downTotal) {
+  if (!trafficMeter) return;
   const sample = trafficMeter.observe(upTotal, downTotal);
 
   if (sample.kind === 'invalid') {
@@ -2083,7 +2085,7 @@ function resetTrafficDisplay(clearCounters) {
   state.trafficHistory.push({ t: Date.now(), up: 0, down: 0 });
   if (state.trafficHistory.length > TRAFFIC_POINTS) state.trafficHistory.shift();
   if (clearCounters) {
-    trafficMeter.reset();
+    trafficMeter?.reset();
     state.trafficParseFailures = 0;
     state.trafficParseWarned = false;
   }
