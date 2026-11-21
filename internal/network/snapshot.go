@@ -73,6 +73,25 @@ func (snapshot Snapshot) StaleAt(now time.Time) bool {
 	return now.Sub(snapshot.CapturedAt) > SnapshotMaxAge
 }
 
+// DropDNSServers 清掉指定接口的 DNS 还原点，Sharing/Hotspot 等其他基线保持
+// 不变。用于「修复网卡 DNS 为自动」之后：残留基线里那几条静态地址正是用户
+// 刚清掉的，留着会在下次启动的自愈里被写回去。
+func (snapshot *Snapshot) DropDNSServers(aliases []string) {
+	dropped := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		dropped[strings.ToLower(alias)] = struct{}{}
+	}
+	for index := range snapshot.Interfaces {
+		if _, ok := dropped[strings.ToLower(snapshot.Interfaces[index].Alias)]; !ok {
+			continue
+		}
+		snapshot.Interfaces[index].IPv4DNSServers = nil
+		snapshot.Interfaces[index].IPv6DNSServers = nil
+		snapshot.Interfaces[index].IPv4DNSSource = DNSSourceUnknown
+		snapshot.Interfaces[index].IPv6DNSSource = DNSSourceUnknown
+	}
+}
+
 // firstString 从解析出的 JSON 值里取字符串字段（容错：非字符串返回空）。
 func firstString(value any) string {
 	if text, ok := value.(string); ok {

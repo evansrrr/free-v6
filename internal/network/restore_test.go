@@ -227,3 +227,26 @@ func TestPruneChangedDHCPDNS(t *testing.T) {
 		t.Fatalf("a nil lookup must leave the snapshot untouched: %+v", got.Interfaces[2])
 	}
 }
+
+// 修复网卡 DNS 之后，残留基线里对应接口的 DNS 还原点必须一起清掉，否则下次
+// 启动的自愈会把静态地址写回去；Sharing/Hotspot 仍要保留给热点还原用。
+func TestDropDNSServers(t *testing.T) {
+	snapshot := Snapshot{
+		Interfaces: []InterfaceSnapshot{
+			{Alias: "WiFi", IPv4DNSServers: []string{"202.204.52.89"}, IPv4DNSSource: DNSSourceStatic},
+			{Alias: "Ethernet", IPv4DNSServers: []string{"198.51.100.1"}, IPv4DNSSource: DNSSourceStatic, IPv6DNSServers: []string{"2001:db8::1"}, IPv6DNSSource: DNSSourceStatic},
+		},
+		Sharing: []SharingSnapshot{{Name: "WiFi", Enabled: true, Kind: "public"}},
+		Hotspot: &HotspotMeta{Applied: true, Path: "ics"},
+	}
+	snapshot.DropDNSServers([]string{"wifi"})
+	if len(snapshot.Interfaces[0].IPv4DNSServers) != 0 || snapshot.Interfaces[0].IPv4DNSSource != DNSSourceUnknown {
+		t.Fatalf("target interface DNS must be dropped: %+v", snapshot.Interfaces[0])
+	}
+	if len(snapshot.Interfaces[1].IPv4DNSServers) != 1 || len(snapshot.Interfaces[1].IPv6DNSServers) != 1 {
+		t.Fatalf("other interfaces must keep their restore points: %+v", snapshot.Interfaces[1])
+	}
+	if len(snapshot.Sharing) != 1 || snapshot.Hotspot == nil {
+		t.Fatalf("sharing/hotspot baseline must survive: %+v", snapshot)
+	}
+}
