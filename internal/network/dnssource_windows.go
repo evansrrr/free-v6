@@ -24,13 +24,7 @@ func adapterDNSSource(adapterGUID, protocol string) string {
 	if adapterGUID == "" {
 		return DNSSourceUnknown
 	}
-	service := "Tcpip"
-	if protocol == protocolIPv6 {
-		service = "Tcpip6"
-	}
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`SYSTEM\CurrentControlSet\Services\`+service+`\Parameters\Interfaces\`+adapterGUID,
-		registry.QUERY_VALUE)
+	key, err := openAdapterInterfaceKey(adapterGUID, protocol)
 	if err != nil {
 		return DNSSourceUnknown
 	}
@@ -48,4 +42,16 @@ func adapterDNSSource(adapterGUID, protocol string) string {
 		return DNSSourceStatic
 	}
 	return DNSSourceDHCP
+}
+
+// openAdapterInterfaceKey 打开网卡在 Tcpip（IPv4）/ Tcpip6（IPv6）下的接口键，
+// DNS 配置的静态值与 DHCP 下发值都在这里。
+func openAdapterInterfaceKey(adapterGUID, protocol string) (registry.Key, error) {
+	service := "Tcpip"
+	if protocol == protocolIPv6 {
+		service = "Tcpip6"
+	}
+	return registry.OpenKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\`+service+`\Parameters\Interfaces\`+adapterGUID,
+		registry.QUERY_VALUE)
 }

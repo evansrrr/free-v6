@@ -47,8 +47,11 @@ func RestoreHotspot(ctx context.Context, snapshot Snapshot) error {
 // 也安全；接口间并行、接口内保序（set dnsservers → add dnsservers）。失败
 // 只记警告不阻断：网卡改名/删除、旧版 GBK 乱码快照都会让 netsh 找不到
 // 名字，若当致命错误，故障机上损坏的旧快照会在每次启动自愈里永久卡死。
+//
+// 还原前先对一次现状：DHCP 还原会撤掉静态配置，只在这期间没人动过 DNS 时才做
+// （见 pruneChangedDHCPDNS）。比对读不到现状时退回原计划。
 func RestoreDNS(ctx context.Context, snapshot Snapshot) {
-	plans := buildDNSRestorePlans(snapshot)
+	plans := buildDNSRestorePlans(pruneChangedDHCPDNS(snapshot, currentDNSLookup()))
 	if len(plans) == 0 {
 		return
 	}

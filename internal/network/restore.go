@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ErrCorruptSnapshot marks a snapshot file that exists but cannot be decoded
@@ -102,6 +103,69 @@ func buildDNSRestorePlans(snapshot Snapshot) [][]RestoreCommand {
 		}
 	}
 	return plans
+}
+
+// DNSCurrentLookup 按接口别名查「此刻生效的 DNS」，ok=false 表示查不到该接口。
+type DNSCurrentLookup func(alias string, ipv6 bool) ([]string, bool)
+
+// pruneChangedDHCPDNS 丢掉当前值和快照不一致的 DHCP 还原点。
+//
+// DHCP 还原的动作是「撤掉静态配置」，属于破坏性操作：用户在免流期间手动改过
+// DNS、或中途换过网络让 DHCP 重新下发，快照里的地址就已经不是现状了，此时再
+// 执行 source=dhcp 会把用户的设置一起抹掉。比对的是「值」而不是来源 ——
+// 值相同时还原等于空操作（顺带修掉旧版本留下的同值静态配置），值不同就说明
+// 这期间有人动过，交给用户自己。静态还原不走这个判断：它写回的就是用户自己
+// 的配置，与现状无关。
+func pruneChangedDHCPDNS(snapshot Snapshot, current DNSCurrentLookup) Snapshot {
+	if current == nil {
+		return snapshot
+	}
+	pruned := snapshot
+	pruned.Interfaces = make([]InterfaceSnapshot, len(snapshot.Interfaces))
+	for index, interfaceSnapshot := range snapshot.Interfaces {
+		if interfaceSnapshot.IPv4DNSSource == DNSSourceDHCP &&
+			!dnsStillMatches(current, interfaceSnapshot.Alias, false, interfaceSnapshot.IPv4DNSServers) {
+			interfaceSnapshot.IPv4DNSServers = nil
+			interfaceSnapshot.IPv4DNSSource = DNSSourceUnknown
+		}
+		if interfaceSnapshot.IPv6DNSSource == DNSSourceDHCP &&
+			!dnsStillMatches(current, interfaceSnapshot.Alias, true, interfaceSnapshot.IPv6DNSServers) {
+			interfaceSnapshot.IPv6DNSServers = nil
+			interfaceSnapshot.IPv6DNSSource = DNSSourceUnknown
+		}
+		pruned.Interfaces[index] = interfaceSnapshot
+	}
+	return pruned
+}
+
+// dnsStillMatches 报告接口当前生效的 DNS 是否仍等于快照记录的值。查不到接口
+// （改名/刚被删除）时保持原计划：让 netsh 自己报错进日志，比静默跳过更容易
+// 排查，这也是还原失败一直以来的非致命处理方式。
+func dnsStillMatches(current DNSCurrentLookup, alias string, ipv6 bool, want []string) bool {
+	got, known := current(alias, ipv6)
+	if !known {
+		return true
+	}
+	return sameServerSet(got, want)
+}
+
+// sameServerSet 比较两组 DNS 地址是否相同（忽略顺序与大小写）。
+func sameServerSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[strings.ToLower(value)]++
+	}
+	for _, value := range right {
+		key := strings.ToLower(value)
+		if counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+	}
+	return true
 }
 
 // buildDNSRestoreCommand 按快照记录的 DNS 来源生成还原命令：

@@ -166,6 +166,7 @@ func main() {
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
 	mux.HandleFunc("/api/v1/notice", h.notice)
 	mux.HandleFunc("/api/v1/ipv6/probe", h.ipv6Probe)
+	mux.HandleFunc("/api/v1/network/dns-reset", h.resetNetworkDNS)
 	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
 	mux.HandleFunc("/api/v1/cloud-config", h.cloudConfig)
 	// Per-launch bearer token minted by the desktop shell: without it the
@@ -742,9 +743,11 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
-	leftover := healLeftoverSnapshot(snapshotPath, network.RestoreSnapshot)
-	if leftover.warning != "" {
-		fmt.Fprintf(os.Stderr, "helper: %s\n", leftover.warning)
+	healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
+	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPath, network.RestoreSnapshot, network.RestoreHotspot)
+	healCancel()
+	if leftover.Warning != "" {
+		fmt.Fprintf(os.Stderr, "helper: %s\n", leftover.Warning)
 	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
 	// ICS 共享基线只在热点共享开启时需要：跳过它的 COM 枚举能省掉一次
@@ -756,18 +759,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// 基线：正常情况下就是刚抓到的这份。上次自愈没能还原成功时沿用旧基线 ——
+	// 基线：正常情况下就是刚抓到的这份。上次自愈没能还原干净时沿用旧基线 ——
 	// 把「还原失败的现状」重新抓成基线，等于让残留的切换状态从此变成正式
 	// 配置，那之后再没有干净基线可回。
-	baseline := snapshot
-	if leftover.preserved != nil {
-		baseline = *leftover.preserved
-		// 共享角色例外：本次会话按现状切换热点，停止时必须按本次现状还原，
-		// 旧基线里没有 ICS 信息时用这次的补上。
-		if len(baseline.Sharing) == 0 {
-			baseline.Sharing = snapshot.Sharing
-		}
-	}
+	baseline := network.AdoptBaseline(snapshot, leftover.Preserved)
 	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -843,60 +838,41 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 自愈结果随响应回给前端（过期快照跳过 / 上次基线还原失败）：都只影响
 	// 历史残留，本次免流照常，因此前端只记日志、不弹窗。
 	var networkNotice any
-	if leftover.warning != "" {
-		networkNotice = map[string]any{"warning": leftover.warning, "failed": leftover.failed}
+	if leftover.Warning != "" {
+		networkNotice = map[string]any{"warning": leftover.Warning, "failed": leftover.Failed}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret, "core": core.Version, "network": networkNotice})
 }
 
-// leftoverBaseline 是启动前自愈的结果。
-type leftoverBaseline struct {
-	// preserved 非 nil：上次会话的基线还在，且这次没能还原成功。它必须继续
-	// 当本次会话的基线，绝不能被「还原失败的现状」覆盖。
-	preserved *network.Snapshot
-	// warning 非空：需要告知用户的自愈结论（快照过期被跳过 / 还原失败）。
-	warning string
-	// failed 为真表示 warning 是一个失败（前端按错误样式记录）。
-	failed bool
-}
-
-// healLeftoverSnapshot 先按上次会话残留的快照还原，再让 startProxy 重新
-// 抓取基线——否则新基线会把“已切换状态”记成原状，停止时永远还原不回去。
-// 但任何读不出来的快照（0 字节/截断/被外部清空改坏、权限异常）都只告警不
-// 阻断：曾有线上问题是一个损坏的 network-snapshot.json 把启动和停止同时
-// 永久卡死。
+// resetNetworkDNS 把被旧版本固化成静态的 DNS 交还给 DHCP。
 //
-// 两种「不还原」的情况必须区分开：
-//   - 快照过期（> SnapshotMaxAge）：里面的 DNS/网关属于另一个网络，套上去
-//     就是一次人为解析故障，直接丢弃，让本次启动重新抓。
-//   - 还原失败：基线本身可能还是对的（外部改掉热点/共享配置导致的永久
-//     失败），必须原样留着 —— 交回给自己的调用方继续当基线。
-func healLeftoverSnapshot(snapshotPath string, restore func(context.Context, network.Snapshot) error) leftoverBaseline {
-	old, healErr := network.LoadSnapshot(snapshotPath)
-	switch {
-	case healErr == nil:
-		if old.StaleAt(time.Now()) {
-			_ = os.Remove(snapshotPath)
-			return leftoverBaseline{warning: fmt.Sprintf(
-				"上次会话的网络快照记录于 %s（已超过 %d 小时），未自动还原；若无法上网请重新连接一次网络",
-				old.CapturedAt.Local().Format("2006-01-02 15:04"), int(network.SnapshotMaxAge.Hours()))}
-		}
-		healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		err := restore(healCtx, old)
-		healCancel()
-		if err != nil {
-			return leftoverBaseline{preserved: &old, failed: true, warning: fmt.Sprintf(
-				"上次会话的网络基线还原失败（已保留该基线）：%v", err)}
-		}
-		_ = os.Remove(snapshotPath)
-	case errors.Is(healErr, network.ErrCorruptSnapshot):
-		fmt.Fprintf(os.Stderr, "helper: removing corrupt network snapshot: %v\n", healErr)
-		_ = os.Remove(snapshotPath)
-	case errors.Is(healErr, os.ErrNotExist):
-	default:
-		fmt.Fprintf(os.Stderr, "helper: unreadable network snapshot (continuing): %v\n", healErr)
+// 迁移入口：旧版本每次「启动 → 停止」都会把 DHCP 下发过的 DNS 写成静态，
+// 值相同所以当下无感，换网络后才表现为「连上了但打不开网页」。这里只处理
+// 自动获取 IP 却写死了 DNS 的网卡（见 network.ResetDNSToDHCP），并且必须由
+// 用户显式触发 —— 它会清掉 DHCP 网卡上手动设置的 DNS。
+//
+// 免流运行中拒绝：停止时会按基线把 DNS 写回去，刚修完就又被覆盖。
+func (h *helper) resetNetworkDNS(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
 	}
-	return leftoverBaseline{}
+	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
+	if _, running, err := mihomo.Status(pidPath); err == nil && running {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "免流正在运行，请先停止免流再修复网卡 DNS"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
+	defer cancel()
+	changed, failures := network.ResetDNSToDHCP(ctx)
+	for _, failure := range failures {
+		fmt.Fprintf(os.Stderr, "helper: reset network DNS: %s\n", failure)
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"ok":      len(failures) == 0,
+		"changed": changed,
+		"failed":  failures,
+	})
 }
 
 // applyHotspotShare 执行移动热点上游切换（ICS 拓扑方案）。开关关 → disabled；

@@ -2,16 +2,11 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/yourname/freev6/internal/network"
 )
 
 // A proxy start must not drop settings fields the start request never carries.
@@ -186,112 +181,4 @@ func TestSettingsPutOmittedAutoRunProxyKeepsStored(t *testing.T) {
 	if !bytes.Contains(thirdRec.Body.Bytes(), []byte(`"autoRunProxy":false`)) {
 		t.Fatalf("explicit false must persist, got: %s", thirdRec.Body.String())
 	}
-}
-
-// 残留快照自愈必须永不阻断启动：缺失→无操作；损坏（0 字节/截断/被外部
-// 写坏）→ 删除自愈；可读且新鲜→按基线还原后删除。回归：一个空的
-// network-snapshot.json 曾让每次启动都500（decode network snapshot:
-// unexpected end of JSON input），用户只能手动删文件自救。
-//
-// 两条「不还原」的分支同样要守住：过期快照（> SnapshotMaxAge）直接丢弃，
-// 还原失败则把基线原样交还 —— 那正是调用方不许覆盖它的依据。
-func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
-	restoreOK := func(context.Context, network.Snapshot) error { return nil }
-
-	t.Run("missing", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		if got := healLeftoverSnapshot(path, restoreOK); got.preserved != nil || got.warning != "" {
-			t.Fatalf("missing snapshot must be a no-op, got %+v", got)
-		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("missing snapshot must stay absent, stat err = %v", err)
-		}
-	})
-
-	t.Run("corrupt is deleted", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		healLeftoverSnapshot(path, restoreOK)
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("corrupt snapshot must be removed, stat err = %v", err)
-		}
-	})
-
-	t.Run("valid is restored and removed", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		// 空接口列表：RestoreSnapshot 无命令可执行、无 ICS 元数据，各平台
-		// 上都是快速 no-op，测试仍然走真实的还原→删除路径。
-		want := network.Snapshot{CapturedAt: time.Now().Add(-time.Hour)}
-		if err := network.SaveSnapshot(path, want); err != nil {
-			t.Fatal(err)
-		}
-		called := false
-		restore := func(context.Context, network.Snapshot) error {
-			called = true
-			return nil
-		}
-		healLeftoverSnapshot(path, restore)
-		if !called {
-			t.Fatal("a fresh snapshot must be restored before it is dropped")
-		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("healed snapshot must be removed, stat err = %v", err)
-		}
-	})
-
-	t.Run("stale is discarded without restoring", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		want := network.Snapshot{CapturedAt: time.Now().Add(-network.SnapshotMaxAge - time.Hour)}
-		if err := network.SaveSnapshot(path, want); err != nil {
-			t.Fatal(err)
-		}
-		called := false
-		got := healLeftoverSnapshot(path, func(context.Context, network.Snapshot) error {
-			called = true
-			return nil
-		})
-		if called {
-			t.Fatal("a stale baseline must never be applied: it belongs to another network")
-		}
-		if got.warning == "" || got.failed {
-			t.Fatalf("stale snapshot must be reported as a non-fatal notice, got %+v", got)
-		}
-		if got.preserved != nil {
-			t.Fatal("a stale snapshot must not be preserved as the baseline")
-		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("stale snapshot must be removed, stat err = %v", err)
-		}
-	})
-
-	t.Run("failed restore preserves the baseline", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		want := network.Snapshot{
-			CapturedAt: time.Now().Add(-time.Hour),
-			Interfaces: []network.InterfaceSnapshot{{Alias: "Wi-Fi", IPv4DNSServers: []string{"192.0.2.53"}, IPv4DNSSource: network.DNSSourceDHCP}},
-		}
-		if err := network.SaveSnapshot(path, want); err != nil {
-			t.Fatal(err)
-		}
-		got := healLeftoverSnapshot(path, func(context.Context, network.Snapshot) error {
-			return errors.New("ics restore failed")
-		})
-		if got.preserved == nil {
-			t.Fatal("a failed restore must hand the old baseline back to the caller")
-		}
-		if !got.preserved.CapturedAt.Equal(want.CapturedAt) || len(got.preserved.Interfaces) != 1 {
-			t.Fatalf("preserved baseline changed: %+v", got.preserved)
-		}
-		if got.warning == "" || !got.failed {
-			t.Fatalf("failed restore must be reported as a failure, got %+v", got)
-		}
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("failed restore must keep the baseline file: %v", err)
-		}
-	})
 }

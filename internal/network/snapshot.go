@@ -30,6 +30,10 @@ const (
 // 故障（与把 DHCP DNS 固化成静态是同一类事故，只是方向相反）。
 const SnapshotMaxAge = 24 * time.Hour
 
+// snapshotClockSkew 是允许的系统时钟误差。比「现在」还晚这么多的快照说明
+// 机器时钟被回拨过，年龄算不出来 —— 按来路不明处理，别当新鲜基线用。
+const snapshotClockSkew = 5 * time.Minute
+
 type Snapshot struct {
 	CapturedAt time.Time           `json:"capturedAt"`
 	Interfaces []InterfaceSnapshot `json:"interfaces"`
@@ -58,6 +62,12 @@ type InterfaceSnapshot struct {
 // （手改、极旧版本）同样算过期：来路不明的基线不值得信任。
 func (snapshot Snapshot) StaleAt(now time.Time) bool {
 	if snapshot.CapturedAt.IsZero() {
+		return true
+	}
+	// 时钟被回拨过时 now.Sub 会是负数，快照会显得「刚从未来抓的」。这种
+	// 年龄不可信，按过期处理（成功还原一次就会删除快照，影响本来有界，
+	// 但不能让它顶着错的时间戳反复生效）。
+	if snapshot.CapturedAt.After(now.Add(snapshotClockSkew)) {
 		return true
 	}
 	return now.Sub(snapshot.CapturedAt) > SnapshotMaxAge

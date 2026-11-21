@@ -156,7 +156,8 @@ func TestLegacySnapshotWithoutDNSSourceRestoresNothing(t *testing.T) {
 }
 
 // 过期快照不能再当基线：它的 DNS/网关属于当时的网络，套到今天就是一次
-// 人为解析故障。无时间戳（手改/极旧文件）同样不算可信基线。
+// 人为解析故障。无时间戳（手改/极旧文件）同样不算可信基线；时间戳跑到
+// 「未来」说明时钟被回拨过，年龄算不出来，也不能当新鲜基线用。
 func TestSnapshotStaleAt(t *testing.T) {
 	now := time.Date(2026, 11, 22, 1, 0, 0, 0, time.UTC)
 	cases := map[string]struct {
@@ -168,7 +169,10 @@ func TestSnapshotStaleAt(t *testing.T) {
 		"just over":      {Snapshot{CapturedAt: now.Add(-SnapshotMaxAge - time.Minute)}, true},
 		"three days old": {Snapshot{CapturedAt: now.Add(-72 * time.Hour)}, true},
 		"no timestamp":   {Snapshot{}, true},
-		"clock skew":     {Snapshot{CapturedAt: now.Add(time.Hour)}, false},
+		"small skew":     {Snapshot{CapturedAt: now.Add(time.Minute)}, false},
+		"clock rolled back": {
+			Snapshot{CapturedAt: now.Add(time.Hour)}, true,
+		},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -176,5 +180,50 @@ func TestSnapshotStaleAt(t *testing.T) {
 				t.Fatalf("StaleAt = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// DHCP 还原是「撤掉静态配置」的破坏性动作：只有当前值和快照一致（这期间没人
+// 动过 DNS）才做；值变了就跳过，交给用户自己。静态还原不受影响 —— 写回的
+// 本来就是用户自己的配置。
+func TestPruneChangedDHCPDNS(t *testing.T) {
+	snapshot := Snapshot{Interfaces: []InterfaceSnapshot{
+		{Alias: "Wi-Fi", IPv4DNSServers: []string{"192.0.2.53", "192.0.2.54"}, IPv4DNSSource: DNSSourceDHCP},
+		{Alias: "Ethernet", IPv4DNSServers: []string{"198.51.100.1"}, IPv4DNSSource: DNSSourceStatic},
+		{Alias: "Wired", IPv6DNSServers: []string{"2001:db8::1"}, IPv6DNSSource: DNSSourceDHCP},
+	}}
+	current := func(alias string, ipv6 bool) ([]string, bool) {
+		switch {
+		case alias == "Wi-Fi" && !ipv6:
+			// 顺序不同、内容相同 → 视为没动过
+			return []string{"192.0.2.54", "192.0.2.53"}, true
+		case alias == "Ethernet" && !ipv6:
+			return []string{"203.0.113.9"}, true // 用户改了静态 DNS
+		case alias == "Wired" && ipv6:
+			return []string{"2001:db8::99"}, true // DHCP 换过地址
+		}
+		return nil, false
+	}
+	pruned := pruneChangedDHCPDNS(snapshot, current)
+	if len(pruned.Interfaces[0].IPv4DNSServers) != 2 {
+		t.Fatalf("unchanged DHCP DNS must keep its restore plan: %+v", pruned.Interfaces[0])
+	}
+	if len(pruned.Interfaces[1].IPv4DNSServers) != 1 || pruned.Interfaces[1].IPv4DNSSource != DNSSourceStatic {
+		t.Fatalf("static restore must not be pruned by the current value: %+v", pruned.Interfaces[1])
+	}
+	if len(pruned.Interfaces[2].IPv6DNSServers) != 0 {
+		t.Fatalf("changed DHCP DNS must be left to the user: %+v", pruned.Interfaces[2])
+	}
+	// 原快照不能被就地改动。
+	if len(snapshot.Interfaces[2].IPv6DNSServers) != 1 {
+		t.Fatalf("prune must not mutate the input snapshot: %+v", snapshot.Interfaces[2])
+	}
+	// 查不到接口（改名/刚删除）时保持原计划，让 netsh 自己报错进日志。
+	if got := pruneChangedDHCPDNS(snapshot, func(string, bool) ([]string, bool) { return nil, false }); len(got.Interfaces[2].IPv6DNSServers) != 1 {
+		t.Fatalf("unknown interface must keep the restore plan: %+v", got.Interfaces[2])
+	}
+	// 读不到现状（枚举失败）时整份保持不变。
+	if got := pruneChangedDHCPDNS(snapshot, nil); len(got.Interfaces[2].IPv6DNSServers) != 1 {
+		t.Fatalf("a nil lookup must leave the snapshot untouched: %+v", got.Interfaces[2])
 	}
 }

@@ -151,6 +151,14 @@ func startMihomo(args []string) error {
 	if err := os.WriteFile(configPathValue, []byte(config), 0o600); err != nil {
 		return fmt.Errorf("write mihomo config: %w", err)
 	}
+	// 与 helper 同一套残留自愈：上次会话的快照先还原，还原失败时它必须继续
+	// 当基线 —— 否则本次现状会把没还原掉的切换状态固化下来。
+	healCtx, healCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPathValue, network.RestoreSnapshot, network.RestoreHotspot)
+	healCancel()
+	if leftover.Warning != "" {
+		fmt.Fprintln(os.Stderr, "freev6:", leftover.Warning)
+	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	// 独立 CLI 不切换热点：跳过 ICS 共享基线枚举。
 	snapshot, err := network.CaptureSnapshot(snapshotCtx, false)
@@ -158,7 +166,7 @@ func startMihomo(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := network.SaveSnapshot(snapshotPathValue, snapshot); err != nil {
+	if err := network.SaveSnapshot(snapshotPathValue, network.AdoptBaseline(snapshot, leftover.Preserved)); err != nil {
 		return err
 	}
 	restoreSnapshot := func() {
