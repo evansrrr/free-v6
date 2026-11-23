@@ -48,24 +48,33 @@ func SwitchICS(ctx context.Context, privateAlias string) (string, error) {
 }
 
 // SwitchWinRT 新 WDI 兜底路径：把移动热点上游改绑到 FreeV6TUN。
-// 返回切换前的原上游连接配置名（供停止时还原）。
-func SwitchWinRT(ctx context.Context) (string, error) {
-	output, err := runPowerShell(ctx, BuildWinRTSwitchScript())
+// originalProfile 是调用方用只读探测拿到的原上游连接名，脚本用它做启动失败
+// 时的就地回滚（脚本自己不再猜上游）。
+//
+// 失败时返回的结果里带着 Stage：调用方据此判断热点有没有被停过，决定是否
+// 需要立刻恢复（preflight 失败时热点分毫未动，不该去重启它）。
+func SwitchWinRT(ctx context.Context, originalProfile string) (WinRTSwitchResult, error) {
+	output, err := runPowerShell(ctx, BuildWinRTSwitchScript(originalProfile))
 	if err != nil {
-		return "", fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
+		return WinRTSwitchResult{}, fmt.Errorf("bind hotspot to TUN via WinRT: %w", err)
 	}
-	var result struct {
-		OriginalProfile string `json:"originalProfile"`
-	}
+	var result WinRTSwitchResult
 	if err := jsonUnmarshalFlexible(output, &result); err != nil {
-		return "", fmt.Errorf("decode WinRT switch result: %w", err)
+		return WinRTSwitchResult{}, fmt.Errorf("decode WinRT switch result: %w", err)
 	}
-	return result.OriginalProfile, nil
+	if !result.OK {
+		reason := result.Error
+		if reason == "" {
+			reason = "unknown"
+		}
+		return result, fmt.Errorf("bind hotspot to TUN via WinRT: %s", reason)
+	}
+	return result, nil
 }
 
 // ProbeWinRTOriginalProfile 只读探测热点当前的上游连接名。探测失败返回空串，
-// 调用方据此放弃写「winrt 待还原」标记 —— 记成 winrt 却没有原上游，下次启动
-// 只会把热点停掉、拉不起来，比不记更糟。
+// 调用方据此放弃 WinRT 切换：这个脚本会先停热点、再绑 TUN，没有可恢复的原
+// 上游就等于做一件无法撤销的事（用户的其他设备当场断网）。
 func ProbeWinRTOriginalProfile(ctx context.Context) string {
 	output, err := runPowerShell(ctx, BuildWinRTProfileProbeScript())
 	if err != nil {
@@ -112,4 +121,25 @@ func RestoreWinRT(ctx context.Context, originalProfile string) error {
 		return nil
 	}
 	return fmt.Errorf("restore hotspot tethering: %s", result.Reason)
+}
+
+// RecoverWinRT 把切换失败留下的热点拉回原上游：热点已关闭时也会拉起。
+// 只在「刚刚因为切换失败而把热点停掉」的现场使用，不能用于停止免流的还原
+// （那里的 not-running 是用户自己的选择）。
+func RecoverWinRT(ctx context.Context, originalProfile string) error {
+	output, err := runPowerShell(ctx, BuildWinRTRecoverScript(originalProfile))
+	if err != nil {
+		return fmt.Errorf("recover hotspot tethering: %w", err)
+	}
+	var result WinRTRestoreResult
+	if err := jsonUnmarshalFlexible(output, &result); err != nil {
+		return fmt.Errorf("decode WinRT recover result: %w", err)
+	}
+	if result.Restarted {
+		return nil
+	}
+	if result.Reason == "" {
+		result.Reason = "unknown"
+	}
+	return fmt.Errorf("recover hotspot tethering: %s", result.Reason)
 }

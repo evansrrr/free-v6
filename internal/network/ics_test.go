@@ -162,12 +162,47 @@ func TestBuildICSRestoreScript(t *testing.T) {
 // 绝不读异步 op 的 .Status/GetResults（部分机器上该属性为空，曾把进行中
 // 的启动误判为“启动热点未完成”的假失败）；定位失败必须发生在停止之前。
 func TestBuildWinRTSwitchScript(t *testing.T) {
-	script := BuildWinRTSwitchScript()
+	script := BuildWinRTSwitchScript("USTB-Student 2")
 	if !strings.Contains(script, "'"+TunDeviceName+"'") {
 		t.Fatalf("winrt switch must reference tun device literal:\n%s", script)
 	}
 	if strings.Contains(script, "+ TunDeviceName +") || strings.Contains(script, "psQuote") {
 		t.Fatalf("Go expression leaked into PowerShell script:\n%s", script)
+	}
+	// 原上游由调用方给定，脚本不再自己按网卡名猜：那个猜测在「网卡显示名
+	// != 连接配置名」的机器上恒为空，等于让失败回滚永远空转。
+	if !strings.Contains(script, "'USTB-Student 2'") {
+		t.Fatal("switch script must embed the upstream given by the caller")
+	}
+	if strings.Contains(script, "$p.ProfileName -eq $wlan.Name") {
+		t.Fatal("switch script must not re-derive the upstream from the adapter name")
+	}
+	// 参数为空、上游已消失都必须先于任何停止动作失败：热点一旦停了，这两
+	// 种情况都没有东西可以拉回来。它们也必须落在 preflight 阶段里 —— 调用方
+	// 靠 stage 判断「热点分毫未动」，才不会去重启一个好好的热点。
+	stoppedStage := strings.Index(script, "$stage = 'stopping'")
+	if stoppedStage < 0 {
+		t.Fatal("switch script must mark the stop phase")
+	}
+	for _, expected := range []string{"未提供热点原上游", "原上游连接配置", "'preflight'"} {
+		idx := strings.Index(script, expected)
+		stop := strings.Index(script, "StopTetheringAsync")
+		if idx < 0 || stop < 0 || idx > stop {
+			t.Fatalf("upstream preflight %q (idx %d) must precede any stop (idx %d)", expected, idx, stop)
+		}
+		if expected != "'preflight'" && idx > stoppedStage {
+			t.Fatalf("upstream preflight %q must stay inside the preflight stage", expected)
+		}
+	}
+	// 失败也要输出结构化结果：靠退出码无法区分「停在准备阶段」与「已经停过
+	// 热点」，而这两种情况需要完全不同的善后。
+	if !strings.Contains(script, "stage=$stage") || !strings.Contains(script, "ok=$done") {
+		t.Fatal("switch script must always emit {ok, stage, originalProfile, error}")
+	}
+	// 脚本自己回滚成功时要标出来：否则调用方会再「恢复」一次，把这个已经
+	// 回到原上游的热点又停一遍。
+	if !strings.Contains(script, "$stage = 'recovered'") {
+		t.Fatal("switch script must mark a successful in-script rollback")
 	}
 	for _, expected := range []string{"StartTetheringAsync", "StopTetheringAsync", "originalProfile", "TetheringState", "Wait-Heat", DefaultHotspotGateway, "IsNullOrWhiteSpace"} {
 		if !strings.Contains(script, expected) {
@@ -192,6 +227,36 @@ func TestBuildWinRTSwitchScript(t *testing.T) {
 	// 回滚失败必须把结果写进错误消息，便于区分“已恢复/未恢复”
 	if !strings.Contains(script, "已恢复原上游") || !strings.Contains(script, "未能恢复原上游") {
 		t.Fatal("switch failure must report rollback outcome in the message")
+	}
+	// 回滚直接用停止前解析好的 $origP：再查一次就可能查不到，等于把热点
+	// 留在关闭状态。
+	if !strings.Contains(script, "CreateFromConnectionProfile($origP).StartTetheringAsync()") {
+		t.Fatal("switch rollback must reuse the resolved upstream profile object")
+	}
+}
+
+// 切换失败后要不要「把热点拉回来」，取决于脚本走到了哪一步：preflight
+// 阶段的失败没有动过热点，脚本自己回滚成功的也已经在原上游上跑着 —— 这两种
+// 情况再恢复只会白停一次，甚至因为同一个原因再也拉不起来。空 Stage（脚本被
+// 杀/输出不可解析）按最坏情况处理。
+func TestWinRTSwitchResultNeedsHotspotRecovery(t *testing.T) {
+	cases := map[string]struct {
+		stage string
+		want  bool
+	}{
+		"preflight": {stage: "preflight", want: false},
+		"recovered": {stage: "recovered", want: false},
+		"done":      {stage: "done", want: false},
+		"stopping":  {stage: "stopping", want: true},
+		"starting":  {stage: "starting", want: true},
+		"no output": {stage: "", want: true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := (WinRTSwitchResult{Stage: c.stage}).NeedsHotspotRecovery(); got != c.want {
+				t.Fatalf("NeedsHotspotRecovery(%q) = %v, want %v", c.stage, got, c.want)
+			}
+		})
 	}
 }
 
@@ -263,23 +328,52 @@ func TestJSONUnmarshalFlexible(t *testing.T) {
 }
 
 // WinRT 原上游探测脚本必须只读：它跑在「停热点」之前，任何 Stop/Start 调用
-// 都会把「抢在停机前留痕」变成一次真实故障。同时它要和切换脚本共用同一行
-// 「物理网卡」筛选，否则探测到的上游和实际绑定的上游会对不上。
+// 都会把「抢在停机前留痕」变成一次真实故障。
+//
+// 它同时是切换脚本的唯一上游来源，所以「取哪条链路」必须取真正承载流量的
+// 那条：默认路由所在的物理网卡。按「第一个 Up 的物理网卡」猜在有线+无线
+// 同时在线时会指错，而指错的上游在失败回滚里同样拉不起热点。
 func TestBuildWinRTProfileProbeScript(t *testing.T) {
 	script := BuildWinRTProfileProbeScript()
-	for _, forbidden := range []string{"StopTetheringAsync", "StartTetheringAsync", "EnableSharing", "DisableSharing"} {
+	for _, forbidden := range []string{"StopTetheringAsync", "StartTetheringAsync", "EnableSharing", "DisableSharing", "GetConnectionProfiles"} {
 		if strings.Contains(script, forbidden) {
-			t.Fatalf("probe script must stay read-only, found %q", forbidden)
+			t.Fatalf("probe script must stay read-only and cheap, found %q", forbidden)
 		}
 	}
-	for _, expected := range []string{"originalProfile", "Get-NetConnectionProfile", "Get-NetAdapter"} {
+	for _, expected := range []string{"originalProfile", "Get-NetConnectionProfile", "Get-NetAdapter", "Get-NetRoute", "$phys.Name -contains $_.InterfaceAlias"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("probe script missing %q", expected)
 		}
 	}
-	switchScript := BuildWinRTSwitchScript()
-	filter := strings.SplitN(winRTPhysicalAdapter, "\n", 2)[0]
-	if !strings.Contains(script, filter) || !strings.Contains(switchScript, filter) {
-		t.Fatal("probe and switch scripts must share the physical-adapter selection")
+	// 只在物理网卡里选默认路由：TUN 在免流运行时 metric 最低，不限定就会
+	// 把 TUN 自己当成热点上游。
+	if !strings.Contains(script, "-Physical") {
+		t.Fatal("probe must restrict route lookup to physical adapters")
+	}
+}
+
+// 切换失败后的恢复脚本与还原脚本只差一点：热点关着时也要拉起。这是唯一会
+// 主动打开热点的路径 —— 它只跑在「刚刚因为切换失败把热点关掉」的现场。
+func TestBuildWinRTRecoverScript(t *testing.T) {
+	recoverScript := BuildWinRTRecoverScript("USTB-Student 2")
+	if !strings.Contains(recoverScript, "'USTB-Student 2'") {
+		t.Fatal("recover script must embed the original upstream")
+	}
+	if !strings.Contains(recoverScript, "StartTetheringAsync") || !strings.Contains(recoverScript, "restarted") {
+		t.Fatal("recover script must start tethering and report the outcome")
+	}
+	if strings.Contains(recoverScript, "'not-running'") {
+		t.Fatal("recover script must start the hotspot even when it is currently off")
+	}
+	// 与还原脚本共用骨架：状态判定必须一致，否则「还原成功」和「恢复成功」
+	// 会各说一套。
+	restoreScript := BuildWinRTRestoreScript("USTB-Student 2")
+	if !strings.Contains(restoreScript, "'not-running'") {
+		t.Fatal("restore script must keep skipping a hotspot the user turned off")
+	}
+	for _, shared := range []string{"Get-HeatState", "Wait-Heat", "original-profile-missing", "start-failed"} {
+		if !strings.Contains(recoverScript, shared) || !strings.Contains(restoreScript, shared) {
+			t.Fatalf("recover and restore must share %q", shared)
+		}
 	}
 }

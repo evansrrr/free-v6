@@ -19,8 +19,8 @@ func SwitchICS(context.Context, string) (string, error) {
 	return "", ErrWindowsOnly
 }
 
-func SwitchWinRT(context.Context) (string, error) {
-	return "", ErrWindowsOnly
+func SwitchWinRT(context.Context, string) (WinRTSwitchResult, error) {
+	return WinRTSwitchResult{}, ErrWindowsOnly
 }
 
 func RestoreICSSharing(context.Context, Snapshot) error {
@@ -28,6 +28,10 @@ func RestoreICSSharing(context.Context, Snapshot) error {
 }
 
 func RestoreWinRT(context.Context, string) error {
+	return ErrWindowsOnly
+}
+
+func RecoverWinRT(context.Context, string) error {
 	return ErrWindowsOnly
 }
 

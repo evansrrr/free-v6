@@ -46,6 +46,11 @@ func listenAddress() string {
 const (
 	icsOpTimeout     = 120 * time.Second
 	icsDetectTimeout = 30 * time.Second
+	// icsRecoverTimeout 是「切换失败后把热点拉回原上游」以及「失败回滚」的
+	// 独立预算。这两步都发生在切换之后，绝不能复用 icsOpTimeout 那个 ctx：
+	// 切换失败往往就是它已经超时，复用等于立刻放弃、什么都不做。
+	// 脚本最坏情况 = 停等 8s + 起等 15s + PowerShell 启动，60s 足够。
+	icsRecoverTimeout = 60 * time.Second
 
 	// tunStageTimeout 是"让内核关 TUN 并等适配器从系统消失"的总预算。内核
 	// 同步关闭 wintun 会话、实测 ~1s 才回响应，偶尔更久；给足 4s——把"关到
@@ -936,10 +941,20 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 		return network.SaveSnapshot(snapshotPath, baseline)
 	})
 	if switchErr != nil {
-		// 切换没成（脚本内部已回滚）：撤掉占位标记，别让下次停止白跑一次还原。
+		// 切换没成：把共享角色还原。热点本身有没有被拉回来由
+		// switchHotspotTopology 负责（WinRT 失败时它会用探测到的原上游当场
+		// 拉起）；只有「热点还关着」时它才会带回一份 winrt 记录 —— 把它留在
+		// 基线里，下次启动的自愈才有机会再拉一次。热点没被碰过、或已经恢复时
+		// 必须清掉标记，否则停止时会白跑一次还原。
 		baseline.Hotspot = nil
+		if meta != nil && meta.OriginalProfile != "" {
+			baseline.Hotspot = meta
+		}
 		_ = network.SaveSnapshot(snapshotPath, baseline)
-		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), icsRecoverTimeout)
+		rollbackErr := network.RestoreICSSharing(rollbackCtx, snapshot)
+		rollbackCancel()
+		if rollbackErr != nil {
 			return map[string]any{"applied": false, "reason": "failed",
 				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
 		}
@@ -947,12 +962,26 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 	}
 	baseline.Hotspot = meta
 	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
-		// 元数据落不了盘 → 停止时无法还原 → 也算失败并回滚。
+		// 元数据落不了盘 → 停止时无法还原 → 也算失败并回滚。同样换新 ctx：
+		// 切换可能已经把 switchCtx 的预算用光。
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), icsRecoverTimeout)
+		defer rollbackCancel()
+		var rollbackErrs []string
 		if meta.Path == "winrt" {
-			_ = network.RestoreWinRT(switchCtx, meta.OriginalProfile)
+			// 用恢复版而不是还原版：切换成功后热点一定在跑，跑不起来的状态
+			// 恰恰是最需要拉起来的。
+			if recoverErr := network.RecoverWinRT(rollbackCtx, meta.OriginalProfile); recoverErr != nil {
+				rollbackErrs = append(rollbackErrs, recoverErr.Error())
+			}
 		}
-		_ = network.RestoreICSSharing(switchCtx, snapshot)
-		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
+		if icsErr := network.RestoreICSSharing(rollbackCtx, snapshot); icsErr != nil {
+			rollbackErrs = append(rollbackErrs, icsErr.Error())
+		}
+		message := "保存热点共享状态: " + err.Error()
+		if len(rollbackErrs) > 0 {
+			message += "；回滚失败: " + strings.Join(rollbackErrs, "; ")
+		}
+		return map[string]any{"applied": false, "reason": "failed", "error": message}
 	}
 	// restarted=true 表示本路径重启过移动热点（WinRT 路径必然 stop→start），
 	// 前端据此把“热点短暂断开”作为预期事件记入日志而不是当成故障。
@@ -963,8 +992,12 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 // 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
 //
 // persistPending 在停掉热点之前被调用，用来把「原上游」写进快照：tethering 的
-// 停与重开在同一个脚本里，进程被杀在中间时热点会停在关闭状态，而脚本的
-// originalProfile 要跑完才输出 —— 不先落盘，下次启动就没有东西可还原。
+// 停与重开在同一个脚本里，进程被杀在中间时热点会停在关闭状态，而脚本的输出
+// 要跑完才有 —— 不先落盘，下次启动就没有东西可还原。
+//
+// WinRT 路径的全部前提是「知道原上游」：探测不到就不切换。那个脚本会先停
+// 热点、再绑 TUN，没有可恢复的上游等于做一件无法撤销的事 —— 失败时用户的
+// 热点停着、其他设备断网，而程序没有任何办法把它拉回来。
 func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot,
 	persistPending func(network.HotspotMeta) error) (*network.HotspotMeta, error) {
 	var icsErr error
@@ -979,33 +1012,64 @@ func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, sn
 			}
 		}
 	}
-	// 探测不到原上游就不写 winrt 标记：记为 winrt 却没有上游，还原时只会把
-	// 热点停掉。保持「pending」占位（只还原 ICS 角色）。
-	probedProfile := ""
+	probedProfile := network.ProbeWinRTOriginalProfile(ctx)
+	if probedProfile == "" {
+		return nil, fmt.Errorf("未能识别移动热点当前的上游连接，已跳过切换（热点保持原样）")
+	}
 	if persistPending != nil {
-		probedProfile = network.ProbeWinRTOriginalProfile(ctx)
-		if probedProfile != "" {
-			if err := persistPending(network.HotspotMeta{
-				Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: probedProfile,
-			}); err != nil {
-				return nil, fmt.Errorf("保存热点共享原上游: %w", err)
-			}
+		if err := persistPending(network.HotspotMeta{
+			Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: probedProfile,
+		}); err != nil {
+			return nil, fmt.Errorf("保存热点共享原上游: %w", err)
 		}
 	}
-	originalProfile, err := network.SwitchWinRT(ctx)
+	result, err := network.SwitchWinRT(ctx, probedProfile)
 	if err != nil {
-		if icsErr != nil {
-			return nil, fmt.Errorf("ics: %v; winrt: %w", icsErr, err)
+		// 脚本里的停与启不是原子的：TUN 绑定失败、或者脚本被超时/强杀打断，
+		// 热点都可能停在关闭状态（脚本自己的回滚未必跑到）。
+		//
+		// 只在「热点可能还停着」时才去恢复：准备阶段的失败（TUN/原上游连接
+		// 不存在、热点本来就没开）热点分毫未动，脚本自己回滚成功时也已经在
+		// 原上游上跑着了 —— 这两种情况再去「恢复」会白白把它停一次，甚至因为
+		// 同一个原因再也拉不起来。恢复必须用新 ctx：切换失败往往就是超时，
+		// 复用那个 ctx 等于立刻放弃。
+		var down *network.HotspotMeta
+		switch {
+		case result.Stage == "recovered":
+			// 脚本自己已经把热点拉回原上游，错误消息里也写明了，不再重复一次。
+			err = fmt.Errorf("winrt: %w", err)
+		case result.NeedsHotspotRecovery():
+			if recoverErr := recoverWinRTHotspot(probedProfile); recoverErr != nil {
+				err = fmt.Errorf("winrt: %w；热点未能自动恢复到 %s（%v），请手动打开移动热点", err, probedProfile, recoverErr)
+				// 热点还关着：把 winrt 记录留在基线里，下次启动的自愈走的是
+				// 「热点关着也拉起」的恢复路径，还能再试一次 —— 清掉标记就等于
+				// 连重试的机会都没有了（正常停止会删快照，所以这条只对「本次
+				// 会话没有正常停止」的情况生效）。
+				down = &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: probedProfile}
+			} else {
+				err = fmt.Errorf("winrt: %w；热点已恢复到原上游 %s", err, probedProfile)
+			}
+		default:
+			err = fmt.Errorf("winrt: %w（热点未改动）", err)
 		}
-		return nil, err
+		if icsErr != nil {
+			return down, fmt.Errorf("ics: %v; %v", icsErr, err)
+		}
+		return down, err
 	}
-	// 切换脚本按「网卡显示名 == 连接配置名」找原上游，两者不同的机器（本机
-	// 就是：WiFi / USTB-Student 2）会返回空。用探测值兜底，否则停止时热点
-	// 拉不回来（reason=no-original-profile）。
+	originalProfile := result.OriginalProfile
 	if originalProfile == "" {
 		originalProfile = probedProfile
 	}
 	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
+}
+
+// recoverWinRTHotspot 在 WinRT 切换失败后把热点拉回原上游。它必须用新的 ctx：
+// 切换失败往往就是超时，复用那个 ctx 会立刻失败、等于没试。
+func recoverWinRTHotspot(originalProfile string) error {
+	recoverCtx, cancel := context.WithTimeout(context.Background(), icsRecoverTimeout)
+	defer cancel()
+	return network.RecoverWinRT(recoverCtx, originalProfile)
 }
 
 func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {

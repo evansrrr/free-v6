@@ -237,26 +237,40 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	return b.String()
 }
 
-// winRTPhysicalAdapter 定位「当前在用的物理网卡」：热点上游就是它。连接配置名
-// 与网卡显示名经常不同（"WiFi" vs "USTB-Student 2"），所以拿到网卡之后还要再
-// 查一次连接配置；切换脚本与探测脚本共用这一行，避免两处判定漂移。
-const winRTPhysicalAdapter = `$wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
+// winRTUpstreamAdapter 定位「tethering 实际在共享的那条链路」—— 它就是热点
+// 真正的上游。优先取物理网卡中承载默认路由的那一个：有线+无线同时在线时，
+// 按「第一个 Up 的物理网卡」猜会指错，而指错的上游在切换失败的回滚里同样
+// 拉不起热点。取不到路由再退回第一个 Up 的物理网卡。
+//
+// TUN / VPN / 虚拟网卡一律排除：免流运行时 TUN 的默认路由 metric 最小，
+// 不排除就会把 TUN 自己当成原上游。$tunName 由调用方在脚本里先定义好。
+const winRTUpstreamAdapter = `$phys = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -ne $tunName -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback|Wintun' })
+$upIf = $null
+if ($phys.Count -gt 0) {
+  $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $phys.Name -contains $_.InterfaceAlias } | Sort-Object { [int]$_.RouteMetric + [int]$_.InterfaceMetric } | Select-Object -First 1
+  if ($null -ne $route) { $upIf = $phys | Where-Object { $_.Name -eq $route.InterfaceAlias } | Select-Object -First 1 }
+  if ($null -eq $upIf) { $upIf = $phys | Select-Object -First 1 }
+}
 `
 
 // BuildWinRTProfileProbeScript 只读探测：返回热点当前绑定的上游连接名。
 //
-// 用途是抢在「停热点」之前把它写进快照：tethering 的停与重开在同一个脚本里，
-// 进程被杀在中间时热点会停在关闭状态，而脚本的 originalProfile 要跑完才输出。
-// 先探一次、先落盘，下次启动才拉得回来。
+// 用途有两层：抢在「停热点」之前写进快照（tethering 的停与重开在同一个脚本
+// 里，进程被杀在中间时热点会停在关闭状态，而脚本的输出要跑完才有），以及作为
+// 切换脚本的唯一上游来源 —— 探测为空时调用方直接放弃切换，不去做一件无法
+// 撤销的事。
 //
 // 用 Get-NetConnectionProfile 而不是在 GetConnectionProfiles() 里按网卡名匹配：
-// 后者的 ProfileName 与网卡显示名在不少机器上对不上，会探出空值。
+// 后者的 ProfileName 与网卡显示名在不少机器上对不上（"WiFi" vs
+// "USTB-Student 2"），会探出空值。这里也不枚举 WinRT 连接配置，纯网络配置
+// 读取，几百毫秒即可返回。
 func BuildWinRTProfileProbeScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
-` + winRTPhysicalAdapter + `$orig = ''
-if ($null -ne $wlan) {
-  $cp = Get-NetConnectionProfile -InterfaceAlias $wlan.Name -ErrorAction SilentlyContinue | Select-Object -First 1
+$tunName = ` + psQuote(TunDeviceName) + `
+` + winRTUpstreamAdapter + `$orig = ''
+if ($null -ne $upIf) {
+  $cp = Get-NetConnectionProfile -InterfaceAlias $upIf.Name -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($null -ne $cp) { $orig = [string]$cp.Name }
 }
 ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
@@ -264,21 +278,26 @@ ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
 }
 
 // BuildWinRTSwitchScript 构造新 WDI 兜底路径：停掉现有 tethering，
-// 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游（物理 WLAN），
-// 新上游启动失败时在脚本内回滚重启原上游，回滚结果写进错误消息。
+// 改绑到 FreeV6TUN 连接配置重新启动热点。
+//
+// originalProfile 由调用方（只读探测）给出，脚本不再自己猜上游：脚本里的停与
+// 重开不是原子的，任何「原上游判定为空」都会把热点丢在关闭状态且没人拉起
+// （历史上这里按「网卡显示名 == 连接配置名」匹配，在两者不同的机器上恒为空，
+// 失败回滚也就恒为空转）。现在上游由参数给定，脚本只校验它还在不在，并且
+// 必须在任何停止动作之前完成。
 //
 // 成败判定是双层的，任何一层可用即可：优先 TetheringState（读到非空值），
 // 投影读空的机器退回热点网关 IP 探测（与 DetectHotspot 同一信号，已在
 // 故障机验证可用）。绝不读异步 op 的 .Status/GetResults —— 部分机器上
-// 该属性为空，曾把进行中的启动误判为“未完成”的假失败。定位 tunP/原上游
-// 必须在任何停止动作之前完成。
-func BuildWinRTSwitchScript() string {
+// 该属性为空，曾把进行中的启动误判为“未完成”的假失败。
+func BuildWinRTSwitchScript(originalProfile string) string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
 $ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
 $tm=[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime]
 $profiles=@($ni::GetConnectionProfiles())
 $tunName = ` + psQuote(TunDeviceName) + `
+$origName = ` + psQuote(originalProfile) + `
 $gateway = ` + psQuote(DefaultHotspotGateway) + `
 function Get-HeatState {
   $found = ''
@@ -320,35 +339,47 @@ function Get-HeatLabel {
   if (Test-HeatUp) { $g = '热点网关在线' }
   return ($st + '，' + $g)
 }
-# 1) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
-` + winRTPhysicalAdapter + `$orig = ''
-if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.Name) { $orig = $p.ProfileName; break } } }
-$tunP = $null
-foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
-if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
-if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
-# 2) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
-#    半途而废会把热点丢在关闭状态）。
-foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
-$null = Wait-Heat 'Down' 16
-# 3) 绑定 TUN 重新启动：双层判定（最多 20s）。
-try { $null = $tm::CreateFromConnectionProfile($tunP).StartTetheringAsync() } catch {}
-if (-not (Wait-Heat 'Up' 40)) {
-  $recovered = $false
-  if ($orig -ne '') {
-    foreach ($p in $profiles) {
-      if ($p.ProfileName -eq $orig) {
-        try { $null = $tm::CreateFromConnectionProfile($p).StartTetheringAsync() } catch {}
-        break
-      }
+# 1) 任何停止动作之前先定位原上游与 TUN 连接：任一缺失就原地失败，热点不动。
+$done = $false
+$stage = 'preflight'
+$err = ''
+try {
+  if ($origName -eq '') { throw '未提供热点原上游，未改动热点' }
+  $tunP = $null
+  foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
+  if ($null -eq $tunP) { throw ($tunName + ' connection profile not found') }
+  $origP = $null
+  foreach ($p in $profiles) { if ($p.ProfileName -eq $origName) { $origP = $p; break } }
+  if ($null -eq $origP) { throw ('原上游连接配置 ' + $origName + ' 已不存在，未改动热点') }
+  if (-not (Test-HeatUp)) { throw '移动热点未处于运行状态（tethering 未启动）' }
+  # 2) 重启热点：先停（双层判定确认；超时确认不了也继续，绝不因此中止 ——
+  #    半途而废会把热点丢在关闭状态）。
+  $stage = 'stopping'
+  foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
+  $null = Wait-Heat 'Down' 16
+  # 3) 绑定 TUN 重新启动：双层判定（最多 20s）。
+  $stage = 'starting'
+  try { $null = $tm::CreateFromConnectionProfile($tunP).StartTetheringAsync() } catch {}
+  if (-not (Wait-Heat 'Up' 40)) {
+    # 就地回滚：$origP 在停止之前就解析好了，这里不再重新查找 —— 查找失败等于
+    # 把一个关着的热点留给用户。
+    try { $null = $tm::CreateFromConnectionProfile($origP).StartTetheringAsync() } catch {}
+    $final = Get-HeatLabel
+    if (Wait-Heat 'Up' 20) {
+      $stage = 'recovered'
+      throw ('启动热点未成功（最终状态: ' + $final + '）；已恢复原上游')
     }
-    $recovered = Wait-Heat 'Up' 20
+    throw ('启动热点未成功（最终状态: ' + $final + '）；未能恢复原上游，请手动重开热点')
   }
-  $final = Get-HeatLabel
-  if ($recovered) { throw ('启动热点未成功（最终状态: ' + $final + '）；已恢复原上游') }
-  throw ('启动热点未成功（最终状态: ' + $final + '）；未能恢复原上游，请手动重开热点')
+  $done = $true
+  $stage = 'done'
+} catch {
+  $err = [string]$_.Exception.Message
 }
-ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
+# 失败也必须输出 JSON：调用方要靠 stage 判断热点有没有被停过（preflight 失败
+# 等于热点原样未动，不该再去「恢复」一个本来好好的热点）。脚本被超时杀掉时
+# 没有输出，调用方按「最坏情况：可能已经停了」处理。
+ConvertTo-Json -InputObject ([pscustomobject]@{ok=$done; stage=$stage; originalProfile=$origName; error=$err}) -Compress
 `
 }
 
@@ -357,7 +388,27 @@ ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
 // 输出 {restarted, reason}；reason 为 not-running 表示热点本就关闭（不算警告）。
 // 与切换脚本同理：双层判定（TetheringState 优先，读空退回网关 IP 探测），
 // 不读异步 op 的 .Status/GetResults。
+//
+// 热点本来就关着时不做任何事：会话期间用户可能自己把它关了，停止免流不该
+// 替用户打开。
 func BuildWinRTRestoreScript(originalProfile string) string {
+	return buildWinRTTetherScript(originalProfile, false)
+}
+
+// BuildWinRTRecoverScript 构造「切换失败后把热点拉回原上游」的脚本。与还原
+// 脚本只差一处：热点已经关着时也要拉起 —— 切换脚本里的停与启不是原子的，
+// TUN 绑定失败、或进程被杀在两者之间，留下的正是「热点关着」。
+//
+// 这是唯一会主动打开热点的路径，只在上一步刚把它关掉的现场使用；停止免流
+// 仍走 BuildWinRTRestoreScript，保留「用户自己关了热点」这一意图。
+func BuildWinRTRecoverScript(originalProfile string) string {
+	return buildWinRTTetherScript(originalProfile, true)
+}
+
+// buildWinRTTetherScript 是还原/失败恢复共用的脚本骨架。startWhenOff 决定
+// 热点关着时是「什么都不做（reason=not-running）」还是「按原上游拉起」：
+// 两者共用同一套双层状态判定，避免「还原成功」与「恢复成功」的口径漂移。
+func buildWinRTTetherScript(originalProfile string, startWhenOff bool) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
 	b.WriteString(`
@@ -401,10 +452,13 @@ function Wait-Heat([string]$want, [int]$ticks) {
 }
 $restarted = $false
 $reason = ''
-# 绑在 TUN 上的热点必须尝试解开：判定失败（两层都读不到）时也按在跑处理。
-if (-not (Test-HeatUp)) { $reason = 'not-running' } else {
-  foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
-  $null = Wait-Heat 'Down' 16
+$up = Test-HeatUp
+`)
+	if !startWhenOff {
+		// 还原路径：热点本就关着就什么都不做（用户可能自己关的）。
+		b.WriteString("if (-not $up) { $reason = 'not-running' }\n")
+	}
+	b.WriteString(`if ($reason -eq '') {
   $orig = `)
 	b.WriteString(psQuote(originalProfile))
 	b.WriteString(`
@@ -412,6 +466,12 @@ if (-not (Test-HeatUp)) { $reason = 'not-running' } else {
     $target = $null
     foreach ($p in $profiles) { if ($p.ProfileName -eq $orig) { $target = $p; break } }
     if ($null -eq $target) { $reason = 'original-profile-missing' } else {
+      # 确认目标可用之后才动热点：找不到原上游时先把热点停掉，就再也拉不
+      # 起来了。$up 为真时（绑在 TUN 上）必须先解开，否则 start 会沿用旧绑定。
+      if ($up) {
+        foreach ($p in $profiles) { try { $null = $tm::CreateFromConnectionProfile($p).StopTetheringAsync(); break } catch {} }
+        $null = Wait-Heat 'Down' 16
+      }
       try { $null = $tm::CreateFromConnectionProfile($target).StartTetheringAsync() } catch {}
       if (Wait-Heat 'Up' 30) { $restarted = $true } else { $reason = 'start-failed (final: ' + (Get-HeatState) + '/' + (Test-HeatUp) + ')' }
     }
@@ -420,6 +480,29 @@ if (-not (Test-HeatUp)) { $reason = 'not-running' } else {
 ConvertTo-Json -InputObject ([pscustomobject]@{restarted=$restarted; reason=$reason}) -Compress
 `)
 	return b.String()
+}
+
+// WinRTSwitchResult 是切换脚本的输出。失败时脚本同样输出 JSON（而不是靠
+// 退出码），调用方才能区分「停在准备阶段、热点分毫未动」和「已经停过热点」。
+type WinRTSwitchResult struct {
+	OK              bool   `json:"ok"`
+	Stage           string `json:"stage"` // preflight | stopping | starting | recovered | done
+	OriginalProfile string `json:"originalProfile"`
+	Error           string `json:"error"`
+}
+
+// NeedsHotspotRecovery 报告失败后是否还需要调用方把热点拉回来：
+//   - preflight：还没碰过热点，动它反而会制造新故障；
+//   - recovered：脚本已就地回滚成功，热点已经在原上游上跑着，再恢复等于白停一次；
+//   - 其余（stopping/starting/空）：可能已经停过，按最坏情况处理。
+//
+// 空 Stage 表示脚本没有输出（被超时杀掉/输出不可解析）。
+func (result WinRTSwitchResult) NeedsHotspotRecovery() bool {
+	switch result.Stage {
+	case "preflight", "recovered", "done":
+		return false
+	}
+	return true
 }
 
 // WinRTRestoreResult 是 BuildWinRTRestoreScript 输出的解析结果。
