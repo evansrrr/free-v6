@@ -35,12 +35,13 @@ type HealResult struct {
 //   - 还原失败：基线本身可能还是对的（外部改掉热点/共享配置导致的永久失败），
 //     原样留着，交回调用方继续当基线。
 //   - 基线缺失/损坏：没有可还原的东西，返回空结果。
-func HealLeftoverSnapshot(ctx context.Context, path string, restore, restoreHotspot RestoreFunc) HealResult {
+func HealLeftoverSnapshot(ctx context.Context, path string, restore RestoreFunc) HealResult {
 	old, err := LoadSnapshot(path)
 	switch {
 	case err == nil:
-		if old.StaleAt(time.Now()) {
-			return healStale(ctx, path, old, restoreHotspot)
+		now := time.Now()
+		if old.StaleAt(now) {
+			return healStale(ctx, path, old, now, restore)
 		}
 		if err := restore(ctx, old); err != nil {
 			return HealResult{
@@ -64,16 +65,17 @@ func HealLeftoverSnapshot(ctx context.Context, path string, restore, restoreHots
 // healStale 处理过期快照：DNS/网关只属于它被采集时的那个网络，不能套用；
 // Sharing/Hotspot 是本程序自己切出来的状态，跟换没换网络无关 —— 上次会话
 // 如果是开着热点共享被强杀，ICS 可能仍指向已经消失的 FreeV6TUN，必须继续
-// 按基线还原，否则热点共享会一直坏下去。
+// 按基线还原，否则热点共享会一直坏下去。Interfaces 清空后同一个还原入口
+// 自然只会走热点那一段，不会碰过期 DNS。
 //
 // 还原失败时把「只剩 Sharing/Hotspot」的基线交回调用方（Interfaces 已清空，
 // 任何后续还原都不会再碰过期 DNS）。
-func healStale(ctx context.Context, path string, old Snapshot, restoreHotspot RestoreFunc) HealResult {
+func healStale(ctx context.Context, path string, old Snapshot, now time.Time, restore RestoreFunc) HealResult {
 	residual := old
 	residual.Interfaces = nil
-	notice := staleNotice(old)
-	if restoreHotspot != nil {
-		if err := restoreHotspot(ctx, residual); err != nil {
+	notice := staleNotice(old, now)
+	if restore != nil {
+		if err := restore(ctx, residual); err != nil {
 			return HealResult{
 				Preserved: &residual,
 				Failed:    true,
@@ -85,13 +87,19 @@ func healStale(ctx context.Context, path string, old Snapshot, restoreHotspot Re
 	return HealResult{Warning: notice}
 }
 
-func staleNotice(snapshot Snapshot) string {
+func staleNotice(snapshot Snapshot, now time.Time) string {
 	const tail = "已跳过网卡 DNS 还原；若无法上网请重新连接一次网络"
-	if snapshot.CapturedAt.IsZero() {
+	switch {
+	case snapshot.CapturedAt.IsZero():
 		return "上次会话的网络快照没有时间戳（来路不明），" + tail
+	case snapshot.CapturedAt.After(now.Add(snapshotClockSkew)):
+		// 时间戳在「未来」：不是真的过期，是系统时钟被调整过，年龄不可信。
+		return fmt.Sprintf("上次会话的网络快照记录时间晚于当前系统时间（%s，系统时钟被调整过），%s",
+			snapshot.CapturedAt.Local().Format("2006-01-02 15:04"), tail)
+	default:
+		return fmt.Sprintf("上次会话的网络快照记录于 %s（已超过 %d 小时），%s",
+			snapshot.CapturedAt.Local().Format("2006-01-02 15:04"), int(SnapshotMaxAge.Hours()), tail)
 	}
-	return fmt.Sprintf("上次会话的网络快照记录于 %s（已超过 %d 小时），%s",
-		snapshot.CapturedAt.Local().Format("2006-01-02 15:04"), int(SnapshotMaxAge.Hours()), tail)
 }
 
 // AdoptBaseline 返回本次会话要落盘的基线：正常就是刚抓到的 fresh；自愈没能
@@ -107,6 +115,9 @@ func AdoptBaseline(fresh Snapshot, preserved *Snapshot) Snapshot {
 	baseline := *preserved
 	if len(baseline.Interfaces) == 0 {
 		baseline.Interfaces = fresh.Interfaces
+		// 接口基线换成了本次现状，时间戳必须跟着走：留着旧时间会让这份刚
+		// 抓的基线在下一次启动就被判成过期快照，等于白抓一次。
+		baseline.CapturedAt = fresh.CapturedAt
 	}
 	if len(baseline.Sharing) == 0 {
 		baseline.Sharing = fresh.Sharing

@@ -168,6 +168,14 @@ func sameServerSet(left, right []string) bool {
 	return true
 }
 
+// needsSharingOnlyRestore 报告快照是否需要「只按角色基线」补一次 ICS 还原：
+// 有 Sharing、却没有 Hotspot 元数据。这是旧版本在「ICS 已经在脚本里切完、
+// 元数据还没写回」时被强杀留下的形状 —— 不补这一步，那段共享角色会一直
+// 停在切换后的状态，指向已经消失的 FreeV6TUN。
+func needsSharingOnlyRestore(snapshot Snapshot) bool {
+	return snapshot.Hotspot == nil && len(snapshot.Sharing) > 0
+}
+
 // buildDNSRestoreCommand 按快照记录的 DNS 来源生成还原命令：
 //   - 静态：set source=static + 依次 add，保持原来的多地址顺序；
 //   - DHCP：一条 set source=dhcp，把接口交还给 DHCP（地址由租约提供）；

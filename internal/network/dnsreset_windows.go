@@ -12,13 +12,13 @@ import (
 )
 
 // ResetDNSToDHCP 把「自动获取 IP 却被写死了静态 DNS」的网卡交还给 DHCP，返回
-// 改动的接口名与失败详情。用来迁移被旧版本固化过 DNS 的机器：一次正常的
-// 启动→停止就把 DHCP 下发的地址写成了静态，当下无感，换网络后静态地址仍指向
-// 旧网段，表现是「Wi-Fi 已连接但打不开网页」，重启网卡也不恢复。
+// 改动的接口（按协议记录）与失败详情。用来迁移被旧版本固化过 DNS 的机器：
+// 一次正常的启动→停止就把 DHCP 下发的地址写成了静态，当下无感，换网络后静态
+// 地址仍指向旧网段，表现是「Wi-Fi 已连接但打不开网页」，重启网卡也不恢复。
 //
 // 只动 dnsResetCandidate 认定的网卡（见 dnsreset.go），且必须由用户显式触发：
 // 它确实会清掉「DHCP 网卡上手动设置的 DNS」，所以不在启动流程里自动跑。
-func ResetDNSToDHCP(ctx context.Context) (changed []string, failures []string) {
+func ResetDNSToDHCP(ctx context.Context) (changed []DNSResetChange, failures []string) {
 	adapters, err := getAdaptersAddresses()
 	if err != nil {
 		return nil, []string{err.Error()}
@@ -29,7 +29,8 @@ func ResetDNSToDHCP(ctx context.Context) (changed []string, failures []string) {
 		if alias == "" || adapterGUID == "" {
 			continue
 		}
-		reset := false
+		var change DNSResetChange
+		change.Alias = alias
 		for _, protocol := range []string{protocolIPv4, protocolIPv6} {
 			if !adapterDNSFrozenByOldBug(adapterGUID, protocol) {
 				continue
@@ -40,10 +41,14 @@ func ResetDNSToDHCP(ctx context.Context) (changed []string, failures []string) {
 					alias, protocol, runErr, strings.TrimSpace(string(output))))
 				continue
 			}
-			reset = true
+			if protocol == protocolIPv6 {
+				change.IPv6 = true
+			} else {
+				change.IPv4 = true
+			}
 		}
-		if reset {
-			changed = append(changed, alias)
+		if change.IPv4 || change.IPv6 {
+			changed = append(changed, change)
 		}
 	}
 	return changed, failures

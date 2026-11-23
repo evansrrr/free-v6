@@ -154,7 +154,7 @@ func startMihomo(args []string) error {
 	// 与 helper 同一套残留自愈：上次会话的快照先还原，还原失败时它必须继续
 	// 当基线 —— 否则本次现状会把没还原掉的切换状态固化下来。
 	healCtx, healCancel := context.WithTimeout(context.Background(), 120*time.Second)
-	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPathValue, network.RestoreSnapshot, network.RestoreHotspot)
+	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPathValue, network.RestoreLeftoverSnapshot)
 	healCancel()
 	if leftover.Warning != "" {
 		fmt.Fprintln(os.Stderr, "freev6:", leftover.Warning)

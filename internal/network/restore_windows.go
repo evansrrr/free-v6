@@ -43,6 +43,28 @@ func RestoreHotspot(ctx context.Context, snapshot Snapshot) error {
 	return nil
 }
 
+// RestoreLeftoverSnapshot 是启动前残留自愈用的还原入口：在 RestoreSnapshot
+// 之上补一种历史形状（见 needsSharingOnlyRestore）—— 上次进程死在「ICS 已
+// 切完、元数据还没写回」的窗口里时，快照只有 Sharing，没有 Hotspot。
+//
+// 只给自愈用，不给停止用：正常停止时没有元数据就说明这次会话没切过，不该为
+// 一个空操作多起一个 PowerShell（那是停止时延的主因之一）。
+func RestoreLeftoverSnapshot(ctx context.Context, snapshot Snapshot) error {
+	err := RestoreHotspot(ctx, snapshot)
+	if !needsSharingOnlyRestore(snapshot) {
+		return err
+	}
+	icsErr := RestoreICSSharing(ctx, snapshot)
+	switch {
+	case err == nil:
+		return icsErr
+	case icsErr == nil:
+		return err
+	default:
+		return fmt.Errorf("%v; %w", err, icsErr)
+	}
+}
+
 // RestoreDNS 还原各接口 DNS。不依赖 TUN 适配器，放在 mihomo 退出之后执行
 // 也安全；接口间并行、接口内保序（set dnsservers → add dnsservers）。失败
 // 只记警告不阻断：网卡改名/删除、旧版 GBK 乱码快照都会让 netsh 找不到

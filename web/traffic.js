@@ -23,6 +23,22 @@
     return Date.now();
   }
 
+  // Absolute counter taken from a status payload. null/undefined/'' mean "this
+  // frame carries no counters", not zero: Number(null) is 0, which would look
+  // like the core restarted from zero and produce a bogus reset (or a spike of
+  // the whole previous total). Anything non-numeric becomes NaN so observe()
+  // can reject it as invalid input.
+  function toCounter(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+    // Only non-empty strings are worth coercing: Number([]) and Number('') are
+    // 0, and 0 is a perfectly valid counter, so coercion would hide bad data.
+    if (typeof value === 'string' && value.trim() !== '') {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : NaN;
+    }
+    return NaN;
+  }
+
   function createMeter(options) {
     const opts = options || {};
     // Monotonic clock: a wall-clock adjustment must not turn a normal interval
@@ -97,5 +113,5 @@
     };
   }
 
-  return { createMeter };
+  return { createMeter, toCounter };
 });

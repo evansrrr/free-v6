@@ -15,11 +15,10 @@ import (
 // snapshot: unexpected end of JSON input），用户只能手动删文件自救。
 func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
 	restoreOK := func(context.Context, Snapshot) error { return nil }
-	hotspotOK := func(context.Context, Snapshot) error { return nil }
 
 	t.Run("missing", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
-		got := HealLeftoverSnapshot(context.Background(), path, restoreOK, hotspotOK)
+		got := HealLeftoverSnapshot(context.Background(), path, restoreOK)
 		if got.Preserved != nil || got.Warning != "" || got.Failed {
 			t.Fatalf("missing snapshot must be a no-op, got %+v", got)
 		}
@@ -33,7 +32,7 @@ func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
 		if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got := HealLeftoverSnapshot(context.Background(), path, restoreOK, hotspotOK)
+		got := HealLeftoverSnapshot(context.Background(), path, restoreOK)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("corrupt snapshot must be removed, stat err = %v", err)
 		}
@@ -48,11 +47,10 @@ func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
 			t.Fatal(err)
 		}
 		called := false
-		restore := func(context.Context, Snapshot) error {
+		HealLeftoverSnapshot(context.Background(), path, func(context.Context, Snapshot) error {
 			called = true
 			return nil
-		}
-		HealLeftoverSnapshot(context.Background(), path, restore, hotspotOK)
+		})
 		if !called {
 			t.Fatal("a fresh snapshot must be restored before it is dropped")
 		}
@@ -72,7 +70,7 @@ func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
 		}
 		got := HealLeftoverSnapshot(context.Background(), path, func(context.Context, Snapshot) error {
 			return errors.New("ics restore failed")
-		}, hotspotOK)
+		})
 		if got.Preserved == nil {
 			t.Fatal("a failed restore must hand the old baseline back to the caller")
 		}
@@ -92,13 +90,11 @@ func TestHealLeftoverSnapshotNeverBlocksStart(t *testing.T) {
 // 热点共享被强杀，ICS 可能仍指向已经消失的 FreeV6TUN，必须继续按基线还原，
 // 否则热点共享会一直坏下去。还原失败时保留的就只剩这两块（不带过期 DNS）。
 func TestHealStaleSnapshotKeepsHotspotBaseline(t *testing.T) {
-	sharing := []SharingSnapshot{{Name: "Wi-Fi", Guid: "{guid}", Enabled: true, Kind: "public"}}
-	meta := &HotspotMeta{Applied: true, Path: "ics"}
 	stale := Snapshot{
 		CapturedAt: time.Now().Add(-SnapshotMaxAge - time.Hour),
 		Interfaces: []InterfaceSnapshot{{Alias: "Wi-Fi", IPv4DNSServers: []string{"202.204.52.89"}, IPv4DNSSource: DNSSourceStatic}},
-		Sharing:    sharing,
-		Hotspot:    meta,
+		Sharing:    []SharingSnapshot{{Name: "Wi-Fi", Guid: "{guid}", Enabled: true, Kind: "public"}},
+		Hotspot:    &HotspotMeta{Applied: true, Path: "ics"},
 	}
 
 	writeStale := func(t *testing.T) string {
@@ -110,24 +106,22 @@ func TestHealStaleSnapshotKeepsHotspotBaseline(t *testing.T) {
 		return path
 	}
 
-	t.Run("dns skipped, hotspot restored", func(t *testing.T) {
+	// 还原入口是带 Sharing 兜底的 RestoreLeftoverSnapshot：同一个函数既要处理
+	// 「有 Hotspot 元数据」，也要处理「只有 Sharing」的残本。这里校验交给它的
+	// 快照形状：DNS 已摘掉，Sharing/Hotspot 原样保留。
+	t.Run("stale snapshot is restored without its DNS", func(t *testing.T) {
 		path := writeStale(t)
 		restored := false
-		got := HealLeftoverSnapshot(context.Background(), path,
-			func(context.Context, Snapshot) error {
-				t.Fatal("a stale baseline must never be applied to interfaces")
-				return nil
-			},
-			func(_ context.Context, snapshot Snapshot) error {
-				restored = true
-				if len(snapshot.Interfaces) != 0 {
-					t.Fatalf("stale DNS must be stripped before the hotspot restore, got %+v", snapshot.Interfaces)
-				}
-				if len(snapshot.Sharing) != 1 || snapshot.Hotspot == nil {
-					t.Fatalf("sharing/hotspot baseline must survive: %+v", snapshot)
-				}
-				return nil
-			})
+		got := HealLeftoverSnapshot(context.Background(), path, func(_ context.Context, snapshot Snapshot) error {
+			restored = true
+			if len(snapshot.Interfaces) != 0 {
+				t.Fatalf("stale DNS must be stripped before the restore, got %+v", snapshot.Interfaces)
+			}
+			if len(snapshot.Sharing) != 1 || snapshot.Hotspot == nil {
+				t.Fatalf("sharing/hotspot baseline must survive: %+v", snapshot)
+			}
+			return nil
+		})
 		if !restored {
 			t.Fatal("hotspot state from the stale snapshot must still be restored")
 		}
@@ -141,9 +135,9 @@ func TestHealStaleSnapshotKeepsHotspotBaseline(t *testing.T) {
 
 	t.Run("hotspot restore failure preserves residual baseline", func(t *testing.T) {
 		path := writeStale(t)
-		got := HealLeftoverSnapshot(context.Background(), path,
-			func(context.Context, Snapshot) error { return nil },
-			func(context.Context, Snapshot) error { return errors.New("ics restore failed") })
+		got := HealLeftoverSnapshot(context.Background(), path, func(context.Context, Snapshot) error {
+			return errors.New("ics restore failed")
+		})
 		if got.Preserved == nil || !got.Failed {
 			t.Fatalf("failed hotspot restore must preserve the residual baseline, got %+v", got)
 		}
@@ -165,12 +159,13 @@ func TestHealSnapshotWithoutTimestamp(t *testing.T) {
 	if err := SaveSnapshot(path, Snapshot{Interfaces: []InterfaceSnapshot{{Alias: "Wi-Fi", IPv4DNSServers: []string{"192.0.2.53"}, IPv4DNSSource: DNSSourceDHCP}}}); err != nil {
 		t.Fatal(err)
 	}
-	got := HealLeftoverSnapshot(context.Background(), path,
-		func(context.Context, Snapshot) error {
-			t.Fatal("a snapshot without a timestamp must not be applied")
-			return nil
-		},
-		func(context.Context, Snapshot) error { return nil })
+	// 过期只跳过网卡那一段：交给还原入口的快照必须已经没有 Interfaces。
+	got := HealLeftoverSnapshot(context.Background(), path, func(_ context.Context, snapshot Snapshot) error {
+		if len(snapshot.Interfaces) != 0 {
+			t.Fatalf("a snapshot without a timestamp must not touch DNS, got %+v", snapshot.Interfaces)
+		}
+		return nil
+	})
 	if got.Warning == "" || got.Failed {
 		t.Fatalf("missing timestamp must be reported as a notice, got %+v", got)
 	}
@@ -179,7 +174,29 @@ func TestHealSnapshotWithoutTimestamp(t *testing.T) {
 	}
 }
 
-// 基线选择：自愈没能完整还原时以旧基线为准，缺的那一维用本次现状补齐。
+// 时钟被回拨时快照会显得「来自未来」。文案要说明真正的原因，不能笼统说
+// 「已超过 24 小时」—— 那会让排查方向从一开始就错。
+func TestHealSnapshotFromTheFuture(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "network-snapshot.json")
+	if err := SaveSnapshot(path, Snapshot{CapturedAt: time.Now().Add(3 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	got := HealLeftoverSnapshot(context.Background(), path, func(_ context.Context, snapshot Snapshot) error {
+		if len(snapshot.Interfaces) != 0 {
+			t.Fatalf("a snapshot from the future must not touch DNS, got %+v", snapshot.Interfaces)
+		}
+		return nil
+	})
+	if got.Warning == "" || got.Failed {
+		t.Fatalf("future timestamp must be reported as a notice, got %+v", got)
+	}
+	if !strings.Contains(got.Warning, "系统时钟") {
+		t.Fatalf("warning %q must blame the clock, not the age", got.Warning)
+	}
+}
+
+// 基线选择：自愈没能完整还原时以旧基线为准，缺的那一维用本次现状补齐 ——
+// 补上 Interfaces 时时间戳也要跟着换，否则下次启动立刻判过期。
 func TestAdoptBaseline(t *testing.T) {
 	fresh := Snapshot{
 		CapturedAt: time.Now(),
@@ -203,13 +220,19 @@ func TestAdoptBaseline(t *testing.T) {
 		t.Fatalf("missing dimensions must be filled from the fresh capture: %+v", got)
 	}
 
-	// 过期快照的 Interfaces 已被清空：DNS 用本次现状。
+	// 过期快照的 Interfaces 已被清空：DNS 用本次现状，时间戳一并换成本次的。
 	residual := Snapshot{CapturedAt: time.Now().Add(-48 * time.Hour), Sharing: old.Sharing}
 	got = AdoptBaseline(fresh, &residual)
 	if len(got.Interfaces) != 1 || got.Interfaces[0].Alias != "Wi-Fi" {
 		t.Fatalf("a residual baseline must take interfaces from the fresh capture: %+v", got)
 	}
+	if !got.CapturedAt.Equal(fresh.CapturedAt) {
+		t.Fatalf("adopted interfaces must carry the fresh timestamp, got %v", got.CapturedAt)
+	}
 	if len(got.Sharing) != 1 {
 		t.Fatalf("sharing must be kept from the residual baseline: %+v", got)
+	}
+	if got.StaleAt(time.Now()) {
+		t.Fatal("a baseline with freshly captured interfaces must not be stale")
 	}
 }

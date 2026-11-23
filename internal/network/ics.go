@@ -32,10 +32,15 @@ type SharingSnapshot struct {
 // 停止免流时据此还原（/status 轮询也用它计算 active）。
 type HotspotMeta struct {
 	Applied         bool   `json:"applied"`
-	Path            string `json:"path"` // "ics" | "winrt"
+	Path            string `json:"path"` // "ics" | "winrt" | HotspotPathPending
 	PrivateIP       string `json:"privateIP,omitempty"`
 	OriginalProfile string `json:"originalProfile,omitempty"` // winrt 路径：切换前的上游连接配置
 }
+
+// HotspotPathPending 是「已经准备切换、还没落定」的占位路径。ICS 角色是在
+// PowerShell 脚本里改的，进程死在中途没有任何机会写回真实元数据；快照里先
+// 留下这个标记，下次启动的残留自愈才知道要按 Sharing 把角色还原回去。
+const HotspotPathPending = "pending"
 
 // HotspotStatus 是 DetectHotspot 的探测结果。
 type HotspotStatus struct {

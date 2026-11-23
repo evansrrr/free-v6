@@ -8,6 +8,10 @@ func RestoreSnapshot(context.Context, Snapshot) error {
 	return ErrWindowsOnly
 }
 
+func RestoreLeftoverSnapshot(context.Context, Snapshot) error {
+	return ErrWindowsOnly
+}
+
 func RestoreHotspot(context.Context, Snapshot) error {
 	return ErrWindowsOnly
 }

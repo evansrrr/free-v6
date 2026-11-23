@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createMeter } = require('../web/traffic.js');
+const { createMeter, toCounter } = require('../web/traffic.js');
 
 // Controllable monotonic clock; the meter must never read wall time itself.
 function clocked(start = 1000) {
@@ -114,4 +114,37 @@ test('reset() returns the meter to the unbaselined state', () => {
   meter.reset();
   assert.equal(meter.ready, false);
   assert.deepEqual(meter.observe(99, 999), { kind: 'first' });
+});
+
+// A status frame without counters is "no data", not zero. Number(null) === 0
+// used to look like the core restarting from zero, which fabricated a reset
+// (or a spike of the whole previous total on the next frame).
+test('missing counters are invalid, not zero', () => {
+  for (const value of [null, undefined, '']) {
+    assert.ok(Number.isNaN(toCounter(value)), `${String(value)} must not become a counter`);
+  }
+  for (const value of ['not a number', {}, [], NaN, Infinity]) {
+    assert.ok(Number.isNaN(toCounter(value)), `${String(value)} must not become a counter`);
+  }
+  assert.equal(toCounter(0), 0);
+  assert.equal(toCounter(1024), 1024);
+  assert.equal(toCounter('2048'), 2048);
+});
+
+test('an invalid counter leaves the baseline untouched', () => {
+  const { meter, advance } = clocked();
+  meter.observe(0, 0);
+  advance(1000);
+  meter.observe(1024, 102400);
+  advance(1000);
+  assert.deepEqual(meter.observe(toCounter(null), toCounter(undefined)), { kind: 'invalid' });
+  advance(1000);
+  assert.deepEqual(meter.observe(2048, 204800), {
+    kind: 'sample',
+    deltaUp: 1024,
+    deltaDown: 102400,
+    upRate: 512,
+    downRate: 51200,
+    elapsedMs: 2000,
+  });
 });

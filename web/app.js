@@ -106,6 +106,9 @@ const TRAFFIC_POINTS = 60;
 // be unit-tested without a DOM. A stale cached index.html without the script
 // must not blank the whole UI; traffic simply stays at zero.
 const trafficMeter = typeof FreeV6Traffic !== 'undefined' ? FreeV6Traffic.createMeter() : null;
+// 缺字段（null/undefined）不是 0：那表示这一帧没有计数器，当成 0 会被判成
+// 「内核重启、计数归零」，凭空造一次重置/暴涨。toCounter 在 traffic.js 里。
+const trafficCounter = typeof FreeV6Traffic !== 'undefined' ? FreeV6Traffic.toCounter : (v) => Number(v);
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -809,8 +812,12 @@ function closeResetDialog() {
 }
 
 function openDNSResetDialog() {
+  const running = Boolean(state.proxyRunning);
   const hint = $('#dnsResetStopHint');
-  if (hint) hint.hidden = !state.proxyRunning;
+  if (hint) hint.hidden = !running;
+  // 免流运行中直接把确认按钮禁掉：服务端会 409，没必要让用户点出一个错误。
+  const confirm = $('#dnsResetDialogConfirm');
+  if (confirm) confirm.disabled = running;
   $('#dnsResetDialogScrim')?.classList.add('open');
 }
 
@@ -822,9 +829,16 @@ function closeDNSResetDialog() {
 // 值相同所以当下无感，换网络后表现为「连上了但打不开网页」。只处理自动获取
 // IP 却写死了 DNS 的网卡，且必须由用户确认后才执行（会清掉手动设置的 DNS）。
 async function resetNetworkDNS() {
+  if (state.proxyRunning) {
+    addLog('免流正在运行，请先停止免流再修复网卡 DNS', true);
+    return;
+  }
   try {
     const res = await api('/network/dns-reset', { method: 'POST' });
-    const changed = Array.isArray(res?.changed) ? res.changed : [];
+    // 每个改动带协议信息（{alias, ipv4, ipv6}）；旧后端可能只回字符串。
+    const changed = (Array.isArray(res?.changed) ? res.changed : [])
+      .map((item) => (typeof item === 'string' ? item : item?.alias))
+      .filter(Boolean);
     const failed = Array.isArray(res?.failed) ? res.failed : [];
     if (changed.length > 0) addLog(`已将 ${changed.length} 个网卡的 DNS 恢复为自动：${changed.join('、')}`);
     if (failed.length > 0) {
@@ -2049,7 +2063,7 @@ async function pollTraffic() {
 
     // Malformed/unsupported snapshots are handled by sampleTrafficTotals so
     // repeated failures can surface a single log line.
-    sampleTrafficTotals(Number(data.uploadTotal), Number(data.downloadTotal));
+    sampleTrafficTotals(trafficCounter(data.uploadTotal), trafficCounter(data.downloadTotal));
 
     // Update stats
     updateStatsRing();

@@ -230,23 +230,52 @@ func TestPruneChangedDHCPDNS(t *testing.T) {
 
 // 修复网卡 DNS 之后，残留基线里对应接口的 DNS 还原点必须一起清掉，否则下次
 // 启动的自愈会把静态地址写回去；Sharing/Hotspot 仍要保留给热点还原用。
+// 只摘真的改过的那一组：只修了 IPv4 的接口不该丢掉 IPv6 还原点。
 func TestDropDNSServers(t *testing.T) {
 	snapshot := Snapshot{
 		Interfaces: []InterfaceSnapshot{
-			{Alias: "WiFi", IPv4DNSServers: []string{"202.204.52.89"}, IPv4DNSSource: DNSSourceStatic},
-			{Alias: "Ethernet", IPv4DNSServers: []string{"198.51.100.1"}, IPv4DNSSource: DNSSourceStatic, IPv6DNSServers: []string{"2001:db8::1"}, IPv6DNSSource: DNSSourceStatic},
+			{Alias: "WiFi", IPv4DNSServers: []string{"202.204.52.89"}, IPv4DNSSource: DNSSourceStatic,
+				IPv6DNSServers: []string{"2001:db8::1"}, IPv6DNSSource: DNSSourceStatic},
+			{Alias: "Ethernet", IPv4DNSServers: []string{"198.51.100.1"}, IPv4DNSSource: DNSSourceStatic},
 		},
 		Sharing: []SharingSnapshot{{Name: "WiFi", Enabled: true, Kind: "public"}},
 		Hotspot: &HotspotMeta{Applied: true, Path: "ics"},
 	}
-	snapshot.DropDNSServers([]string{"wifi"})
+	snapshot.DropDNSServers([]DNSResetChange{{Alias: "wifi", IPv4: true}})
 	if len(snapshot.Interfaces[0].IPv4DNSServers) != 0 || snapshot.Interfaces[0].IPv4DNSSource != DNSSourceUnknown {
-		t.Fatalf("target interface DNS must be dropped: %+v", snapshot.Interfaces[0])
+		t.Fatalf("repaired IPv4 DNS must be dropped: %+v", snapshot.Interfaces[0])
 	}
-	if len(snapshot.Interfaces[1].IPv4DNSServers) != 1 || len(snapshot.Interfaces[1].IPv6DNSServers) != 1 {
+	if len(snapshot.Interfaces[0].IPv6DNSServers) != 1 || snapshot.Interfaces[0].IPv6DNSSource != DNSSourceStatic {
+		t.Fatalf("an untouched protocol must keep its restore point: %+v", snapshot.Interfaces[0])
+	}
+	if len(snapshot.Interfaces[1].IPv4DNSServers) != 1 {
 		t.Fatalf("other interfaces must keep their restore points: %+v", snapshot.Interfaces[1])
 	}
 	if len(snapshot.Sharing) != 1 || snapshot.Hotspot == nil {
 		t.Fatalf("sharing/hotspot baseline must survive: %+v", snapshot)
+	}
+}
+
+// 有 Sharing、没有 Hotspot 元数据 = 上次死在「ICS 已切完、元数据没写回」的
+// 窗口里。这种快照必须补一次角色还原，否则热点共享会一直指向已消失的 TUN。
+// 有元数据（含 pending 占位）或根本没有 Sharing 时不该多跑一次外部进程。
+func TestNeedsSharingOnlyRestore(t *testing.T) {
+	sharing := []SharingSnapshot{{Name: "Wi-Fi", Enabled: true, Kind: "public"}}
+	cases := map[string]struct {
+		snapshot Snapshot
+		want     bool
+	}{
+		"sharing without meta":  {Snapshot{Sharing: sharing}, true},
+		"sharing with ics meta": {Snapshot{Sharing: sharing, Hotspot: &HotspotMeta{Applied: true, Path: "ics"}}, false},
+		"sharing with pending":  {Snapshot{Sharing: sharing, Hotspot: &HotspotMeta{Applied: true, Path: HotspotPathPending}}, false},
+		"no sharing, no meta":   {Snapshot{}, false},
+		"meta without sharing":  {Snapshot{Hotspot: &HotspotMeta{Applied: true, Path: "winrt"}}, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := needsSharingOnlyRestore(c.snapshot); got != c.want {
+				t.Fatalf("needsSharingOnlyRestore = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

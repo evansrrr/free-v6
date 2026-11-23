@@ -744,7 +744,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// 残留自愈：走到这里说明端口检查已通过（mihomo 必未在跑）。
 	healCtx, healCancel := context.WithTimeout(context.Background(), icsOpTimeout)
-	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPath, network.RestoreSnapshot, network.RestoreHotspot)
+	leftover := network.HealLeftoverSnapshot(healCtx, snapshotPath, network.RestoreLeftoverSnapshot)
 	healCancel()
 	if leftover.Warning != "" {
 		fmt.Fprintf(os.Stderr, "helper: %s\n", leftover.Warning)
@@ -857,6 +857,10 @@ func (h *helper) resetNetworkDNS(writer http.ResponseWriter, request *http.Reque
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	// 与启动/停止互斥：否则「检查到没在跑」与「启动写入 pid」之间存在窗口，
+	// 刚修好的 DNS 会被随后的基线采集与还原覆盖掉。
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
 	if _, running, err := mihomo.Status(pidPath); err == nil && running {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "免流正在运行，请先停止免流再修复网卡 DNS"})
@@ -881,12 +885,12 @@ func (h *helper) resetNetworkDNS(writer http.ResponseWriter, request *http.Reque
 // patchLeftoverDNSBaseline 从残留快照里摘掉刚修好的接口 DNS：否则下次启动的
 // 残留自愈会按旧基线把静态地址写回去，用户刚做的修复当场失效。热点/共享
 // 基线（Sharing/Hotspot）保持不动 —— 它们还是要靠这份快照还原。
-func patchLeftoverDNSBaseline(snapshotPath string, aliases []string) {
+func patchLeftoverDNSBaseline(snapshotPath string, changed []network.DNSResetChange) {
 	snapshot, err := network.LoadSnapshot(snapshotPath)
 	if err != nil {
 		return // 没有残留快照（正常情况）或读不出来：都不影响本次修复
 	}
-	snapshot.DropDNSServers(aliases)
+	snapshot.DropDNSServers(changed)
 	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
 		fmt.Fprintf(os.Stderr, "helper: shrink leftover network snapshot after DNS reset: %v\n", err)
 	}
@@ -919,8 +923,19 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 	}
 	switchCtx, switchCancel := context.WithTimeout(context.Background(), icsOpTimeout)
 	defer switchCancel()
+	// 先落「准备切换」的占位元数据，再动 ICS：角色是在 PowerShell 脚本里改的，
+	// 脚本执行中途被强杀时进程没有任何机会写回元数据，快照就成了「有 Sharing、
+	// 没有 Hotspot」—— 那种形状要么被自愈当成无事发生（热点共享一直坏下去），
+	// 要么只能靠事后猜。留痕这一步把窗口封死。
+	baseline.Hotspot = &network.HotspotMeta{Applied: true, Path: network.HotspotPathPending}
+	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
+		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
+	}
 	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
 	if switchErr != nil {
+		// 切换没成（脚本内部已回滚）：撤掉占位标记，别让下次停止白跑一次还原。
+		baseline.Hotspot = nil
+		_ = network.SaveSnapshot(snapshotPath, baseline)
 		if rollbackErr := network.RestoreICSSharing(switchCtx, snapshot); rollbackErr != nil {
 			return map[string]any{"applied": false, "reason": "failed",
 				"error": fmt.Sprintf("%v；回滚失败: %v", switchErr, rollbackErr)}
