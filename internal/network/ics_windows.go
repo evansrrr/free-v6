@@ -63,6 +63,21 @@ func SwitchWinRT(ctx context.Context) (string, error) {
 	return result.OriginalProfile, nil
 }
 
+// ProbeWinRTOriginalProfile 只读探测热点当前的上游连接名。探测失败返回空串，
+// 调用方据此放弃写「winrt 待还原」标记 —— 记成 winrt 却没有原上游，下次启动
+// 只会把热点停掉、拉不起来，比不记更糟。
+func ProbeWinRTOriginalProfile(ctx context.Context) string {
+	output, err := runPowerShell(ctx, BuildWinRTProfileProbeScript())
+	if err != nil {
+		return ""
+	}
+	var probe WinRTProfileProbe
+	if err := jsonUnmarshalFlexible(output, &probe); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(probe.OriginalProfile)
+}
+
 // RestoreICSSharing 把 ICS 共享状态还原到基线；单连接失败会汇总在错误里。
 func RestoreICSSharing(ctx context.Context, snapshot Snapshot) error {
 	script := BuildICSRestoreScript(snapshot.Sharing, TunDeviceName)

@@ -30,3 +30,8 @@ func RestoreICSSharing(context.Context, Snapshot) error {
 func RestoreWinRT(context.Context, string) error {
 	return ErrWindowsOnly
 }
+
+// ProbeWinRTOriginalProfile 没有 PowerShell 可用，探测不到上游。
+func ProbeWinRTOriginalProfile(context.Context) string {
+	return ""
+}

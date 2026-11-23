@@ -261,3 +261,25 @@ func TestJSONUnmarshalFlexible(t *testing.T) {
 		t.Fatal("empty output must error")
 	}
 }
+
+// WinRT 原上游探测脚本必须只读：它跑在「停热点」之前，任何 Stop/Start 调用
+// 都会把「抢在停机前留痕」变成一次真实故障。同时它要和切换脚本共用同一行
+// 「物理网卡」筛选，否则探测到的上游和实际绑定的上游会对不上。
+func TestBuildWinRTProfileProbeScript(t *testing.T) {
+	script := BuildWinRTProfileProbeScript()
+	for _, forbidden := range []string{"StopTetheringAsync", "StartTetheringAsync", "EnableSharing", "DisableSharing"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("probe script must stay read-only, found %q", forbidden)
+		}
+	}
+	for _, expected := range []string{"originalProfile", "Get-NetConnectionProfile", "Get-NetAdapter"} {
+		if !strings.Contains(script, expected) {
+			t.Errorf("probe script missing %q", expected)
+		}
+	}
+	switchScript := BuildWinRTSwitchScript()
+	filter := strings.SplitN(winRTPhysicalAdapter, "\n", 2)[0]
+	if !strings.Contains(script, filter) || !strings.Contains(switchScript, filter) {
+		t.Fatal("probe and switch scripts must share the physical-adapter selection")
+	}
+}

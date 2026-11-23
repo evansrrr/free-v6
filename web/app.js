@@ -106,9 +106,18 @@ const TRAFFIC_POINTS = 60;
 // be unit-tested without a DOM. A stale cached index.html without the script
 // must not blank the whole UI; traffic simply stays at zero.
 const trafficMeter = typeof FreeV6Traffic !== 'undefined' ? FreeV6Traffic.createMeter() : null;
-// 缺字段（null/undefined）不是 0：那表示这一帧没有计数器，当成 0 会被判成
-// 「内核重启、计数归零」，凭空造一次重置/暴涨。toCounter 在 traffic.js 里。
-const trafficCounter = typeof FreeV6Traffic !== 'undefined' ? FreeV6Traffic.toCounter : (v) => Number(v);
+// 缺字段（null/undefined/''）不是 0：那表示这一帧没有计数器，当成 0 会被判成
+// 「内核重启、计数归零」，凭空造一次重置/暴涨。判空就放在这里，转换交给
+// traffic.js；浏览器缓存了旧版 traffic.js（没有 toCounter）时走 Number 兜底，
+// 不能让变量变成 undefined —— 调用抛的 TypeError 会被轮询的 catch 吞掉，流量静默归零。
+function trafficCounter(value) {
+  if (value === null || value === undefined || value === '') return NaN;
+  if (typeof FreeV6Traffic !== 'undefined' && typeof FreeV6Traffic.toCounter === 'function') {
+    return FreeV6Traffic.toCounter(value);
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : NaN;
+}
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];

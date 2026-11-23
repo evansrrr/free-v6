@@ -931,7 +931,10 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		return map[string]any{"applied": false, "reason": "failed", "error": "保存热点共享状态: " + err.Error()}
 	}
-	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot)
+	meta, switchErr := switchHotspotTopology(switchCtx, status, snapshot, func(pending network.HotspotMeta) error {
+		baseline.Hotspot = &pending
+		return network.SaveSnapshot(snapshotPath, baseline)
+	})
 	if switchErr != nil {
 		// 切换没成（脚本内部已回滚）：撤掉占位标记，别让下次停止白跑一次还原。
 		baseline.Hotspot = nil
@@ -958,7 +961,12 @@ func applyHotspotShare(snapshot network.Snapshot, baseline network.Snapshot, sna
 
 // switchHotspotTopology 路径选择：识别到热点私有侧网卡 → 经典 ICS 切换；
 // 否则（新 WDI 驱动无独立虚拟适配器）或经典路径失败 → WinRT 重绑兜底。
-func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot) (*network.HotspotMeta, error) {
+//
+// persistPending 在停掉热点之前被调用，用来把「原上游」写进快照：tethering 的
+// 停与重开在同一个脚本里，进程被杀在中间时热点会停在关闭状态，而脚本的
+// originalProfile 要跑完才输出 —— 不先落盘，下次启动就没有东西可还原。
+func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, snapshot network.Snapshot,
+	persistPending func(network.HotspotMeta) error) (*network.HotspotMeta, error) {
 	var icsErr error
 	if status.PrivateAlias != "" {
 		if _, err := network.SwitchICS(ctx, status.PrivateAlias); err == nil {
@@ -971,12 +979,31 @@ func switchHotspotTopology(ctx context.Context, status network.HotspotStatus, sn
 			}
 		}
 	}
+	// 探测不到原上游就不写 winrt 标记：记为 winrt 却没有上游，还原时只会把
+	// 热点停掉。保持「pending」占位（只还原 ICS 角色）。
+	probedProfile := ""
+	if persistPending != nil {
+		probedProfile = network.ProbeWinRTOriginalProfile(ctx)
+		if probedProfile != "" {
+			if err := persistPending(network.HotspotMeta{
+				Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: probedProfile,
+			}); err != nil {
+				return nil, fmt.Errorf("保存热点共享原上游: %w", err)
+			}
+		}
+	}
 	originalProfile, err := network.SwitchWinRT(ctx)
 	if err != nil {
 		if icsErr != nil {
 			return nil, fmt.Errorf("ics: %v; winrt: %w", icsErr, err)
 		}
 		return nil, err
+	}
+	// 切换脚本按「网卡显示名 == 连接配置名」找原上游，两者不同的机器（本机
+	// 就是：WiFi / USTB-Student 2）会返回空。用探测值兜底，否则停止时热点
+	// 拉不回来（reason=no-original-profile）。
+	if originalProfile == "" {
+		originalProfile = probedProfile
 	}
 	return &network.HotspotMeta{Applied: true, Path: "winrt", PrivateIP: status.PrivateIP, OriginalProfile: originalProfile}, nil
 }

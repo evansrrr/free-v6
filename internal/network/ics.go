@@ -237,6 +237,32 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	return b.String()
 }
 
+// winRTPhysicalAdapter 定位「当前在用的物理网卡」：热点上游就是它。连接配置名
+// 与网卡显示名经常不同（"WiFi" vs "USTB-Student 2"），所以拿到网卡之后还要再
+// 查一次连接配置；切换脚本与探测脚本共用这一行，避免两处判定漂移。
+const winRTPhysicalAdapter = `$wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
+`
+
+// BuildWinRTProfileProbeScript 只读探测：返回热点当前绑定的上游连接名。
+//
+// 用途是抢在「停热点」之前把它写进快照：tethering 的停与重开在同一个脚本里，
+// 进程被杀在中间时热点会停在关闭状态，而脚本的 originalProfile 要跑完才输出。
+// 先探一次、先落盘，下次启动才拉得回来。
+//
+// 用 Get-NetConnectionProfile 而不是在 GetConnectionProfiles() 里按网卡名匹配：
+// 后者的 ProfileName 与网卡显示名在不少机器上对不上，会探出空值。
+func BuildWinRTProfileProbeScript() string {
+	return psHeader + `
+$ErrorActionPreference='Stop'
+` + winRTPhysicalAdapter + `$orig = ''
+if ($null -ne $wlan) {
+  $cp = Get-NetConnectionProfile -InterfaceAlias $wlan.Name -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -ne $cp) { $orig = [string]$cp.Name }
+}
+ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
+`
+}
+
 // BuildWinRTSwitchScript 构造新 WDI 兜底路径：停掉现有 tethering，
 // 改绑到 FreeV6TUN 连接配置重新启动热点。切换前记录原上游（物理 WLAN），
 // 新上游启动失败时在脚本内回滚重启原上游，回滚结果写进错误消息。
@@ -295,8 +321,7 @@ function Get-HeatLabel {
   return ($st + '，' + $g)
 }
 # 1) 任何停止动作之前先定位原上游与 TUN 连接：找不到就原地失败，热点不动。
-$wlan = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notmatch 'Wi-Fi Direct|Virtual|Loopback' } | Select-Object -First 1
-$orig = ''
+` + winRTPhysicalAdapter + `$orig = ''
 if ($null -ne $wlan) { foreach ($p in $profiles) { if ($p.ProfileName -eq $wlan.Name) { $orig = $p.ProfileName; break } } }
 $tunP = $null
 foreach ($p in $profiles) { if ($p.ProfileName -eq $tunName) { $tunP = $p; break } }
@@ -401,6 +426,11 @@ ConvertTo-Json -InputObject ([pscustomobject]@{restarted=$restarted; reason=$rea
 type WinRTRestoreResult struct {
 	Restarted bool   `json:"restarted"`
 	Reason    string `json:"reason"`
+}
+
+// WinRTProfileProbe 是 BuildWinRTProfileProbeScript 输出的解析结果。
+type WinRTProfileProbe struct {
+	OriginalProfile string `json:"originalProfile"`
 }
 
 // listInterfaceIPs 返回本机所有网卡上的 IPv4/IPv6 地址字符串。

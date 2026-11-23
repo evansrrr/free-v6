@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,5 +23,29 @@ func TestRestoreSnapshotDNSFailureIsNonFatal(t *testing.T) {
 	defer cancel()
 	if err := RestoreSnapshot(ctx, snapshot); err != nil {
 		t.Fatalf("DNS restore failure must not block the caller: %v", err)
+	}
+}
+
+// 自愈入口也必须还原 DNS：RestoreLeftoverSnapshot 是 helper 与 CLI 唯一的
+// 残留还原入口，它比 RestoreSnapshot 多出来的只有 Sharing 兜底那一步 ——
+// 不能因此把 DNS 段漏掉，否则快照在被删除前，DNS 基线一次都不会被应用。
+// 回归：改写成「只调 RestoreHotspot」后，自愈不再还原 DNS。
+func TestRestoreLeftoverSnapshotRestoresDNS(t *testing.T) {
+	original := restoreDNSCommand
+	defer func() { restoreDNSCommand = original }()
+	var ran []string
+	restoreDNSCommand = func(_ context.Context, executable string, args []string) ([]byte, error) {
+		ran = append(ran, executable+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+
+	snapshot := Snapshot{Interfaces: []InterfaceSnapshot{
+		{Alias: "freev6-test-if", IPv4DNSServers: []string{"192.0.2.53"}, IPv4DNSSource: DNSSourceStatic},
+	}}
+	if err := RestoreLeftoverSnapshot(context.Background(), snapshot); err != nil {
+		t.Fatalf("leftover restore must not fail: %v", err)
+	}
+	if len(ran) != 1 || !strings.Contains(ran[0], "address=192.0.2.53") {
+		t.Fatalf("leftover restore must execute the DNS plan, ran %v", ran)
 	}
 }
