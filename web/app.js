@@ -820,47 +820,6 @@ function closeResetDialog() {
   $('#resetDialogScrim')?.classList.remove('open');
 }
 
-function openDNSResetDialog() {
-  const running = Boolean(state.proxyRunning);
-  const hint = $('#dnsResetStopHint');
-  if (hint) hint.hidden = !running;
-  // 免流运行中直接把确认按钮禁掉：服务端会 409，没必要让用户点出一个错误。
-  const confirm = $('#dnsResetDialogConfirm');
-  if (confirm) confirm.disabled = running;
-  $('#dnsResetDialogScrim')?.classList.add('open');
-}
-
-function closeDNSResetDialog() {
-  $('#dnsResetDialogScrim')?.classList.remove('open');
-}
-
-// 一次性迁移入口：旧版本每次「启动 → 停止」都会把 DHCP 下发的 DNS 写成静态，
-// 值相同所以当下无感，换网络后表现为「连上了但打不开网页」。只处理自动获取
-// IP 却写死了 DNS 的网卡，且必须由用户确认后才执行（会清掉手动设置的 DNS）。
-async function resetNetworkDNS() {
-  if (state.proxyRunning) {
-    addLog('免流正在运行，请先停止免流再修复网卡 DNS', true);
-    return;
-  }
-  try {
-    const res = await api('/network/dns-reset', { method: 'POST' });
-    // 每个改动带协议信息（{alias, ipv4, ipv6}）；旧后端可能只回字符串。
-    const changed = (Array.isArray(res?.changed) ? res.changed : [])
-      .map((item) => (typeof item === 'string' ? item : item?.alias))
-      .filter(Boolean);
-    const failed = Array.isArray(res?.failed) ? res.failed : [];
-    if (changed.length > 0) addLog(`已将 ${changed.length} 个网卡的 DNS 恢复为自动：${changed.join('、')}`);
-    if (failed.length > 0) {
-      for (const item of failed) addLog(`修复网卡 DNS 失败: ${item}`, true);
-    } else if (changed.length === 0) {
-      addLog('没有需要修复的网卡 DNS');
-    }
-    if (changed.length > 0) showToast('已恢复网卡 DNS 自动获取，请重新连接网络');
-  } catch (e) {
-    addLog(`修复网卡 DNS 失败: ${e.message}`, true);
-  }
-}
-
 async function resetSettings() {
   try {
     await api('/settings/reset', { method: 'POST' });
@@ -2392,19 +2351,6 @@ function wireEvents() {
     if (e.key === 'Escape') closeChainClearDialog();
   });
 
-  // 修复网卡 DNS 确认弹窗：确认 = 执行迁移，取消/遮罩/Escape 关闭
-  $('#dnsResetDialogCancel')?.addEventListener('click', closeDNSResetDialog);
-  $('#dnsResetDialogConfirm')?.addEventListener('click', () => {
-    closeDNSResetDialog();
-    resetNetworkDNS();
-  });
-  $('#dnsResetDialogScrim')?.addEventListener('click', (e) => {
-    if (e.target?.id === 'dnsResetDialogScrim') closeDNSResetDialog();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDNSResetDialog();
-  });
-
   // 重置设置确认弹窗：确认 = 重置，取消/遮罩/Escape 关闭
   $('#resetDialogCancel')?.addEventListener('click', closeResetDialog);
   $('#resetDialogConfirm')?.addEventListener('click', () => {
@@ -3151,7 +3097,6 @@ function wireSettingsEvents() {
 
   // 重置设置：弹确认弹窗，不直接执行
   $('#resetSettingsItem')?.addEventListener('click', openResetDialog);
-  $('#dnsResetItem')?.addEventListener('click', openDNSResetDialog);
 
   // 软件版本行：发现新版时显示“有新版本”角标，点击重新打开更新弹窗
   // （即使用户点过“跳过此版本”，这里始终可进入）

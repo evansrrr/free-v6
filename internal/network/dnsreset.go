@@ -1,6 +1,10 @@
 package network
 
-import "strings"
+import (
+	"net"
+	"strings"
+	"unicode"
+)
 
 // DNSResetChange 描述一次「交还给 DHCP」的改动。同一接口可能只改了 IPv4 或
 // 只改了 IPv6，残留基线只需摘掉真的改过的那一组。
@@ -10,17 +14,49 @@ type DNSResetChange struct {
 	IPv6  bool   `json:"ipv6,omitempty"`
 }
 
-// dnsResetCandidate 判断一条网卡注册表状态是否属于「自动获取 IP 却被写死了
-// DNS」——旧版本固化的指纹：网卡仍在自动获取 IP（EnableDHCP=1），DHCP 也曾
-// 经下发过 DNS（DhcpNameServer 非空），但当前生效的是静态配置（NameServer
-// 非空）。三个条件缺一不可：静态 IP 的网卡、从没拿到过 DHCP DNS 的网卡都
-// 不该被这个修复碰到。
+// dnsResetCandidate 判断一条网卡注册表状态是否属于「旧版本固化下来的静态
+// DNS」，也就是「这段静态配置是不是我们写的」—— 不是「有没有静态 DNS」。
+//
+// 旧版本停止免流时把当时生效的 DNS（对 DHCP 网卡就是 DHCP 下发的那些地址）
+// 原样写成静态，所以指纹是「静态配置的地址集合 == DHCP 下发的地址集合」。
+// 只判「存在静态配置」会连用户自己设的 DNS（1.1.1.1、公司内网 DNS）一起改掉，
+// 那不是修 bug，是篡改用户配置。
+//
+// 两个值在注册表里格式不同（NameServer 用逗号分隔，DhcpNameServer 用空格
+// 分隔），必须按地址集合比较，不能按字符串。
 func dnsResetCandidate(enableDHCP int, nameServer, dhcpNameServer string) bool {
 	if enableDHCP != 1 {
 		return false
 	}
-	if strings.TrimSpace(nameServer) == "" {
+	static := parseDNSServers(nameServer)
+	dhcp := parseDNSServers(dhcpNameServer)
+	if len(static) == 0 || len(static) != len(dhcp) {
 		return false
 	}
-	return strings.TrimSpace(dhcpNameServer) != ""
+	for server := range static {
+		if _, ok := dhcp[server]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// parseDNSServers 把注册表里的 DNS 列表拆成归一化的地址集合：分隔符有逗号、
+// 分号、空格三种，IPv6 还有压缩/展开等多种写法，统一交给 net.ParseIP 归一化。
+// 解析不了的值原样小写保留 —— 宁可比较失败（不动手）也不要误判。
+func parseDNSServers(raw string) map[string]struct{} {
+	servers := make(map[string]struct{})
+	for _, field := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || unicode.IsSpace(r)
+	}) {
+		if field == "" {
+			continue
+		}
+		if ip := net.ParseIP(field); ip != nil {
+			servers[ip.String()] = struct{}{}
+			continue
+		}
+		servers[strings.ToLower(field)] = struct{}{}
+	}
+	return servers
 }

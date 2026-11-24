@@ -159,6 +159,14 @@ func startMihomo(args []string) error {
 	if leftover.Warning != "" {
 		fmt.Fprintln(os.Stderr, "freev6:", leftover.Warning)
 	}
+	// 与 helper 同一套默认防护：旧版本把 DHCP 下发的 DNS 写成了静态，抓基线
+	// 之前先交还给 DHCP，否则本次基线会把静态记下来、停止时再写回去一次。
+	dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	frozenDNS, dnsFailures := network.ResetDNSToDHCP(dnsCtx)
+	dnsCancel()
+	for _, failure := range dnsFailures {
+		fmt.Fprintln(os.Stderr, "freev6: restore frozen DNS:", failure)
+	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	// 独立 CLI 不切换热点：跳过 ICS 共享基线枚举。
 	snapshot, err := network.CaptureSnapshot(snapshotCtx, false)
@@ -166,7 +174,11 @@ func startMihomo(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := network.SaveSnapshot(snapshotPathValue, network.AdoptBaseline(snapshot, leftover.Preserved)); err != nil {
+	baseline := network.AdoptBaseline(snapshot, leftover.Preserved)
+	if leftover.Preserved != nil && len(frozenDNS) > 0 {
+		baseline.DropDNSServers(frozenDNS)
+	}
+	if err := network.SaveSnapshot(snapshotPathValue, baseline); err != nil {
 		return err
 	}
 	restoreSnapshot := func() {

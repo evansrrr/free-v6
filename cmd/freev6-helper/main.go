@@ -171,7 +171,6 @@ func main() {
 	mux.HandleFunc("/api/v1/update/latest", h.updateLatest)
 	mux.HandleFunc("/api/v1/notice", h.notice)
 	mux.HandleFunc("/api/v1/ipv6/probe", h.ipv6Probe)
-	mux.HandleFunc("/api/v1/network/dns-reset", h.resetNetworkDNS)
 	mux.HandleFunc("/api/v1/chain-proxy", h.chainProxy)
 	mux.HandleFunc("/api/v1/cloud-config", h.cloudConfig)
 	// Per-launch bearer token minted by the desktop shell: without it the
@@ -591,6 +590,22 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
+// describeDNSChanges 把自动修复的改动排成一行日志：WiFi (ipv4/ipv6), Ethernet (ipv4)。
+func describeDNSChanges(changes []network.DNSResetChange) string {
+	parts := make([]string, 0, len(changes))
+	for _, change := range changes {
+		var protocols []string
+		if change.IPv4 {
+			protocols = append(protocols, "ipv4")
+		}
+		if change.IPv6 {
+			protocols = append(protocols, "ipv6")
+		}
+		parts = append(parts, change.Alias+" ("+strings.Join(protocols, "/")+")")
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -754,6 +769,23 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if leftover.Warning != "" {
 		fmt.Fprintf(os.Stderr, "helper: %s\n", leftover.Warning)
 	}
+	// 默认防护：旧版本停止免流时把当时生效的 DNS（即 DHCP 下发的那些地址）
+	// 原样写成了静态。值相同所以当场无感，换网络后静态地址仍指向旧网段，
+	// 表现是「Wi-Fi 已连接但打不开网页」，重启网卡也不恢复。
+	//
+	// 必须在抓基线之前修：这样新基线记住的是 DHCP 来源，停止时不会再写回去
+	// 一次。只处理「静态值 == DHCP 下发的值」的网卡（见 dnsResetCandidate），
+	// 用户自己设的 DNS 一定不相等，不会被碰。失败不阻断启动 —— 修不了只是
+	// 回到修复前的行为，免流本身照常。
+	dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	frozenDNS, frozenDNSFailures := network.ResetDNSToDHCP(dnsCtx)
+	dnsCancel()
+	for _, failure := range frozenDNSFailures {
+		fmt.Fprintf(os.Stderr, "helper: restore frozen DNS: %s\n", failure)
+	}
+	if len(frozenDNS) > 0 {
+		fmt.Fprintf(os.Stderr, "helper: restored DNS to DHCP on %s\n", describeDNSChanges(frozenDNS))
+	}
 	snapshotCtx, snapshotCancel := context.WithTimeout(request.Context(), 10*time.Second)
 	// ICS 共享基线只在热点共享开启时需要：跳过它的 COM 枚举能省掉一次
 	// powershell.exe 冷启动（默认关闭热点共享时，启动免流只做一次 GetAdaptersAddresses
@@ -768,6 +800,11 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 把「还原失败的现状」重新抓成基线，等于让残留的切换状态从此变成正式
 	// 配置，那之后再没有干净基线可回。
 	baseline := network.AdoptBaseline(snapshot, leftover.Preserved)
+	if leftover.Preserved != nil && len(frozenDNS) > 0 {
+		// 旧基线里这些网卡还留着 static 还原点：不清掉，下次启动的自愈会把
+		// 静态地址写回去，等于没修。
+		baseline.DropDNSServers(frozenDNS)
+	}
 	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -842,63 +879,15 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, stored.HotspotShare)
 	// 自愈结果随响应回给前端（过期快照跳过 / 上次基线还原失败）：都只影响
 	// 历史残留，本次免流照常，因此前端只记日志、不弹窗。
+	//
+	// DNS 自动修复失败只进 helper.log，不在这里提示：它多半是没提权（免流
+	// 本身这时也起不来）或系统状态异常，用户无从操作，每次启动飘一条红字
+	// 只是噪音。诊断信息在 helper.log 里。
 	var networkNotice any
 	if leftover.Warning != "" {
 		networkNotice = map[string]any{"warning": leftover.Warning, "failed": leftover.Failed}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"running": true, "hotspot": hotspotResult, "controllerSecret": controllerSecret, "core": core.Version, "network": networkNotice})
-}
-
-// resetNetworkDNS 把被旧版本固化成静态的 DNS 交还给 DHCP。
-//
-// 迁移入口：旧版本每次「启动 → 停止」都会把 DHCP 下发过的 DNS 写成静态，
-// 值相同所以当下无感，换网络后才表现为「连上了但打不开网页」。这里只处理
-// 自动获取 IP 却写死了 DNS 的网卡（见 network.ResetDNSToDHCP），并且必须由
-// 用户显式触发 —— 它会清掉 DHCP 网卡上手动设置的 DNS。
-//
-// 免流运行中拒绝：停止时会按基线把 DNS 写回去，刚修完就又被覆盖。
-func (h *helper) resetNetworkDNS(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	// 与启动/停止互斥：否则「检查到没在跑」与「启动写入 pid」之间存在窗口，
-	// 刚修好的 DNS 会被随后的基线采集与还原覆盖掉。
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
-	if _, running, err := mihomo.Status(pidPath); err == nil && running {
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": "免流正在运行，请先停止免流再修复网卡 DNS"})
-		return
-	}
-	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
-	defer cancel()
-	changed, failures := network.ResetDNSToDHCP(ctx)
-	for _, failure := range failures {
-		fmt.Fprintf(os.Stderr, "helper: reset network DNS: %s\n", failure)
-	}
-	if len(changed) > 0 {
-		patchLeftoverDNSBaseline(filepath.Join(h.root, "state", "network-snapshot.json"), changed)
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"ok":      len(failures) == 0,
-		"changed": changed,
-		"failed":  failures,
-	})
-}
-
-// patchLeftoverDNSBaseline 从残留快照里摘掉刚修好的接口 DNS：否则下次启动的
-// 残留自愈会按旧基线把静态地址写回去，用户刚做的修复当场失效。热点/共享
-// 基线（Sharing/Hotspot）保持不动 —— 它们还是要靠这份快照还原。
-func patchLeftoverDNSBaseline(snapshotPath string, changed []network.DNSResetChange) {
-	snapshot, err := network.LoadSnapshot(snapshotPath)
-	if err != nil {
-		return // 没有残留快照（正常情况）或读不出来：都不影响本次修复
-	}
-	snapshot.DropDNSServers(changed)
-	if err := network.SaveSnapshot(snapshotPath, snapshot); err != nil {
-		fmt.Fprintf(os.Stderr, "helper: shrink leftover network snapshot after DNS reset: %v\n", err)
-	}
 }
 
 // applyHotspotShare 执行移动热点上游切换（ICS 拓扑方案）。开关关 → disabled；
