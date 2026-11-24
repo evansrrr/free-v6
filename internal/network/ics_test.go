@@ -330,17 +330,22 @@ func TestJSONUnmarshalFlexible(t *testing.T) {
 // WinRT 原上游探测脚本必须只读：它跑在「停热点」之前，任何 Stop/Start 调用
 // 都会把「抢在停机前留痕」变成一次真实故障。
 //
-// 它同时是切换脚本的唯一上游来源，所以「取哪条链路」必须取真正承载流量的
-// 那条：默认路由所在的物理网卡。按「第一个 Up 的物理网卡」猜在有线+无线
-// 同时在线时会指错，而指错的上游在失败回滚里同样拉不起热点。
+// 名字必须是 WinRT 的 ProfileName：网络配置 API（Get-NetConnectionProfile）
+// 与 WinRT 不是同一套命名空间，重名 SSID 重建过配置时前者是 "USTB-Student 2"、
+// 后者是 "USTB-Student"（线上实测）。拿错这一边，切换脚本只会报「连接配置
+// 不存在」而放弃。
+//
+// 取哪条链路也要取真正承载流量的那条：默认路由所在的物理网卡。按「第一个 Up
+// 的物理网卡」猜在有线+无线同时在线时会指错，而指错的上游在失败回滚里同样
+// 拉不起热点。
 func TestBuildWinRTProfileProbeScript(t *testing.T) {
 	script := BuildWinRTProfileProbeScript()
-	for _, forbidden := range []string{"StopTetheringAsync", "StartTetheringAsync", "EnableSharing", "DisableSharing", "GetConnectionProfiles"} {
+	for _, forbidden := range []string{"StopTetheringAsync", "StartTetheringAsync", "EnableSharing", "DisableSharing", "Get-NetConnectionProfile"} {
 		if strings.Contains(script, forbidden) {
-			t.Fatalf("probe script must stay read-only and cheap, found %q", forbidden)
+			t.Fatalf("probe script must stay read-only and WinRT-native, found %q", forbidden)
 		}
 	}
-	for _, expected := range []string{"originalProfile", "Get-NetConnectionProfile", "Get-NetAdapter", "Get-NetRoute", "$phys.Name -contains $_.InterfaceAlias"} {
+	for _, expected := range []string{"originalProfile", "Get-NetAdapter", "Get-NetRoute", "InterfaceGuid", "GetConnectionProfiles", "GetConnectedSsid", "IsWlanConnectionProfile", "$phys.Name -contains $_.InterfaceAlias"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("probe script missing %q", expected)
 		}
@@ -349,6 +354,11 @@ func TestBuildWinRTProfileProbeScript(t *testing.T) {
 	// 把 TUN 自己当成热点上游。
 	if !strings.Contains(script, "-Physical") {
 		t.Fatal("probe must restrict route lookup to physical adapters")
+	}
+	// 同一块网卡上挂着几十条已保存配置，必须按「正在连接」挑，否则会把热点
+	// 绑到隔壁宿舍的 SSID 上。
+	if !strings.Contains(script, "GetNetworkConnectivityLevel") {
+		t.Fatal("probe must tell the connected profile from saved ones")
 	}
 }
 

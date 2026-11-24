@@ -253,25 +253,47 @@ if ($phys.Count -gt 0) {
 }
 `
 
-// BuildWinRTProfileProbeScript 只读探测：返回热点当前绑定的上游连接名。
+// BuildWinRTProfileProbeScript 只读探测：返回热点当前的上游连接名。
+//
+// 名字必须是 WinRT 的 ConnectionProfile.ProfileName，不是 NetConnectionProfile
+// 的那个 —— 两者不是同一套命名空间：重名 SSID 重建过配置时，网络配置 API 会
+// 给出 "USTB-Student 2"，而 WinRT 里同一条连接仍叫 "USTB-Student"。拿前者去
+// 切换脚本里查，只会得到「连接配置不存在」，白白放弃一次本可以成功的切换
+// （线上实测）。所以这里直接在 WinRT 的连接配置里按网卡 GUID + 「正在连接」
+// 解析，产出的名字切换/还原脚本都能直接用。
+//
+// 同一块网卡上可能挂着几十条已保存的配置，只有正在连接的那条能让热点真正
+// 走这条链路：WLAN 看有没有连上的 SSID，其余看连接级别。
 //
 // 用途有两层：抢在「停热点」之前写进快照（tethering 的停与重开在同一个脚本
 // 里，进程被杀在中间时热点会停在关闭状态，而脚本的输出要跑完才有），以及作为
 // 切换脚本的唯一上游来源 —— 探测为空时调用方直接放弃切换，不去做一件无法
 // 撤销的事。
-//
-// 用 Get-NetConnectionProfile 而不是在 GetConnectionProfiles() 里按网卡名匹配：
-// 后者的 ProfileName 与网卡显示名在不少机器上对不上（"WiFi" vs
-// "USTB-Student 2"），会探出空值。这里也不枚举 WinRT 连接配置，纯网络配置
-// 读取，几百毫秒即可返回。
 func BuildWinRTProfileProbeScript() string {
 	return psHeader + `
 $ErrorActionPreference='Stop'
 $tunName = ` + psQuote(TunDeviceName) + `
-` + winRTUpstreamAdapter + `$orig = ''
+` + winRTUpstreamAdapter + `$ni=[Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime]
+$orig = ''
 if ($null -ne $upIf) {
-  $cp = Get-NetConnectionProfile -InterfaceAlias $upIf.Name -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($null -ne $cp) { $orig = [string]$cp.Name }
+  $guid = ([string]$upIf.InterfaceGuid).Trim('{','}').ToLowerInvariant()
+  $candidates = @()
+  foreach ($p in $ni::GetConnectionProfiles()) {
+    if ($null -eq $p.NetworkAdapter) { continue }
+    if (([string]$p.NetworkAdapter.NetworkAdapterId).Trim('{','}').ToLowerInvariant() -eq $guid) { $candidates += $p }
+  }
+  foreach ($p in $candidates) {
+    $live = $false
+    if ($p.IsWlanConnectionProfile) {
+      try { $live = ([string]$p.WlanConnectionProfileDetails.GetConnectedSsid()) -ne '' } catch { $live = $false }
+    } else {
+      try { $live = ([string]$p.GetNetworkConnectivityLevel()) -ne 'None' } catch { $live = $false }
+    }
+    if ($live) { $orig = [string]$p.ProfileName; break }
+  }
+  # 只有一条配置时不必再判「正在连接」（有线网卡就是这样）；多条却都判不出
+  # 在线，说明这条链路此刻并不通，宁可不切。
+  if ($orig -eq '' -and $candidates.Count -eq 1) { $orig = [string]$candidates[0].ProfileName }
 }
 ConvertTo-Json -InputObject ([pscustomobject]@{originalProfile=$orig}) -Compress
 `
