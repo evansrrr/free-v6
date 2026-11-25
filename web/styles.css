@@ -636,16 +636,26 @@ md-icon-button > md-icon {
 }
 .memory-bar-app { background: var(--md-primary); }
 .memory-bar-kernel { background: color-mix(in srgb, var(--md-primary) 32%, transparent); }
-/* 应用 / 内核并排一行，左对齐：圆点与上方总内存数字同一起点 */
+/* 应用 / 内核并排一行，左对齐：圆点与上方总内存数字同一起点。
+   数值是变量（可能到四位数），所以每条图例强制 nowrap + 不参与收缩，
+   免得可用宽度不够时被压成逐字竖排；整组放不下就折行，也不会画出卡片。 */
 .memory-legend {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-start;
-  gap: 22px;
+  gap: 6px 16px;
   font-size: 12px;
   color: var(--md-on-surface-variant);
 }
-.memory-legend-row { display: flex; align-items: center; gap: 6px; }
+.memory-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .memory-legend-dot {
   width: 8px;
   height: 8px;
