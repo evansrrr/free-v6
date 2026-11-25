@@ -423,8 +423,8 @@ md-icon-button > md-icon {
 .card-header-text p { font-size: 11px; color: var(--md-on-surface-variant); margin: 0; }
 
 .card-traffic { margin-bottom: 10px; }
-/* 仪表盘下方并排的两张信息卡：流量统计 + 公告。
-   两张卡同为 236px 定宽（与展开面板一致，不随窗口拉伸），
+/* 仪表盘下方并排的三张信息卡：流量统计 + 公告 + 内存信息。
+   三张卡同为 240px 定宽（与展开面板一致，不随窗口拉伸），
    高度交给 flex 的 stretch 对齐，窗口不够宽时自动换行堆叠。 */
 .dashboard-pair {
   display: flex;
@@ -436,12 +436,20 @@ md-icon-button > md-icon {
 /* Clickable: click / Enter opens the 本月+累计 detail hint card below. */
 .card-stats,
 .card-notice {
-  width: 236px;
-  flex: 0 0 236px;
+  width: 240px;
+  flex: 0 0 240px;
   max-width: 100%;
   position: relative;
   cursor: pointer;
   transition: background-color 150ms ease;
+}
+/* 三张信息卡统一比 .card 的基础内边距多 2px 上下：卡片高度由内容撑开，
+   只有加内边距才能让整组高度增加 4px 而内容不变形 */
+.card-stats,
+.card-notice,
+.card-memory {
+  padding-top: 16px;
+  padding-bottom: 16px;
 }
 .card-stats:hover,
 .card-notice:hover { background: var(--md-surface-container-high); }
@@ -570,8 +578,8 @@ md-icon-button > md-icon {
 
 /* 与公告卡同尺寸并排；纯展示，不加 hover / cursor / 展开箭头 */
 .card-memory {
-  width: 236px;
-  flex: 0 0 236px;
+  width: 240px;
+  flex: 0 0 240px;
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -698,7 +706,7 @@ md-icon-button > md-icon {
   left: 0;
   right: 0; /* stretch to the card so both always share one width */
   z-index: 60;
-  min-width: 236px;
+  min-width: 240px;
   padding: 12px 14px;
   background: var(--md-surface-container-high);
   border: 1px solid var(--md-outline-variant);
