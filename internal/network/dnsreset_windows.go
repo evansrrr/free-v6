@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 // ResetDNSToDHCP 把「自动获取 IP 却被旧版本写死了静态 DNS」的网卡交还给
@@ -73,4 +74,17 @@ func adapterDNSFrozenByOldBug(adapterGUID, protocol string) bool {
 	nameServer, _, _ := key.GetStringValue("NameServer")
 	dhcpNameServer, _, _ := key.GetStringValue("DhcpNameServer")
 	return dnsResetCandidate(int(enableDHCP), nameServer, dhcpNameServer)
+}
+
+// openAdapterInterfaceKey 打开网卡在 Tcpip（IPv4）/ Tcpip6（IPv6）下的接口键：
+// 静态 DNS（NameServer）与 DHCP 下发值（DhcpNameServer）都在这里。迁移判定
+// 只读这两个值，不写注册表。
+func openAdapterInterfaceKey(adapterGUID, protocol string) (registry.Key, error) {
+	service := "Tcpip"
+	if protocol == protocolIPv6 {
+		service = "Tcpip6"
+	}
+	return registry.OpenKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\`+service+`\Parameters\Interfaces\`+adapterGUID,
+		registry.QUERY_VALUE)
 }

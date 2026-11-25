@@ -4,7 +4,6 @@ package network
 
 import (
 	"net"
-	"reflect"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -55,13 +54,11 @@ func utf16Ptr(s string) *uint16 {
 }
 
 // TestBuildSnapshotMapsAdapters verifies the GetAdaptersAddresses linked list
-// is mapped into the Snapshot shape: friendly name, index, and the v4/v6 split
-// of DNS servers and default gateways — including empty slots for adapters with
-// no DNS/gateway and skipping an adapter with no friendly name.
+// is mapped into the diagnostic part of a Snapshot: friendly name, index and
+// the v4/v6 split of default gateways, skipping an adapter with no friendly
+// name. DNS is deliberately absent — the proxy never writes system DNS.
 func TestBuildSnapshotMapsAdapters(t *testing.T) {
-	dns4 := fakeSockaddr4("192.0.2.53")
 	gw4 := fakeSockaddr4("192.0.2.1")
-	dns6 := fakeSockaddr6("2400:3200::1")
 	gw6 := fakeSockaddr6("fe80::1")
 
 	loopback := &windows.IpAdapterAddresses{
@@ -75,14 +72,12 @@ func TestBuildSnapshotMapsAdapters(t *testing.T) {
 	}
 
 	wifi := &windows.IpAdapterAddresses{
-		IfIndex:               12,
-		FriendlyName:          utf16Ptr("Wi-Fi"),
-		FirstDnsServerAddress: &windows.IpAdapterDnsServerAdapter{Address: dns4},
-		FirstGatewayAddress:   &windows.IpAdapterGatewayAddress{Address: gw4},
-		Next:                  nil,
+		IfIndex:             12,
+		FriendlyName:        utf16Ptr("Wi-Fi"),
+		FirstGatewayAddress: &windows.IpAdapterGatewayAddress{Address: gw4},
+		Next:                nil,
 	}
-	// Second DNS server (IPv6) chained after the first; second gateway (IPv6).
-	wifi.FirstDnsServerAddress.Next = &windows.IpAdapterDnsServerAdapter{Address: dns6}
+	// Second gateway (IPv6) chained after the first.
 	wifi.FirstGatewayAddress.Next = &windows.IpAdapterGatewayAddress{Address: gw6}
 
 	unnamed.Next = wifi
@@ -97,70 +92,19 @@ func TestBuildSnapshotMapsAdapters(t *testing.T) {
 	if lb.Alias != "Loopback" || lb.Index != 1 {
 		t.Fatalf("unexpected loopback identity: %+v", lb)
 	}
-	if len(lb.IPv4DNSServers) != 0 || len(lb.IPv6DNSServers) != 0 {
-		t.Fatalf("loopback should have no DNS, got %+v", lb)
-	}
-	// 没有适配器 GUID（注册表查不到）→ 来源未知，绝不猜成 static。
-	if lb.IPv4DNSSource != DNSSourceUnknown || lb.IPv6DNSSource != DNSSourceUnknown {
-		t.Fatalf("adapter without GUID must keep an unknown DNS source, got %+v", lb)
+	if len(lb.IPv4DefaultGateways) != 0 || len(lb.IPv6DefaultGateways) != 0 {
+		t.Fatalf("loopback should have no gateway, got %+v", lb)
 	}
 
 	w := snapshot.Interfaces[1]
 	if w.Alias != "Wi-Fi" || w.Index != 12 {
 		t.Fatalf("unexpected wifi identity: %+v", w)
 	}
-	if got := joinStr(w.IPv4DNSServers); got != "192.0.2.53" {
-		t.Fatalf("unexpected IPv4 DNS: %q", got)
-	}
-	if got := joinStr(w.IPv6DNSServers); got != "2400:3200::1" {
-		t.Fatalf("unexpected IPv6 DNS: %q", got)
-	}
 	if got := joinStr(w.IPv4DefaultGateways); got != "192.0.2.1" {
 		t.Fatalf("unexpected IPv4 gateway: %q", got)
 	}
 	if got := joinStr(w.IPv6DefaultGateways); got != "fe80::1" {
 		t.Fatalf("unexpected IPv6 gateway: %q", got)
-	}
-}
-
-// 快照必须连 DNS 来源一起记：同一条地址「DHCP 下发的」和「用户写死的」
-// 还原方式相反，只看地址分不出来。用假 resolver 验证 GUID + 协议的映射，
-// 不必碰真实注册表。
-func TestBuildSnapshotDNSSource(t *testing.T) {
-	const guid = "{1c52aba0-4aff-4137-9da7-688712ab4bd3}"
-	dns4 := fakeSockaddr4("192.0.2.53")
-	dns6 := fakeSockaddr6("2001:db8::1")
-	adapterGUID := append([]byte(guid), 0)
-
-	wifi := &windows.IpAdapterAddresses{
-		IfIndex:               12,
-		FriendlyName:          utf16Ptr("Wi-Fi"),
-		AdapterName:           &adapterGUID[0],
-		FirstDnsServerAddress: &windows.IpAdapterDnsServerAdapter{Address: dns4},
-	}
-	wifi.FirstDnsServerAddress.Next = &windows.IpAdapterDnsServerAdapter{Address: dns6}
-
-	var asked []string
-	snapshot := buildSnapshotWithDNSSource(wifi, func(adapterGUID, protocol string) string {
-		asked = append(asked, adapterGUID+" "+protocol)
-		if protocol == protocolIPv4 {
-			return DNSSourceDHCP
-		}
-		return DNSSourceStatic
-	})
-	iface := snapshot.Interfaces[0]
-	if iface.IPv4DNSSource != DNSSourceDHCP || iface.IPv6DNSSource != DNSSourceStatic {
-		t.Fatalf("unexpected DNS sources: %+v", iface)
-	}
-	want := []string{guid + " " + protocolIPv4, guid + " " + protocolIPv6}
-	if !reflect.DeepEqual(asked, want) {
-		t.Fatalf("DNS source must be looked up per protocol with the adapter GUID: got %v want %v", asked, want)
-	}
-
-	// 没有 resolver（非 Windows 主机上的构建/测试）时来源留空 = 未知，
-	// 还原时不动 DNS；绝不默认成 static。
-	if got := buildSnapshotWithDNSSource(wifi, nil).Interfaces[0]; got.IPv4DNSSource != DNSSourceUnknown || got.IPv6DNSSource != DNSSourceUnknown {
-		t.Fatalf("missing resolver must leave sources unknown, got %+v", got)
 	}
 }
 

@@ -6,8 +6,14 @@ import (
 	"unicode"
 )
 
+// netsh interface <protocol> ... 用的协议名。
+const (
+	protocolIPv4 = "ipv4"
+	protocolIPv6 = "ipv6"
+)
+
 // DNSResetChange 描述一次「交还给 DHCP」的改动。同一接口可能只改了 IPv4 或
-// 只改了 IPv6，残留基线只需摘掉真的改过的那一组。
+// 只改了 IPv6，日志按协议区分。
 type DNSResetChange struct {
 	Alias string `json:"alias"`
 	IPv4  bool   `json:"ipv4,omitempty"`
@@ -24,6 +30,10 @@ type DNSResetChange struct {
 //
 // 两个值在注册表里格式不同（NameServer 用逗号分隔，DhcpNameServer 用空格
 // 分隔），必须按地址集合比较，不能按字符串。
+//
+// 已知边界：IPv6 由 RA 下发的地址通常不会落到 DhcpNameServer（该值常为空），
+// 这类被固化的 IPv6 DNS 无法与用户手写的静态值区分，不会命中，只能手动改回
+// 「自动获取」。宁可不修，也不误改用户配置。
 func dnsResetCandidate(enableDHCP int, nameServer, dhcpNameServer string) bool {
 	if enableDHCP != 1 {
 		return false

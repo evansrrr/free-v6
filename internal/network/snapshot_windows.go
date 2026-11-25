@@ -11,14 +11,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// CaptureSnapshot builds the network baseline (per-interface DNS servers and
-// default gateways) that stop/rollback restores afterwards.
+// CaptureSnapshot builds the network baseline (ICS sharing roles + hotspot
+// upstream) that stop/rollback restores afterwards, plus a per-interface
+// gateway list used only by diagnostics.
 //
 // includeSharing controls whether the ICS sharing baseline (HNetShare COM
 // enumeration) is also captured. It is only consumed by hotspot sharing, and
 // enumerating it costs a powershell.exe round-trip, so callers that will not
-// switch the hotspot pass false to skip it. The interface baseline itself is
-// read in-process via GetAdaptersAddresses — no subprocess.
+// switch the hotspot pass false to skip it. The interface list is read
+// in-process via GetAdaptersAddresses — no subprocess.
 //
 // Three attempts with backoff absorb the transient adapter churn seen on cold
 // boot (old FreeV6TUN disappearing, virtual/hotspot adapters hot-plugging), the
@@ -54,8 +55,8 @@ func captureSnapshotOnce(ctx context.Context, includeSharing bool) (Snapshot, er
 		return Snapshot{}, fmt.Errorf("capture Windows network snapshot: %w", err)
 	}
 	snapshot := buildSnapshot(adapters)
-	// 空快照绝不能落盘：后续恢复会变成无操作，等于把改过的网络状态
-	// 永久留在切换态。空结果视为本次抓取失败（可重试）。
+	// 一个网卡都枚举不到，说明网络栈此刻不正常：视为抓取失败（可重试），
+	// 而不是把空结果当成基线。此时起内核只会得到更难排查的失败。
 	if len(snapshot.Interfaces) == 0 {
 		return Snapshot{}, fmt.Errorf("network snapshot is empty")
 	}
@@ -95,19 +96,11 @@ func getAdaptersAddresses() (*windows.IpAdapterAddresses, error) {
 	}
 }
 
-// buildSnapshot walks the IpAdapterAddresses linked list into a Snapshot.
-// It reads each adapter's DNS source from the registry (DHCP vs. static), so
-// restore can hand DHCP interfaces back to DHCP instead of pinning their
-// current addresses as static.
+// buildSnapshot walks the IpAdapterAddresses linked list into the diagnostic
+// part of a Snapshot: friendly name, index and default gateways. DNS servers
+// are deliberately not recorded — the proxy never writes system DNS, so there
+// is nothing to restore.
 func buildSnapshot(adapters *windows.IpAdapterAddresses) Snapshot {
-	return buildSnapshotWithDNSSource(adapters, adapterDNSSource)
-}
-
-// buildSnapshotWithDNSSource is buildSnapshot with the DNS-source lookup
-// injected (nil = skip, leave the source unknown). Keeps the adapter → snapshot
-// mapping unit-testable against a hand-built adapter list without touching the
-// real registry.
-func buildSnapshotWithDNSSource(adapters *windows.IpAdapterAddresses, resolve func(adapterGUID, protocol string) string) Snapshot {
 	snapshot := Snapshot{CapturedAt: time.Now()}
 	for adapter := adapters; adapter != nil; adapter = adapter.Next {
 		alias := windows.UTF16PtrToString(adapter.FriendlyName)
@@ -117,17 +110,6 @@ func buildSnapshotWithDNSSource(adapters *windows.IpAdapterAddresses, resolve fu
 		iface := InterfaceSnapshot{
 			Alias: alias,
 			Index: int(adapter.IfIndex),
-		}
-		for dns := adapter.FirstDnsServerAddress; dns != nil; dns = dns.Next {
-			ip := dns.Address.IP()
-			if ip == nil {
-				continue
-			}
-			if ipv4 := ip.To4(); ipv4 != nil {
-				iface.IPv4DNSServers = append(iface.IPv4DNSServers, ipv4.String())
-			} else {
-				iface.IPv6DNSServers = append(iface.IPv6DNSServers, ip.String())
-			}
 		}
 		for gateway := adapter.FirstGatewayAddress; gateway != nil; gateway = gateway.Next {
 			ip := gateway.Address.IP()
@@ -140,22 +122,9 @@ func buildSnapshotWithDNSSource(adapters *windows.IpAdapterAddresses, resolve fu
 				iface.IPv6DefaultGateways = append(iface.IPv6DefaultGateways, ip.String())
 			}
 		}
-		// Windows 可能重复列出同一服务器；保留顺序、去重，与旧 PowerShell
-		// 解析的 uniqueStrings 语义一致，避免还原时 netsh 重复添加。
-		iface.IPv4DNSServers = dedupe(iface.IPv4DNSServers)
-		iface.IPv6DNSServers = dedupe(iface.IPv6DNSServers)
+		// Windows 可能重复列出同一网关；保留顺序、去重。
 		iface.IPv4DefaultGateways = dedupe(iface.IPv4DefaultGateways)
 		iface.IPv6DefaultGateways = dedupe(iface.IPv6DefaultGateways)
-		// 来源只在真有地址时才需要判定：没有 DNS 的接口不会生成还原命令。
-		if resolve != nil {
-			guid := windows.BytePtrToString(adapter.AdapterName)
-			if len(iface.IPv4DNSServers) > 0 {
-				iface.IPv4DNSSource = resolve(guid, protocolIPv4)
-			}
-			if len(iface.IPv6DNSServers) > 0 {
-				iface.IPv6DNSSource = resolve(guid, protocolIPv6)
-			}
-		}
 		snapshot.Interfaces = append(snapshot.Interfaces, iface)
 	}
 	return snapshot

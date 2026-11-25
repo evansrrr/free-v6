@@ -773,10 +773,11 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 原样写成了静态。值相同所以当场无感，换网络后静态地址仍指向旧网段，
 	// 表现是「Wi-Fi 已连接但打不开网页」，重启网卡也不恢复。
 	//
-	// 必须在抓基线之前修：这样新基线记住的是 DHCP 来源，停止时不会再写回去
-	// 一次。只处理「静态值 == DHCP 下发的值」的网卡（见 dnsResetCandidate），
-	// 用户自己设的 DNS 一定不相等，不会被碰。失败不阻断启动 —— 修不了只是
-	// 回到修复前的行为，免流本身照常。
+	// 在启动时修的是「机器当前状态」：新快照已经不再记录 DNS，也就不存在
+	// 「停止时写回去」这一步；但污染还留在注册表里，不清掉用户这次会话换个
+	// 网络照样断解析。只处理「静态值 == DHCP 下发的值」的网卡（见
+	// dnsResetCandidate），用户自己设的 DNS 一定不相等，不会被碰。失败不阻断
+	// 启动 —— 修不了只是回到修复前的行为，免流本身照常。
 	dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	frozenDNS, frozenDNSFailures := network.ResetDNSToDHCP(dnsCtx)
 	dnsCancel()
@@ -800,24 +801,13 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 把「还原失败的现状」重新抓成基线，等于让残留的切换状态从此变成正式
 	// 配置，那之后再没有干净基线可回。
 	baseline := network.AdoptBaseline(snapshot, leftover.Preserved)
-	if leftover.Preserved != nil && len(frozenDNS) > 0 {
-		// 旧基线里这些网卡还留着 static 还原点：不清掉，下次启动的自愈会把
-		// 静态地址写回去，等于没修。
-		baseline.DropDNSServers(frozenDNS)
-	}
 	if err := network.SaveSnapshot(snapshotPath, baseline); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	restore := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = network.RestoreSnapshot(ctx, snapshot)
-	}
 	store := mihomo.NewCoreStore(h.root)
 	core, err := store.Active()
 	if err != nil {
-		restore()
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
@@ -856,7 +846,6 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	if startErr != nil {
-		restore()
 		writeJSON(writer, statusCode, map[string]string{"error": startErr.Error()})
 		return
 	}
@@ -877,7 +866,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
 	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, stored.HotspotShare)
-	// 自愈结果随响应回给前端（过期快照跳过 / 上次基线还原失败）：都只影响
+	// 自愈结果随响应回给前端（快照损坏 / 上次基线还原失败）：都只影响
 	// 历史残留，本次免流照常，因此前端只记日志、不弹窗。
 	//
 	// DNS 自动修复失败只进 helper.log，不在这里提示：它多半是没提权（免流
@@ -1070,17 +1059,14 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	defer h.mu.Unlock()
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
 	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
-	// 阶段化还原：热点上游（ICS/WinRT）必须在 TUN 适配器仍在时还原——
-	// FreeV6TUN 连接存在才能显式禁用其共享角色。DNS 还原不依赖 TUN，放到
-	// mihomo 退出之后并行执行。这样 mihomo 尽快退出（/status 立刻回到
-	// running=false），慢的 netsh 还原不再挡住"停止"的感知时延。
+	// 热点上游（ICS/WinRT）必须在 TUN 适配器仍在时还原：FreeV6TUN 连接
+	// 存在才能显式禁用其共享角色。网卡 DNS 全程没有被改过，没有需要在这里
+	// 还原或写回的东西。
 	var restoreErr error
 	var restoreSkipped string
-	var snapshotLoaded bool
 	snapshot, err := network.LoadSnapshot(snapshotPath)
 	switch {
 	case err == nil:
-		snapshotLoaded = true
 		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
 		restoreErr = network.RestoreHotspot(ctx, snapshot)
 		cancel()
@@ -1092,7 +1078,7 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	default:
 		restoreSkipped = err.Error()
 	}
-	// 热点还原（若有）完成后先让内核自己关掉 TUN，再杀进程，最后还原 DNS。
+	// 热点还原（若有）完成后先让内核自己关掉 TUN，再杀进程。
 	//
 	// 直接 TerminateProcess 会跳过内核的收尾：wintun 适配器与 auto-route 写进
 	// 路由表的默认路由只能等 Windows 异步回收，那几秒里出站流量仍然被吸进一个
@@ -1151,17 +1137,6 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "helper: stop: core not running, total %v\n", time.Since(stopStarted).Round(time.Millisecond))
-	}
-	if snapshotLoaded {
-		// DNS 还原放后台执行：mihomo 已停、/status 已回到 running=false，不必
-		// 让 netsh 还原阻塞「停止」响应。还原失败本就非致命（RestoreDNS 只记
-		// 警告），且下次启动免流前会按残留快照自愈。快照按值捕获副本，与
-		// 主流程删除快照文件解耦。
-		go func(snapshot network.Snapshot) {
-			dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer dnsCancel()
-			network.RestoreDNS(dnsCtx, snapshot)
-		}(snapshot)
 	}
 	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)

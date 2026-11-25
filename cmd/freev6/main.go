@@ -159,10 +159,11 @@ func startMihomo(args []string) error {
 	if leftover.Warning != "" {
 		fmt.Fprintln(os.Stderr, "freev6:", leftover.Warning)
 	}
-	// 与 helper 同一套默认防护：旧版本把 DHCP 下发的 DNS 写成了静态，抓基线
-	// 之前先交还给 DHCP，否则本次基线会把静态记下来、停止时再写回去一次。
+	// 与 helper 同一套默认防护：旧版本把 DHCP 下发的 DNS 写成了静态。
+	// 基线已不再记录 DNS，这里修的是机器当前状态 —— 不清掉，用户这次会话
+	// 换个网络就会断解析。
 	dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	frozenDNS, dnsFailures := network.ResetDNSToDHCP(dnsCtx)
+	_, dnsFailures := network.ResetDNSToDHCP(dnsCtx)
 	dnsCancel()
 	for _, failure := range dnsFailures {
 		fmt.Fprintln(os.Stderr, "freev6: restore frozen DNS:", failure)
@@ -175,37 +176,25 @@ func startMihomo(args []string) error {
 		return err
 	}
 	baseline := network.AdoptBaseline(snapshot, leftover.Preserved)
-	if leftover.Preserved != nil && len(frozenDNS) > 0 {
-		baseline.DropDNSServers(frozenDNS)
-	}
 	if err := network.SaveSnapshot(snapshotPathValue, baseline); err != nil {
 		return err
 	}
-	restoreSnapshot := func() {
-		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer restoreCancel()
-		_ = network.RestoreSnapshot(restoreCtx, snapshot)
-	}
 	resolvedBinary, err := mihomo.ResolveBinary(binaryPathValue, *rootPath)
 	if err != nil {
-		restoreSnapshot()
 		return err
 	}
 	pid, err := mihomo.Start(resolvedBinary, configPathValue, filepath.Dir(configPathValue), pidPathValue, logPathValue)
 	if err != nil {
-		restoreSnapshot()
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); err != nil {
 		_ = mihomo.Stop(pidPathValue)
-		restoreSnapshot()
 		return err
 	}
 	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); err != nil {
 		_ = mihomo.Stop(pidPathValue)
-		restoreSnapshot()
 		return err
 	}
 	fmt.Printf("mihomo started: pid %d\n", pid)
@@ -227,7 +216,7 @@ func stopMihomo(args []string) error {
 	}
 	if snapshot, err := network.LoadSnapshot(snapshotPathValue); err == nil {
 		restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		restoreErr := network.RestoreSnapshot(restoreCtx, snapshot)
+		restoreErr := network.RestoreHotspot(restoreCtx, snapshot)
 		cancel()
 		if restoreErr != nil {
 			return restoreErr
