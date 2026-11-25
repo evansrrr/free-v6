@@ -4,10 +4,13 @@ package network
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -37,13 +40,29 @@ func adapterIndex(name string) (int, bool) {
 // 还在，所有出站流量被吸进一个没人接收的 TUN——现象是"本机有 IPv6 地址却
 // 什么都连不上"，而且不会自愈。只有把这几条路由删掉，物理网卡的默认路由
 // 才会重新生效。命令失败只影响计数，不返回错误：残留清理不该成为新的失败面。
+//
+// 适配器还在不代表路由还在：wintun 的适配器会跨进程保留，干净的停止之后
+// 它照样在列表里。先读一次路由表，只有确实存在那几条半段路由才 spawn netsh，
+// 否则每次启动都要等四条必然失败的 netsh。
 func ClearTunRoutes(ctx context.Context, name string) int {
 	index, ok := adapterIndex(name)
 	if !ok {
 		return 0
 	}
+	targets := tunRoutePrefixes
+	if present, known := tunRoutesOnAdapter(index); known {
+		if len(present) == 0 {
+			return 0
+		}
+		targets = nil
+		for _, prefix := range tunRoutePrefixes {
+			if present[prefix] {
+				targets = append(targets, prefix)
+			}
+		}
+	}
 	removed := 0
-	for _, prefix := range tunRoutePrefixes {
+	for _, prefix := range targets {
 		family := "ipv4"
 		if strings.Contains(prefix, ":") {
 			family = "ipv6"
@@ -59,6 +78,45 @@ func ClearTunRoutes(ctx context.Context, name string) int {
 		}
 	}
 	return removed
+}
+
+// tunRoutesOnAdapter 返回该 ifIndex 上实际存在的 TUN 半段路由。known=false
+// 表示路由表读不到，调用方退回逐条尝试（宁可多 spawn 几次，也不要漏清）。
+func tunRoutesOnAdapter(index int) (present map[string]bool, known bool) {
+	var table *windows.MibIpForwardTable2
+	if err := windows.GetIpForwardTable2(windows.AF_UNSPEC, &table); err != nil || table == nil {
+		return nil, false
+	}
+	defer windows.FreeMibTable(unsafe.Pointer(table))
+	present = make(map[string]bool, len(tunRoutePrefixes))
+	for _, row := range table.Rows() {
+		if int(row.InterfaceIndex) != index {
+			continue
+		}
+		prefix := ipPrefixString(row.DestinationPrefix)
+		for _, want := range tunRoutePrefixes {
+			if prefix == want {
+				present[want] = true
+			}
+		}
+	}
+	return present, true
+}
+
+// ipPrefixString 把 MIB_IPFORWARD_ROW2 里的前缀格式化成 "addr/len"。
+// RawSockaddrInet 是 union：IPv4 地址在 Data[0]（sockaddr_in 的 sin_addr），
+// IPv6 地址在 Data[1] 起（Data[0] 是 sin6_flowinfo），按字节读即网络序。
+func ipPrefixString(prefix windows.IpAddressPrefix) string {
+	switch prefix.Prefix.Family {
+	case windows.AF_INET:
+		raw := (*[4]byte)(unsafe.Pointer(&prefix.Prefix.Data[0]))
+		return fmt.Sprintf("%d.%d.%d.%d/%d", raw[0], raw[1], raw[2], raw[3], prefix.PrefixLength)
+	case windows.AF_INET6:
+		raw := (*[16]byte)(unsafe.Pointer(&prefix.Prefix.Data[1]))
+		return net.IP(raw[:]).String() + "/" + strconv.Itoa(int(prefix.PrefixLength))
+	default:
+		return ""
+	}
 }
 
 // AdapterPresent 报告名字以 name 开头的网络适配器是否还在系统里。

@@ -606,6 +606,34 @@ func describeDNSChanges(changes []network.DNSResetChange) string {
 	return strings.Join(parts, ", ")
 }
 
+// shouldClearLeftoverTunRoutes 决定是否清理残留 TUN 路由。内核在跑时绝不动：
+// 那些路由正是它写进去的；状态读不到时也不动，宁可留给探测再试。
+func shouldClearLeftoverTunRoutes(running bool, statusErr error, adapterPresent bool) bool {
+	return statusErr == nil && !running && adapterPresent
+}
+
+// clearLeftoverTunRoutes 清掉「内核没在跑、FreeV6TUN 却还在」留下的 auto-route
+// 残留：停止被强杀在关 TUN 的中途时，适配器还在、默认路由仍指向它，但没有
+// 会话接收流量，出站会一直超时（重启网卡也不恢复）。只删路由、不删适配器：
+// 残留热点共享的还原需要 FreeV6TUN 连接仍然存在。
+//
+// 启动流程与 IPv6 探测共用：前者覆盖开发者模式等跳过探测的路径，后者在
+// 停止后立刻点检测时先恢复网络。返回清掉的路由条数。
+func (h *helper) clearLeftoverTunRoutes(reason string) int {
+	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
+	_, running, statusErr := mihomo.Status(pidPath)
+	if !shouldClearLeftoverTunRoutes(running, statusErr, network.AdapterPresent(network.TunDeviceName)) {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	removed := network.ClearTunRoutes(ctx, network.TunDeviceName)
+	if removed > 0 {
+		fmt.Fprintf(os.Stderr, "helper: %s: cleared %d leftover %s route(s)\n", reason, removed, network.TunDeviceName)
+	}
+	return removed
+}
+
 func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -693,6 +721,11 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	// 上次停止被强杀在「关 TUN 的中途」时，会留下没有会话的 FreeV6TUN 与半段
+	// 默认路由：出站全被它吸走，表现是「网连着但什么都打不开」。内核没在跑就
+	// 不该留着它——在抓快照/还原热点之前先清掉，用户不必等到 IPv6 探测那一步
+	// （开发者模式会跳过探测）。只删路由，保留适配器供 ICS 角色还原使用。
+	h.clearLeftoverTunRoutes("start")
 	// 校园模式下凭据完全用不上（网关由云端节点自带），此时不能因为没注册
 	// WARP 就拦人启动——那会让"导入配置即用"的学生永远启不了免流。
 	var device warp.Device
@@ -1132,7 +1165,7 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 			teardownTook.Round(time.Millisecond), adapterGone, patchErr,
 			stopWaited.Round(time.Millisecond), stopExited, time.Since(stopStarted).Round(time.Millisecond))
 		if !adapterGone {
-			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失，下次启动前会清理残留路由\n",
+			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失，下次启动时会清理残留路由\n",
 				network.TunDeviceName, tunStageTimeout)
 		}
 	} else {

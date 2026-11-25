@@ -29,12 +29,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/yourname/freev6/internal/mihomo"
 	"github.com/yourname/freev6/internal/network"
 )
 
@@ -421,15 +419,7 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 	// 会话没了，auto-route 写进去的半段默认路由还在，出站全被它吸走。这种残留
 	// 不会自愈，探测只会全部超时，然后把责任推给"校园网 v6 不通"。免流没在跑
 	// 就不该留着它——先清掉残留路由再测，机器能立刻恢复。
-	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
-	if _, running, statusErr := mihomo.Status(pidPath); statusErr == nil && !running &&
-		network.AdapterPresent(network.TunDeviceName) {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if removed := network.ClearTunRoutes(cleanupCtx, network.TunDeviceName); removed > 0 {
-			probeLogf("helper: ipv6 probe: cleared %d leftover %s route(s)\n", removed, network.TunDeviceName)
-		}
-		cleanupCancel()
-	}
+	h.clearLeftoverTunRoutes("ipv6 probe")
 	result, attempts, err := probeIPv6Sources(request.Context(), ipv6ProbeClient, ipv6EchoSources)
 	if err != nil {
 		// 失败原因也落一行 helper.log：前端只显示一句结论，排障要看每个源的
