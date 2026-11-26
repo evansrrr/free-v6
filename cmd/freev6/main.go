@@ -133,6 +133,16 @@ func startMihomo(args []string) error {
 	logPathValue := resolveRootPath(*rootPath, *logPath)
 	snapshotPathValue := resolveRootPath(*rootPath, *snapshotPath)
 	binaryPathValue := resolveRootPath(*rootPath, *binaryPath)
+	// 与 helper 同一条口径：上次停止被强杀在关 TUN 的中途时，FreeV6TUN 与半段
+	// 默认路由会留下，出站全被它吸走（网连着却什么都连不上）。内核确认没在跑
+	// 就先清掉，再往下做自愈与抓基线。
+	_, coreRunning, coreStatusErr := mihomo.Status(pidPathValue)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	removedRoutes := network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
+	cleanupCancel()
+	if removedRoutes > 0 {
+		fmt.Fprintf(os.Stderr, "freev6: cleared %d leftover %s route(s)\n", removedRoutes, network.TunDeviceName)
+	}
 	device, err := readDevice(statePathValue)
 	if err != nil {
 		return err

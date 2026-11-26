@@ -606,28 +606,17 @@ func describeDNSChanges(changes []network.DNSResetChange) string {
 	return strings.Join(parts, ", ")
 }
 
-// shouldClearLeftoverTunRoutes 决定是否清理残留 TUN 路由。内核在跑时绝不动：
-// 那些路由正是它写进去的；状态读不到时也不动，宁可留给探测再试。
-func shouldClearLeftoverTunRoutes(running bool, statusErr error, adapterPresent bool) bool {
-	return statusErr == nil && !running && adapterPresent
-}
-
 // clearLeftoverTunRoutes 清掉「内核没在跑、FreeV6TUN 却还在」留下的 auto-route
-// 残留：停止被强杀在关 TUN 的中途时，适配器还在、默认路由仍指向它，但没有
-// 会话接收流量，出站会一直超时（重启网卡也不恢复）。只删路由、不删适配器：
-// 残留热点共享的还原需要 FreeV6TUN 连接仍然存在。
+// 残留（判定与执行见 network.ClearLeftoverTunRoutes）。
 //
 // 启动流程与 IPv6 探测共用：前者覆盖开发者模式等跳过探测的路径，后者在
 // 停止后立刻点检测时先恢复网络。返回清掉的路由条数。
 func (h *helper) clearLeftoverTunRoutes(reason string) int {
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
 	_, running, statusErr := mihomo.Status(pidPath)
-	if !shouldClearLeftoverTunRoutes(running, statusErr, network.AdapterPresent(network.TunDeviceName)) {
-		return 0
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	removed := network.ClearTunRoutes(ctx, network.TunDeviceName)
+	removed := network.ClearLeftoverTunRoutes(ctx, running, statusErr)
 	if removed > 0 {
 		fmt.Fprintf(os.Stderr, "helper: %s: cleared %d leftover %s route(s)\n", reason, removed, network.TunDeviceName)
 	}
