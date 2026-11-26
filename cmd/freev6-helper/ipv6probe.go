@@ -36,10 +36,17 @@ const (
 	// 单个目标的 TCP 连接预算。CERNET 内 RTT 通常 < 20ms，900ms 足够吸收抖动，
 	// 又不会让"确实不通"拖住启动。
 	ipv6EgressTimeout = 900 * time.Millisecond
-	// 每个地址的重试轮数：停止免流拆掉 TUN 之后有一小段路由过渡态，一轮全败
-	// 不代表出站真的不可用，重试比让用户再按一次更省事。
+	// 重试只在「刚停完免流」的窗口里有意义：那时 TUN 正在拆、路由还没收敛，
+	// 一轮全败不代表真的出不去。其余时候一轮定论——多网卡里只要有一条地址
+	// 被黑洞，等三轮就是把启动拖到 3 秒。
 	ipv6EgressAttempts = 3
 	ipv6EgressGap      = 250 * time.Millisecond
+	// 停止免流后多久算"过渡态"。teardown 实测 20ms–1.2s，留 5s 足够覆盖
+	// TUN 拆除与默认路由收敛。
+	ipv6RetryWindow = 5 * time.Second
+	// 整个探测的总预算：即使撞上过渡态、又有多个地址都在超时，也不能让
+	// "检测中…"无限转下去。
+	ipv6ProbeBudget = 2500 * time.Millisecond
 	// 给 scope 打标签时补问一次校外目标：竞速总是校内目标先回（2–6ms），
 	// 不能凭"谁先赢"就说"只到得了校园"。校外可达时通常 < 120ms。
 	ipv6ScopeTimeout = 600 * time.Millisecond
@@ -178,16 +185,13 @@ func isBindFailure(err error) bool {
 // 不会互相干扰（全局替换时上一个用例的残留 goroutine 会污染下一个的计数）。
 type dialFunc func(ctx context.Context, local net.IP, target string, timeout time.Duration) error
 
-// checkAddressEgress 测单个源地址的出站能力：先按该地址绑源竞速三个目标，
-// 全败且"绑不上"时退回系统选源再测一次（标注 Unverified，不至于误伤）。
-func checkAddressEgress(ctx context.Context, addr ipv6Address) addressProbe {
-	return probeAddressEgress(ctx, addr, probeDialIPv6)
-}
-
-func probeAddressEgress(ctx context.Context, addr ipv6Address, dial dialFunc) addressProbe {
+func probeAddressEgress(ctx context.Context, addr ipv6Address, dial dialFunc, attempts int) addressProbe {
 	probe := addressProbe{IP: addr.IP, Alias: addr.Alias}
 	local := net.ParseIP(addr.IP)
-	for attempt := 1; attempt <= ipv6EgressAttempts; attempt++ {
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
 		outcome, bindBlocked := raceEgressTargets(ctx, dial, local)
 		probe.Attempts = attempt
 		if outcome.OK {
@@ -211,7 +215,7 @@ func probeAddressEgress(ctx context.Context, addr ipv6Address, dial dialFunc) ad
 			}
 			return probe
 		}
-		if attempt == ipv6EgressAttempts {
+		if attempt == attempts {
 			break
 		}
 		select {
@@ -219,6 +223,10 @@ func probeAddressEgress(ctx context.Context, addr ipv6Address, dial dialFunc) ad
 		case <-ctx.Done():
 			return probe
 		}
+	}
+	// 预算用尽时 Detail 可能还是空的：给一句能看懂的话，别让前端拿到空括号。
+	if probe.Detail == "" {
+		probe.Detail = "探测超时"
 	}
 	return probe
 }
@@ -309,6 +317,18 @@ func targetHost(target string) string {
 	return target
 }
 
+// markStopped 记录一次停止免流完成。探测用它判断"是不是刚停完"：TUN 拆除
+// 后的几秒里出站必然失败，只有这段时间值得重试。
+func (h *helper) markStopped() { h.lastStop.Store(time.Now().UnixNano()) }
+
+func (h *helper) stoppedRecently(window time.Duration) bool {
+	last := h.lastStop.Load()
+	if last == 0 {
+		return false
+	}
+	return time.Since(time.Unix(0, last)) < window
+}
+
 // GET /api/v1/ipv6/probe：本机 IPv6 前置检查。
 // 条件不满足时仍回 200 + error（这是「网络不具备条件」，不是接口错误）。
 func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
@@ -328,14 +348,26 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// 每个地址各测一轮，互不阻塞；总耗时仍是一条 RTT 的量级。
+	// 每个地址各测一轮，互不阻塞；总耗时是一条 RTT 的量级，慢的那条地址由
+	// 总预算兜底。
+	//
+	// 重试只在「刚停完免流」的窗口里放开：那是唯一"再等一下就通"的场景。别的
+	// 时候一轮定论——多网卡里只要有一条地址被黑洞，等三轮就是白白多花 3 秒，
+	// 而它本来也不会因为重试就通。
+	attempts := 1
+	if h.stoppedRecently(ipv6RetryWindow) {
+		attempts = ipv6EgressAttempts
+	}
+	budget, cancel := context.WithTimeout(request.Context(), ipv6ProbeBudget)
+	defer cancel()
+
 	probes := make([]addressProbe, len(addresses))
 	var wg sync.WaitGroup
 	for index := range addresses {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			probes[index] = checkAddressEgress(request.Context(), addresses[index])
+			probes[index] = probeAddressEgress(budget, addresses[index], probeDialIPv6, attempts)
 		}(index)
 	}
 	wg.Wait()
@@ -349,10 +381,10 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 			break
 		}
 	}
+	// ip/source 只在这个地址确实能出站时才给：更早的前端只读 ip，如果全失败时
+	// 仍返回第一个地址，那些前端会拿一个不可用的校园地址放行启动。
 	response := map[string]any{
 		"ok":        true,
-		"ip":        primary.IP,
-		"source":    primary.Alias,
 		"addresses": probes,
 	}
 	anyEgress := false
@@ -373,6 +405,13 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 	}
 	response["egress"] = anyEgress
 	response["attempts"] = maxAttempts
+	if anyEgress {
+		response["ip"] = primary.IP
+		response["source"] = primary.Alias
+	} else {
+		response["ip"] = ""
+		response["source"] = ""
+	}
 
 	if anyEgress {
 		probeLogf("helper: ipv6 check: %d 个地址，出站经 %s 用时 %dms\n",

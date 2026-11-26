@@ -768,7 +768,17 @@ async function detectPublicIPv6() {
 
   const usable = campus.find((item) => item.egress === true);
   if (!usable) {
-    const first = campus[0];
+    // 只有"明确测出来出不去"才拦：旧 helper 没有 egress 字段、或绑源失败/
+    // 预算用尽（unverified）都属于证据不足，而这个检查只是提示，误拦一次比
+    // 放过一次更难受——真有问题，启动会立刻报真实错误。
+    const blocked = campus.filter((item) => item.egress === false && !item.unverified);
+    if (!blocked.length) {
+      const unknown = campus[0];
+      addLog(`IPv6 出站未验证（${unknown.ip}），按可用继续`);
+      ipv6CheckNote = [unknown.alias || res.source, '出站未验证'].filter(Boolean).join(' · ');
+      return unknown.ip;
+    }
+    const first = blocked[0];
     throw new Error(`校园 IPv6 地址 ${first.ip} 出站不通${first.detail ? `（${first.detail}）` : ''}`);
   }
 

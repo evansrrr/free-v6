@@ -67,6 +67,9 @@ const (
 type helper struct {
 	root string
 	mu   sync.Mutex
+	// lastStop 是最近一次停止免流完成的时刻（UnixNano）。IPv6 前置检查用它
+	// 判断要不要重试：TUN 拆除后的几秒里出站必然失败，其余时候一轮定论。
+	lastStop atomic.Int64
 }
 
 type settings struct {
@@ -1168,6 +1171,9 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 		clearedRoutes = network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
 		cleanupCancel()
 	}
+	// 记下停止完成的时刻：紧接着的 IPv6 前置检查据此判断"还在过渡态"，才值得
+	// 重试（见 ipv6probe.go 的 ipv6RetryWindow）。
+	h.markStopped()
 	// 一行阶段耗时进 helper.log：teardown（内核关 TUN + 适配器消失）与 exit
 	// （进程退出）分开记，才看得出时间花在哪一步。
 	if tunAttempted {

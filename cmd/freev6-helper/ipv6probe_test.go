@@ -92,7 +92,7 @@ func TestIsBindFailure(t *testing.T) {
 }
 
 func probeOne(addr ipv6Address, dial dialFunc) addressProbe {
-	return probeAddressEgress(context.Background(), addr, dial)
+	return probeAddressEgress(context.Background(), addr, dial, ipv6EgressAttempts)
 }
 
 // 竞速：任一目标握手成功就算这个地址可用，并带回目标类别（校园/校外）。
@@ -242,6 +242,89 @@ func TestIPv6ProbeSeparatesPerAddressEgress(t *testing.T) {
 	}
 }
 
+// 预算用尽必须收手：目标被黑洞时 Dialer 会挂满 900ms，三轮加起来足以把
+// "检测中…"拖到 3 秒，所以整个探测跑在自己的预算里。
+func TestProbeAddressEgressStopsAtBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	probe := probeAddressEgress(ctx, ipv6Address{IP: "2001:da8:208:38::1"},
+		func(ctx context.Context, _ net.IP, _ string, _ time.Duration) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}, ipv6EgressAttempts)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Errorf("耗时 %v，预算 300ms 没有生效", elapsed)
+	}
+	if probe.Egress {
+		t.Error("什么都没连上却判定可用")
+	}
+	if probe.Detail == "" {
+		t.Error("预算耗尽时应给出可读原因")
+	}
+}
+
+// 没刚停过免流时只跑一轮：多网卡里有一条地址被黑洞，等三轮就是白等 3 秒。
+func TestIPv6ProbeDoesNotRetryWithoutRecentStop(t *testing.T) {
+	var calls int32
+	restoreList, restoreDial := stubProbe([]ipv6Address{
+		{IP: "2001:da8:208:38::1", Alias: "WiFi"},
+	}, func(context.Context, net.IP, string, time.Duration) error {
+		atomic.AddInt32(&calls, 1)
+		return &net.OpError{Op: "dial", Err: errors.New("network is unreachable")}
+	})
+	defer restoreList()
+	defer restoreDial()
+
+	started := time.Now()
+	body := runProbe(t)
+	if got := atomic.LoadInt32(&calls); got != int32(len(ipv6EgressTargets)) {
+		t.Errorf("发起了 %d 次连接，一轮应该是 %d 次", got, len(ipv6EgressTargets))
+	}
+	if body.Attempts != 1 {
+		t.Errorf("attempts = %d", body.Attempts)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("耗时 %v，不该为一条不可达地址等三轮", elapsed)
+	}
+}
+
+// 刚停完免流：TUN 还在拆，这时的失败会自愈，才值得重试。
+func TestIPv6ProbeRetriesRightAfterStop(t *testing.T) {
+	var calls int32
+	restoreList, restoreDial := stubProbe([]ipv6Address{
+		{IP: "2001:da8:208:38::1", Alias: "WiFi"},
+	}, func(context.Context, net.IP, string, time.Duration) error {
+		atomic.AddInt32(&calls, 1)
+		return &net.OpError{Op: "dial", Err: errors.New("network is unreachable")}
+	})
+	defer restoreList()
+	defer restoreDial()
+
+	body := runProbeWith(t, func(h *helper) { h.markStopped() })
+	if body.Attempts < 2 {
+		t.Errorf("attempts = %d，刚停完免流应该重试", body.Attempts)
+	}
+	if got := atomic.LoadInt32(&calls); got <= int32(len(ipv6EgressTargets)) {
+		t.Errorf("只发起了 %d 次连接，没有重试", got)
+	}
+}
+
+// 停止窗口之外不再重试：窗口判断本身也要能过。
+func TestStoppedRecentlyWindow(t *testing.T) {
+	instance := &helper{}
+	if instance.stoppedRecently(ipv6RetryWindow) {
+		t.Error("从未停止过却判定为刚停完")
+	}
+	instance.markStopped()
+	if !instance.stoppedRecently(ipv6RetryWindow) {
+		t.Error("刚标记停止却没被识别")
+	}
+	if instance.stoppedRecently(0) {
+		t.Error("零窗口应判为不在窗口内")
+	}
+}
+
 // 没有全局 IPv6：直接给结论，不发任何连接（不能靠"连不上"去推断）。
 func TestIPv6ProbeWithoutAddressSkipsEgress(t *testing.T) {
 	restoreList, restoreDial := stubProbe(nil, nil)
@@ -286,8 +369,11 @@ func TestIPv6ProbeReportsEgressFailure(t *testing.T) {
 	if !strings.Contains(body.Error, "出站不通") {
 		t.Errorf("error = %q", body.Error)
 	}
-	if body.Attempts != ipv6EgressAttempts {
-		t.Errorf("attempts = %d", body.Attempts)
+	if body.Attempts != 1 {
+		t.Errorf("attempts = %d，没有刚停过免流就不该重试", body.Attempts)
+	}
+	if body.IP != "" {
+		t.Errorf("ip = %q，全部地址出不去时不该给出地址（旧前端会拿它放行）", body.IP)
 	}
 }
 
@@ -303,7 +389,15 @@ type probeBody struct {
 
 func runProbe(t *testing.T) probeBody {
 	t.Helper()
+	return runProbeWith(t, nil)
+}
+
+func runProbeWith(t *testing.T, prepare func(*helper)) probeBody {
+	t.Helper()
 	instance := &helper{root: t.TempDir()}
+	if prepare != nil {
+		prepare(instance)
+	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/ipv6/probe", nil)
 	instance.ipv6Probe(recorder, request)
