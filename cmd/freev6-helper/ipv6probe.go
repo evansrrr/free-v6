@@ -22,12 +22,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/yourname/freev6/internal/mihomo"
-	"github.com/yourname/freev6/internal/network"
 )
 
 const (
@@ -203,7 +199,7 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	clearLeftoverTunRoutes(h.root)
+	h.clearLeftoverTunRoutes("probe")
 
 	addresses := listLocalIPv6()
 	if len(addresses) == 0 {
@@ -238,21 +234,4 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		probeLogf("helper: ipv6 check: %d 个地址，出站失败：%s\n", len(ips), egress.Detail)
 	}
 	writeJSON(writer, http.StatusOK, response)
-}
-
-// clearLeftoverTunRoutes 清理上一次异常停止留下的 TUN 残留路由：没有会话的
-// FreeV6TUN 会把出站全吸走，而这种残留不会自愈。免流没在跑才清。
-func clearLeftoverTunRoutes(root string) {
-	pidPath := filepath.Join(root, "state", "mihomo.pid")
-	if _, running, err := mihomo.Status(pidPath); err != nil || running {
-		return
-	}
-	if !network.AdapterPresent(network.TunDeviceName) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if removed := network.ClearTunRoutes(ctx, network.TunDeviceName); removed > 0 {
-		probeLogf("helper: ipv6 check: 清理残留 %s 路由 %d 条\n", network.TunDeviceName, removed)
-	}
 }
