@@ -709,36 +709,12 @@ async function runAutoStart() {
 
 /* ── IPv6 gate (启动免流前检测) ─────────────────────────────── */
 
-// Campus prefixes allowed to run 免流, as /32 first-two-hextet fingerprints:
-// 2001:da8::/32 (CERNET2) and 2001:250::/32.
-const MIULIU_IPV6_PREFIX32 = [[0x2001, 0x0da8], [0x2001, 0x0250]];
-
-// Expand an IPv6 literal to its 8 hextets, or null when unparsable.
-function expandIPv6(ip) {
-  const cleaned = String(ip).trim().split('%')[0].toLowerCase();
-  if (!/^[0-9a-f:]+$/.test(cleaned) || !cleaned.includes(':')) return null;
-  const halves = cleaned.split('::');
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  let groups;
-  if (halves.length === 2) {
-    const fill = 8 - head.length - tail.length;
-    if (fill < 1) return null; // '::' must stand for at least one group
-    groups = [...head, ...Array(fill).fill('0'), ...tail];
-  } else {
-    groups = head;
-    if (groups.length !== 8) return null;
-  }
-  if (groups.length !== 8) return null;
-  const nums = groups.map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
-  return nums.some(Number.isNaN) ? null : nums;
-}
+// 判定逻辑全在 web/ipv6gate.js（纯函数，node:test 里跑同一份代码）：
+// 校园前缀、逐地址取舍、放行/拦停全在那里，这里只负责发请求与打日志。
+const IPv6Gate = typeof FreeV6IPv6Gate !== 'undefined' ? FreeV6IPv6Gate : null;
 
 function isInCampusIPv6(ip) {
-  const groups = expandIPv6(ip);
-  if (!groups) return false;
-  return MIULIU_IPV6_PREFIX32.some(([a, b]) => groups[0] === a && groups[1] === b);
+  return IPv6Gate ? IPv6Gate.isInCampusIPv6(ip) : false;
 }
 
 // 最近一次检测的补充说明（哪张网卡、出站 RTT），只用于日志。
@@ -748,63 +724,17 @@ let ipv6CheckNote = '';
 // 再逐个地址绑源做一次 TCP 握手确认"这个地址"能出网（字面量地址，不查 DNS、
 // 不调回显 API）。
 //
-// 关键点：出站是否可用的结论是**按地址**给的。多网卡（校园 WiFi + 有线/热点/
-// VPN）时，整体"某条链路能出去"并不代表校园那个地址能出去——免流走的正是校园
-// 地址。所以这里只认"落在校园前缀且出站可用"的那个；校园地址明确不通时要报出
-// 是哪一层不通，而不是笼统地甩一句"不支持免流"。
+// 放行/拦停的判断在 FreeV6IPv6Gate.decideIPv6Gate（web/ipv6gate.js），这里只
+// 执行它给出的结论：记它要求的日志、把备注写进 ipv6CheckNote、必要时抛出原因。
 async function detectPublicIPv6() {
   ipv6CheckNote = '';
+  if (!IPv6Gate) throw new Error('检测模块未加载（ipv6gate.js）');
   const res = await api('/ipv6/probe');
-  const list = normalizeProbeAddresses(res);
-  if (!list.length) throw new Error(res?.error || '本机没有 IPv6 地址');
-
-  const campus = list.filter((item) => isInCampusIPv6(item.ip));
-  if (!campus.length) {
-    // 没有校园前缀地址：随便返回一个能出站（或第一个）地址，由调用方按
-    // 「当前网络不支持免流」处理。
-    const usable = list.find((item) => item.egress === true) || list[0];
-    return usable.ip;
-  }
-
-  const usable = campus.find((item) => item.egress === true);
-  if (!usable) {
-    // 只有"明确测出来出不去"才拦：旧 helper 没有 egress 字段、或绑源失败/
-    // 预算用尽（unverified）都属于证据不足，而这个检查只是提示，误拦一次比
-    // 放过一次更难受——真有问题，启动会立刻报真实错误。
-    const blocked = campus.filter((item) => item.egress === false && !item.unverified);
-    if (!blocked.length) {
-      const unknown = campus[0];
-      addLog(`IPv6 出站未验证（${unknown.ip}），按可用继续`);
-      ipv6CheckNote = [unknown.alias || res.source, '出站未验证'].filter(Boolean).join(' · ');
-      return unknown.ip;
-    }
-    const first = blocked[0];
-    throw new Error(`校园 IPv6 地址 ${first.ip} 出站不通${first.detail ? `（${first.detail}）` : ''}`);
-  }
-
-  // 只有校园内目标可达：包出得去，但校外路径没验证，值得提示一句
-  if (usable.scope === 'campus') {
-    addLog(`IPv6 出站仅校内可达（${usable.target || '校园检测点'}），校外路径未验证`);
-  }
-  const rtt = usable.rttMs ?? res.rttMs;
-  ipv6CheckNote = [usable.alias || res.source, rtt != null ? `出站 ${rtt}ms` : ''].filter(Boolean).join(' · ');
-  const attempts = usable.attempts || res.attempts || 0;
-  if (attempts > 1) addLog(`IPv6 出站检测重试 ${attempts - 1} 次后通过`);
-  return usable.ip;
-}
-
-// helper 的 addresses 可能是对象数组（新版，带逐地址出站结论）或字符串数组
-// （旧版）。统一成对象；旧版只有顶层 egress 时，把它摊到每个地址上。
-function normalizeProbeAddresses(res) {
-  const raw = Array.isArray(res?.addresses) ? res.addresses : [];
-  const list = raw
-    .map((item) => (typeof item === 'string' ? { ip: item } : item))
-    .filter((item) => item && item.ip);
-  if (!list.length && res?.ip) list.push({ ip: res.ip });
-  if (list.length && list.every((item) => typeof item.egress !== 'boolean') && typeof res?.egress === 'boolean') {
-    for (const item of list) item.egress = res.egress;
-  }
-  return list;
+  const decision = IPv6Gate.decideIPv6Gate(res);
+  for (const message of decision.messages || []) addLog(message);
+  if (decision.action === 'block') throw new Error(decision.error);
+  ipv6CheckNote = decision.note || '';
+  return decision.ip;
 }
 
 function showNetGateDialog() {

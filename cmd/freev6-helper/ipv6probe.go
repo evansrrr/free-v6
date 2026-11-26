@@ -45,8 +45,10 @@ const (
 	// TUN 拆除与默认路由收敛。
 	ipv6RetryWindow = 5 * time.Second
 	// 整个探测的总预算：即使撞上过渡态、又有多个地址都在超时，也不能让
-	// "检测中…"无限转下去。
+	// "检测中…"无限转下去。不含探测前的残留路由清理（见 ipv6Probe）。
 	ipv6ProbeBudget = 2500 * time.Millisecond
+	// 残留路由清理超过这个阈值就单独记一行日志。
+	ipv6CleanupLogThreshold = 200 * time.Millisecond
 	// 给 scope 打标签时补问一次校外目标：竞速总是校内目标先回（2–6ms），
 	// 不能凭"谁先赢"就说"只到得了校园"。校外可达时通常 < 120ms。
 	ipv6ScopeTimeout = 600 * time.Millisecond
@@ -317,16 +319,21 @@ func targetHost(target string) string {
 	return target
 }
 
+// probeClockStart 是单调时钟的起点。窗口判断用"启动以来的经过时间"而不是
+// 墙钟：系统时间回拨时，墙钟差值会变成负数，窗口就一直开着——多跑两轮最多
+// 2.5s，无害，但没必要留这个隐患。
+var probeClockStart = time.Now()
+
 // markStopped 记录一次停止免流完成。探测用它判断"是不是刚停完"：TUN 拆除
 // 后的几秒里出站必然失败，只有这段时间值得重试。
-func (h *helper) markStopped() { h.lastStop.Store(time.Now().UnixNano()) }
+func (h *helper) markStopped() { h.lastStop.Store(int64(time.Since(probeClockStart))) }
 
 func (h *helper) stoppedRecently(window time.Duration) bool {
 	last := h.lastStop.Load()
 	if last == 0 {
 		return false
 	}
-	return time.Since(time.Unix(0, last)) < window
+	return time.Since(probeClockStart)-time.Duration(last) < window
 }
 
 // GET /api/v1/ipv6/probe：本机 IPv6 前置检查。
@@ -336,7 +343,11 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	cleanupStarted := time.Now()
 	h.clearLeftoverTunRoutes("probe")
+	if took := time.Since(cleanupStarted); took > ipv6CleanupLogThreshold {
+		probeLogf("helper: ipv6 check: 清理残留 TUN 路由耗时 %v\n", took.Round(time.Millisecond))
+	}
 
 	addresses := listLocalIPv6()
 	if len(addresses) == 0 {
@@ -358,6 +369,9 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 	if h.stoppedRecently(ipv6RetryWindow) {
 		attempts = ipv6EgressAttempts
 	}
+	// 预算只管探测本身，不含上面那步残留路由清理（残留 TUN 存在时要走 netsh，
+	// 最长几秒）。清理慢的时候单独记一行，免得"检测中…"转了 5 秒却看不出
+	// 时间花在哪。
 	budget, cancel := context.WithTimeout(request.Context(), ipv6ProbeBudget)
 	defer cancel()
 
@@ -418,7 +432,15 @@ func (h *helper) ipv6Probe(writer http.ResponseWriter, request *http.Request) {
 			len(probes), response["egressTarget"], primary.RTTMs)
 	} else {
 		// 文案不用"本机没有 IPv6"：地址明明在，问题是出不去。
-		detail := probes[0].Detail
+		// 取第一个真正有原因的地址：绑源失败的那条会把 Detail 清空，直接读
+		// probes[0] 会把后面的具体目标一起丢掉。
+		detail := ""
+		for _, probe := range probes {
+			if probe.Detail != "" {
+				detail = probe.Detail
+				break
+			}
+		}
 		if detail == "" {
 			detail = "全部地址均不可达"
 		}

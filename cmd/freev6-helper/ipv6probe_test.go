@@ -377,6 +377,33 @@ func TestIPv6ProbeReportsEgressFailure(t *testing.T) {
 	}
 }
 
+// 失败文案要挑"真正有原因"的那条：绑源失败会把 Detail 清空，若它排在第一个，
+// 直接读 probes[0] 会把后面地址的具体目标一起丢掉。
+func TestIPv6ProbeKeepsARealFailureReason(t *testing.T) {
+	restoreList, restoreDial := stubProbe([]ipv6Address{
+		{IP: "2001:db8:1::1", Alias: "VPN"}, // 绑不上源地址
+		{IP: "2001:da8:208:38::1", Alias: "WiFi"},
+	}, func(_ context.Context, local net.IP, _ string, _ time.Duration) error {
+		if local != nil && local.String() == "2001:db8:1::1" {
+			return &net.OpError{Op: "dial", Err: &os.SyscallError{Syscall: "bind", Err: errors.New("invalid argument")}}
+		}
+		return &net.OpError{Op: "dial", Err: errors.New("network is unreachable")}
+	})
+	defer restoreList()
+	defer restoreDial()
+
+	body := runProbe(t)
+	if body.Egress {
+		t.Fatalf("全部地址都出不去: %+v", body.Addresses)
+	}
+	if body.Addresses[0].Detail != "" || !body.Addresses[0].Unverified {
+		t.Errorf("第一个地址应是未验证且无原因: %+v", body.Addresses[0])
+	}
+	if !strings.Contains(body.Error, targetHost(ipv6EgressTargets[0].Addr)) {
+		t.Errorf("失败文案丢了具体目标: %q", body.Error)
+	}
+}
+
 type probeBody struct {
 	OK        bool           `json:"ok"`
 	IP        string         `json:"ip"`
