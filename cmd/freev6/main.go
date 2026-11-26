@@ -24,6 +24,14 @@ func main() {
 	}
 }
 
+const (
+	// 与 helper 的 stopExitTimeout / tunCleanupTimeout 同值：CLI 是排障工具，
+	// 停止行为要和正式路径一致，不然「CLI 停完是好的、界面停完是坏的」会把人
+	// 带偏。
+	stopExitTimeout   = 2 * time.Second
+	tunCleanupTimeout = 3 * time.Second
+)
+
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" {
 		printUsage()
@@ -221,8 +229,23 @@ func stopMihomo(args []string) error {
 	}
 	pidPathValue := resolveRootPath(*rootPath, *pidPath)
 	snapshotPathValue := resolveRootPath(*rootPath, *snapshotPath)
-	if err := mihomo.Stop(pidPathValue); err != nil {
+	// 与 helper 同一条口径：先等进程真的退出，再清残留路由 —— 进程还在时它会
+	// 继续往路由表写，此刻删除是在跟内核收尾抢。
+	_, stopExited, err := mihomo.StopAndWait(pidPathValue, stopExitTimeout)
+	if err != nil {
 		return err
+	}
+	if stopExited {
+		// Stop 会先删 pid 文件再等退出，所以这里要重读一次：这段时间里若有
+		// 另一个入口把新内核拉起来（running=true），删路由等于删掉新会话的
+		// 出站路径。
+		_, coreRunning, coreStatusErr := mihomo.Status(pidPathValue)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
+		removedRoutes := network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
+		cleanupCancel()
+		if removedRoutes > 0 {
+			fmt.Fprintf(os.Stderr, "freev6: cleared %d leftover %s route(s)\n", removedRoutes, network.TunDeviceName)
+		}
 	}
 	if snapshot, err := network.LoadSnapshot(snapshotPathValue); err == nil {
 		restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
