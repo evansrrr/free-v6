@@ -469,7 +469,7 @@ async function startProxyFlow(auto = false) {
       if (!isInCampusIPv6(ip)) {
         return { ok: false, reason: 'net', message: `当前网络不支持免流${detail}`, detail };
       }
-      if (!auto) addLog(`IPv6 检测通过: ${ip}${ipv6EchoSource ? `（${ipv6EchoSource}）` : ''}`);
+      if (!auto) addLog(`IPv6 检测通过: ${ip}${ipv6CheckNote ? `（${ipv6CheckNote}）` : ''}`);
     } else if (!auto) {
       addLog('开发者模式：跳过 IPv6 检测');
     }
@@ -741,21 +741,27 @@ function isInCampusIPv6(ip) {
   return MIULIU_IPV6_PREFIX32.some(([a, b]) => groups[0] === a && groups[1] === b);
 }
 
-// 最近一次检测胜出的地址，仅用于日志：让「IPv6 检测通过」能看出哪个检测点
-// 在实际生效，某个源长期不可用时一眼能看出来。
-let ipv6EchoSource = '';
+// 最近一次检测的补充说明（哪张网卡、出站 RTT），只用于日志。
+let ipv6CheckNote = '';
 
-// IPv6 出口检测。走 helper 的 /ipv6/probe：它用 tcp6 直连、竞速多个检测地址，
-// 既没有 CORS/混合内容限制（高校 speedtest 后端才用得上），也不会因为某一个
-// 地址超时就把可用的校园 IPv6 判成「不支持免流」。
-// 刚停完免流的那几秒系统还在拆 TUN、收敛默认路由，helper 会自己重试；重试过就
-// 记一行日志，免得「检测中…」空转几秒看起来像卡死。
+// IPv6 前置检查。helper 只做两件事：列出本机的全局 IPv6（纯本地，微秒级），
+// 再用一次 TCP 握手确认能出网（字面量地址，不查 DNS、不调回显 API）。
+// 这里优先返回落在校园前缀里的地址；没有校园地址时把第一个原样返回，由调用方
+// 按「当前网络不支持免流」处理。
 async function detectPublicIPv6() {
+  ipv6CheckNote = '';
   const res = await api('/ipv6/probe');
-  if (!res || !res.ip) throw new Error((res && res.error) || '未取得 IPv6');
-  ipv6EchoSource = res.source || '';
-  if (res.attempts > 1) addLog(`IPv6 检测重试 ${res.attempts - 1} 次后通过`);
-  return res.ip;
+  const list = Array.isArray(res?.addresses) && res.addresses.length
+    ? res.addresses
+    : (res?.ip ? [res.ip] : []);
+  if (!list.length) throw new Error(res?.error || '本机没有 IPv6 地址');
+  const campus = list.find(isInCampusIPv6);
+  if (!campus) return list[0];
+  // egress 缺省（旧版 helper）按"未知"处理，不据此判失败
+  if (res.egress === false) throw new Error(res?.error || '本机有 IPv6 地址但出站不通');
+  ipv6CheckNote = [res.source, res.egressTarget ? `出站 ${res.rttMs}ms` : ''].filter(Boolean).join(' · ');
+  if (res.attempts > 1) addLog(`IPv6 出站检测重试 ${res.attempts - 1} 次后通过`);
+  return campus;
 }
 
 function showNetGateDialog() {
