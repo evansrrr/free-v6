@@ -745,23 +745,56 @@ function isInCampusIPv6(ip) {
 let ipv6CheckNote = '';
 
 // IPv6 前置检查。helper 只做两件事：列出本机的全局 IPv6（纯本地，微秒级），
-// 再用一次 TCP 握手确认能出网（字面量地址，不查 DNS、不调回显 API）。
-// 这里优先返回落在校园前缀里的地址；没有校园地址时把第一个原样返回，由调用方
-// 按「当前网络不支持免流」处理。
+// 再逐个地址绑源做一次 TCP 握手确认"这个地址"能出网（字面量地址，不查 DNS、
+// 不调回显 API）。
+//
+// 关键点：出站是否可用的结论是**按地址**给的。多网卡（校园 WiFi + 有线/热点/
+// VPN）时，整体"某条链路能出去"并不代表校园那个地址能出去——免流走的正是校园
+// 地址。所以这里只认"落在校园前缀且出站可用"的那个；校园地址明确不通时要报出
+// 是哪一层不通，而不是笼统地甩一句"不支持免流"。
 async function detectPublicIPv6() {
   ipv6CheckNote = '';
   const res = await api('/ipv6/probe');
-  const list = Array.isArray(res?.addresses) && res.addresses.length
-    ? res.addresses
-    : (res?.ip ? [res.ip] : []);
+  const list = normalizeProbeAddresses(res);
   if (!list.length) throw new Error(res?.error || '本机没有 IPv6 地址');
-  const campus = list.find(isInCampusIPv6);
-  if (!campus) return list[0];
-  // egress 缺省（旧版 helper）按"未知"处理，不据此判失败
-  if (res.egress === false) throw new Error(res?.error || '本机有 IPv6 地址但出站不通');
-  ipv6CheckNote = [res.source, res.egressTarget ? `出站 ${res.rttMs}ms` : ''].filter(Boolean).join(' · ');
-  if (res.attempts > 1) addLog(`IPv6 出站检测重试 ${res.attempts - 1} 次后通过`);
-  return campus;
+
+  const campus = list.filter((item) => isInCampusIPv6(item.ip));
+  if (!campus.length) {
+    // 没有校园前缀地址：随便返回一个能出站（或第一个）地址，由调用方按
+    // 「当前网络不支持免流」处理。
+    const usable = list.find((item) => item.egress === true) || list[0];
+    return usable.ip;
+  }
+
+  const usable = campus.find((item) => item.egress === true);
+  if (!usable) {
+    const first = campus[0];
+    throw new Error(`校园 IPv6 地址 ${first.ip} 出站不通${first.detail ? `（${first.detail}）` : ''}`);
+  }
+
+  // 只有校园内目标可达：包出得去，但校外路径没验证，值得提示一句
+  if (usable.scope === 'campus') {
+    addLog(`IPv6 出站仅校内可达（${usable.target || '校园检测点'}），校外路径未验证`);
+  }
+  const rtt = usable.rttMs ?? res.rttMs;
+  ipv6CheckNote = [usable.alias || res.source, rtt != null ? `出站 ${rtt}ms` : ''].filter(Boolean).join(' · ');
+  const attempts = usable.attempts || res.attempts || 0;
+  if (attempts > 1) addLog(`IPv6 出站检测重试 ${attempts - 1} 次后通过`);
+  return usable.ip;
+}
+
+// helper 的 addresses 可能是对象数组（新版，带逐地址出站结论）或字符串数组
+// （旧版）。统一成对象；旧版只有顶层 egress 时，把它摊到每个地址上。
+function normalizeProbeAddresses(res) {
+  const raw = Array.isArray(res?.addresses) ? res.addresses : [];
+  const list = raw
+    .map((item) => (typeof item === 'string' ? { ip: item } : item))
+    .filter((item) => item && item.ip);
+  if (!list.length && res?.ip) list.push({ ip: res.ip });
+  if (list.length && list.every((item) => typeof item.egress !== 'boolean') && typeof res?.egress === 'boolean') {
+    for (const item of list) item.egress = res.egress;
+  }
+  return list;
 }
 
 function showNetGateDialog() {
