@@ -59,6 +59,9 @@ const (
 	// stopExitTimeout 等内核进程真正退出的上限。等的是 9090 端口释放——不等
 	// 它，紧接着的启动会在端口自检上撞出"端口被占用"。
 	stopExitTimeout = 2 * time.Second
+	// tunCleanupTimeout 是删除残留 TUN 默认路由的预算。实测本机四条 netsh
+	// 合计约 0.4s；3s 足够，又不会让停止/启动多等太久。
+	tunCleanupTimeout = 3 * time.Second
 )
 
 type helper struct {
@@ -614,7 +617,7 @@ func describeDNSChanges(changes []network.DNSResetChange) string {
 func (h *helper) clearLeftoverTunRoutes(reason string) int {
 	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
 	_, running, statusErr := mihomo.Status(pidPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
 	defer cancel()
 	removed := network.ClearLeftoverTunRoutes(ctx, running, statusErr)
 	if removed > 0 {
@@ -1147,18 +1150,37 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
 		return
 	}
+	// 进程确认退出后就地清残留：PATCH 没关掉 TUN 时，适配器与 auto-route 写的
+	// 默认路由会留在系统里，用户若停在这里不再启动，出站会一直超时 —— 「下次
+	// 启动时清理」对这种情况等于永远不修。
+	//
+	// 只在 stopExited 为真时动手：进程还活着就会继续往路由表里写，此刻删除是在
+	// 跟内核收尾抢。清理期间 h.mu 仍被持有，紧接着的重启请求排在它之后，不会
+	// 出现「新会话刚建好的路由被上一次停止的清理删掉」。只删路由、保留适配器：
+	// 残留热点共享的还原还需要 FreeV6TUN 连接存在。
+	clearedRoutes := 0
+	if stopExited {
+		// 停止会先删 pid 文件再等进程退出，所以这里必须重新读一次：若有另一个
+		// 入口（CLI、第二个 helper）在这个窗口里刚把新内核拉起来，删路由就等于
+		// 删掉新会话的出站路径。stopExited 只证明「我们杀的那个」走了。
+		_, coreRunning, coreStatusErr := mihomo.Status(pidPath)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
+		clearedRoutes = network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
+		cleanupCancel()
+	}
 	// 一行阶段耗时进 helper.log：teardown（内核关 TUN + 适配器消失）与 exit
 	// （进程退出）分开记，才看得出时间花在哪一步。
 	if tunAttempted {
-		fmt.Fprintf(os.Stderr, "helper: stop: tun teardown %v (adapter gone=%v, patch err=%v), exit %v (exited=%v), total %v\n",
+		fmt.Fprintf(os.Stderr, "helper: stop: tun teardown %v (adapter gone=%v, patch err=%v), exit %v (exited=%v), cleared %d route(s), total %v\n",
 			teardownTook.Round(time.Millisecond), adapterGone, patchErr,
-			stopWaited.Round(time.Millisecond), stopExited, time.Since(stopStarted).Round(time.Millisecond))
-		if !adapterGone {
-			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失，下次启动时会清理残留路由\n",
+			stopWaited.Round(time.Millisecond), stopExited, clearedRoutes, time.Since(stopStarted).Round(time.Millisecond))
+		if !adapterGone && !stopExited {
+			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失且内核未退出，残留路由会在下次启动时清理\n",
 				network.TunDeviceName, tunStageTimeout)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "helper: stop: core not running, total %v\n", time.Since(stopStarted).Round(time.Millisecond))
+		fmt.Fprintf(os.Stderr, "helper: stop: core not running, cleared %d route(s), total %v\n",
+			clearedRoutes, time.Since(stopStarted).Round(time.Millisecond))
 	}
 	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)

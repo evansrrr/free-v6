@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -26,5 +27,16 @@ func TestShouldClearLeftoverTunRoutes(t *testing.T) {
 				t.Fatalf("shouldClearLeftoverTunRoutes = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// 内核在跑、或状态读不出来时，连适配器都不该去读，更不能删路由：删掉一次就
+// 让正在跑的内核瞬间失去出站。这里断言返回值，等于断言没走到执行分支。
+func TestClearLeftoverTunRoutesLeavesRunningCoreAlone(t *testing.T) {
+	if got := ClearLeftoverTunRoutes(context.Background(), true, nil); got != 0 {
+		t.Fatalf("running core must not have routes removed, got %d", got)
+	}
+	if got := ClearLeftoverTunRoutes(context.Background(), false, errors.New("status failed")); got != 0 {
+		t.Fatalf("unknown core status must not have routes removed, got %d", got)
 	}
 }

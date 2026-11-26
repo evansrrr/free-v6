@@ -1,4 +1,5 @@
 /bin/
+/build/
 /dist/
 /target/
 src-tauri/target/
@@ -6,6 +7,7 @@ src-tauri/gen/
 /config/
 /runtime/
 *.exe
+*.exe~
 *.test
 
 state/
