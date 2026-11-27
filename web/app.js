@@ -78,6 +78,8 @@ const state = {
   warpRegistered: false,
   warpRegistering: false,
   warpAutoTried: false,
+  // 已提示过「新版本被本机应用/系统拦截」，避免每次检查都重复弹
+  coreUpdateBlockedLogged: false,
 
   // Logs
   logs: [],
@@ -327,6 +329,7 @@ function showView(view) {
   // Synchronous owner: every later read (syncDelayFab, tests, rapid clicks)
   // sees the view the user just asked for.
   state.activeView = view;
+  if (view === 'settings') preloadSettingsComponents();
 
   // A rapid second switch must not leave a third view behind: collapse any
   // view that is neither the one we animate out nor the one we bring in.
@@ -2145,6 +2148,9 @@ async function refreshBackendState() {
 // Falling-edge latch: when stopped, zero the readout once instead of redrawing
 // an empty chart every second forever.
 let trafficIdle = false;
+// System colour-scheme matchMedia, kept outside `state` so the state shape
+// stays a plain data object.
+let systemThemeQuery = null;
 
 async function pollTraffic() {
   if (document.hidden) return;
@@ -3619,9 +3625,9 @@ function applyTheme(theme) {
   syncNativeVibrancy();
   // Listen for system changes when in system mode
   if (theme === 'system') {
-    if (!state._systemThemeListener) {
-      state._systemThemeListener = window.matchMedia('(prefers-color-scheme: light)');
-      state._systemThemeListener.addEventListener('change', () => {
+    if (!systemThemeQuery) {
+      systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
+      systemThemeQuery.addEventListener('change', () => {
         // CSS variables auto-switch via [data-theme="system"] + media query;
         // the derived palette needs a manual re-derive for the new scheme
         // （跟随时也走渐变，避免系统切换时硬跳）
@@ -3967,6 +3973,15 @@ function wireTitlebar() {
 
 /* ── Init ─────────────────────────────────────────────────────── */
 
+// Settings-only Material components are split into material-settings.js so the
+// first-screen upgrade batch stays small. Preload them once the initial frame
+// has painted; showView('settings') also triggers it as a backstop.
+function preloadSettingsComponents() {
+  if (preloadSettingsComponents._done) return;
+  preloadSettingsComponents._done = true;
+  import('./material-settings.js').catch(() => {});
+}
+
 function init() {
   installErrorReporting();
   setupGlassSwitches(); // 先给玻璃开关挂 .selected 兼容，再让各 wiring 读写
@@ -4025,6 +4040,12 @@ function init() {
     pollTraffic();
     refreshMemory();
   });
+
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(preloadSettingsComponents, { timeout: 2000 });
+  } else {
+    setTimeout(preloadSettingsComponents, 600);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
