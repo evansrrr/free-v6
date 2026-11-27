@@ -31,6 +31,9 @@ const state = {
   totalDownload: 0,
   // Poll guard: a slow /connections response must not overlap the next tick.
   trafficPolling: false,
+  // Same guard for the (larger) /proxies payload; without it a slow 9090
+  // overlaps the next 5s tick.
+  proxiesPolling: false,
   // Consecutive malformed snapshots, used to log one degradation warning.
   trafficParseFailures: 0,
   trafficParseWarned: false,
@@ -275,13 +278,18 @@ async function invokeHost(cmd) {
 /* Open a URL in the system browser (Tauri opener plugin), or a new tab when
    the UI runs standalone in a normal browser (dev server). */
 async function openExternal(url) {
+  // Only ever hand http(s) to the OS shell. The opener plugin already scopes
+  // mailto:/tel:, but the browser fallback below does not, and a rejected
+  // invoke still falls through to it — validate once, here.
+  const target = String(url || '');
+  if (!/^https?:\/\//i.test(target)) return;
   try {
     if (window.__TAURI_INTERNALS__?.invoke) {
-      await window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url });
+      await window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url: target });
       return;
     }
   } catch (_) { /* fall through to the browser fallback */ }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  window.open(target, '_blank', 'noopener,noreferrer');
 }
 
 /* ── Logging ── */
@@ -306,11 +314,27 @@ function renderLogs() {
 const VIEW_TITLES = { dashboard: '仪表盘', proxies: '接入点', settings: '设置' };
 const MODE_LABELS = { rule: '规则', global: '全局', direct: '直连' };
 
+let viewTransitionGen = 0;
+
 function showView(view) {
-  if (view === state.activeView) return;
-  const oldView = $(`#${state.activeView}View`);
   const newView = $(`#${view}View`);
   if (!newView) return;
+  // Same target already settled: nothing to do. During a transition the class
+  // is not there yet, so repeated clicks still land instead of being swallowed.
+  if (view === state.activeView && newView.classList.contains('active') && !newView.classList.contains('exiting')) return;
+
+  const oldId = state.activeView;
+  const oldView = oldId && oldId !== view ? $(`#${oldId}View`) : null;
+  const gen = ++viewTransitionGen;
+  // Synchronous owner: every later read (syncDelayFab, tests, rapid clicks)
+  // sees the view the user just asked for.
+  state.activeView = view;
+
+  // A rapid second switch must not leave a third view behind: collapse any
+  // view that is neither the one we animate out nor the one we bring in.
+  $$('.view').forEach(v => {
+    if (v !== oldView && v !== newView) v.classList.remove('active', 'exiting');
+  });
 
   // 切换期间锁住滚动条：新旧视图会短暂同时占位（约 40ms），内容高度
   // 翻倍会让滚动条闪现。scrollbar-gutter 已预留槽位，锁定不引起宽度抖动。
@@ -321,26 +345,23 @@ function showView(view) {
     showView._unlockTimer = setTimeout(() => main.classList.remove('switching'), 420);
   }
 
-  // Exit animation on old view
+  // Exit animation on the previous view. The timeout is generation-guarded so
+  // a superseded transition cannot touch the current one.
   if (oldView) {
-    const oldId = state.activeView;
     oldView.classList.add('exiting');
-    // 不依赖 animationend：溢出锁定会改动 overflow，可能让动画被取消，
-    // 事件不来就会留下 opacity:0 的旧视图，下次切回整页空白。
-    // 固定 160ms（动画 120ms + 新视图 80ms 激活）收尾，且只在它确实
-    // 已被新视图取代时才摘掉 active，避免快速来回切换把当前页藏掉。
     setTimeout(() => {
-      oldView.classList.remove('exiting');
-      if (state.activeView !== oldId && newView.classList.contains('active')) {
-        oldView.classList.remove('active');
-      }
+      if (gen !== viewTransitionGen) return;
+      oldView.classList.remove('exiting', 'active');
     }, 160);
   }
 
-  // Enter new view after short delay
+  // Enter the new view after a short delay.
   setTimeout(() => {
+    if (gen !== viewTransitionGen) return;
+    $$('.view').forEach(v => {
+      if (v !== newView) v.classList.remove('active', 'exiting');
+    });
     newView.classList.add('active');
-    state.activeView = view;
     $('#pageTitle').textContent = VIEW_TITLES[view] || view;
     // FABs are window-anchored: proxy toggle on dashboard, delay test on proxies
     $('#proxyToggle')?.classList.toggle('visible', view === 'dashboard');
@@ -349,7 +370,10 @@ function showView(view) {
 
   // Update nav highlighting immediately
   $$('.nav-item[data-view]').forEach(item => {
-    item.classList.toggle('active', item.dataset.view === view);
+    const active = item.dataset.view === view;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
 }
 
@@ -737,12 +761,111 @@ async function detectPublicIPv6() {
   return decision.ip;
 }
 
+/* ── Dialog layers: focus, inert, Escape ─────────────────────── */
+
+// Closed scrims used to be opacity:0 + pointer-events:none, which left every
+// button inside them in the tab order and in the accessibility tree (and kept
+// aria-modal="true" on all nine). Closed layers are now [inert]; opening moves
+// focus in, Tab is trapped, and closing returns focus to the trigger.
+const dialogStack = [];
+const DIALOG_BOX = '.net-dialog, .guide-dialog, .update-dialog';
+const DIALOG_FOCUSABLE = [
+  'a[href]', 'button:not([disabled])', 'input:not([disabled])',
+  'select:not([disabled])', 'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+  'md-filled-button:not([disabled])', 'md-text-button:not([disabled])',
+  'md-icon-button:not([disabled])', 'md-outlined-text-field:not([disabled])',
+  'md-outlined-select:not([disabled])',
+].join(',');
+
+function dialogFocusables(root) {
+  return [...root.querySelectorAll(DIALOG_FOCUSABLE)]
+    .filter(el => el.getClientRects().length > 0);
+}
+
+function topDialog() {
+  return dialogStack[dialogStack.length - 1] || null;
+}
+
+function openDialogLayer(scrim, { dismissible = true, canClose = null, initial = null, onClose = null } = {}) {
+  if (!scrim) return;
+  const existing = dialogStack.findIndex(d => d.scrim === scrim);
+  if (existing >= 0) dialogStack.splice(existing, 1);
+  dialogStack.push({ scrim, dismissible, canClose, trigger: document.activeElement, onClose });
+  scrim.removeAttribute('inert');
+  scrim.classList.add('open');
+  scrim.querySelector(DIALOG_BOX)?.setAttribute('aria-modal', 'true');
+  const target = initial || dialogFocusables(scrim)[0] || scrim.querySelector(DIALOG_BOX);
+  target?.focus?.();
+}
+
+function closeDialogLayer(scrim, { restore = true } = {}) {
+  if (!scrim) return;
+  const idx = dialogStack.findIndex(d => d.scrim === scrim);
+  const entry = idx >= 0 ? dialogStack.splice(idx, 1)[0] : null;
+  scrim.classList.remove('open');
+  scrim.setAttribute('inert', '');
+  scrim.querySelector(DIALOG_BOX)?.removeAttribute('aria-modal');
+  entry?.onClose?.();
+  if (!restore) return;
+  // Return focus to whatever opened this layer. If that element is gone (the
+  // list was re-rendered), fall back to the dialog below, then to the page.
+  const back = entry?.trigger;
+  if (back && document.contains(back) && typeof back.focus === 'function') {
+    back.focus();
+    return;
+  }
+  const below = topDialog();
+  const fallback = below ? dialogFocusables(below.scrim)[0] : null;
+  fallback?.focus?.();
+}
+
+function trapDialogTab(event) {
+  const top = topDialog();
+  if (!top) return;
+  const items = dialogFocusables(top.scrim);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  const inside = active && top.scrim.contains(active);
+  if (event.shiftKey && (!inside || active === first)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (!inside || active === last)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function installDialogKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const top = topDialog();
+      if (top) {
+        if (top.dismissible && (!top.canClose || top.canClose())) {
+          e.preventDefault();
+          closeDialogLayer(top.scrim);
+        }
+        return; // an open modal consumes Escape, even a non-dismissible one
+      }
+      const drawer = $('#logDrawer');
+      if (drawer?.classList.contains('open')) {
+        e.preventDefault();
+        closeLogsDrawer();
+      }
+      return;
+    }
+    if (e.key === 'Tab') trapDialogTab(e);
+  });
+}
+
 function showNetGateDialog() {
-  $('#netDialogScrim')?.classList.add('open');
+  openDialogLayer($('#netDialogScrim'));
 }
 
 function closeNetGateDialog() {
-  $('#netDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#netDialogScrim'));
 }
 
 /* ── Missing core (启动免流前的下载引导) ────────────────────── */
@@ -751,38 +874,38 @@ function showCoreDialog() {
   const dl = $('#coreDialogDownload');
   if (dl) { dl.disabled = false; dl.textContent = '下载'; }
   renderCoreDownloadProgress(0, false); // 复位上次残留的进度态
-  $('#coreDialogScrim')?.classList.add('open');
+  openDialogLayer($('#coreDialogScrim'), { initial: $('#coreDialogDownload') });
 }
 
 function closeCoreDialog() {
-  $('#coreDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#coreDialogScrim'));
 }
 
 /* ── Quit confirm (tray 退出) ──────────────────────────────── */
 
 function openQuitDialog() {
-  $('#quitDialogScrim')?.classList.add('open');
+  openDialogLayer($('#quitDialogScrim'), { initial: $('#quitDialogCancel') });
 }
 
 function closeQuitDialog() {
-  $('#quitDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#quitDialogScrim'));
 }
 
 function openDevModeDialog() {
-  $('#devModeDialogScrim')?.classList.add('open');
+  openDialogLayer($('#devModeDialogScrim'), { initial: $('#devModeDialogCancel') });
 }
 
 function closeDevModeDialog() {
-  $('#devModeDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#devModeDialogScrim'));
 }
 
 // 清除链式代理的确认弹窗（复用 net-dialog 提示样式，替代原生 confirm）
 function openChainClearDialog() {
-  $('#chainClearDialogScrim')?.classList.add('open');
+  openDialogLayer($('#chainClearDialogScrim'), { initial: $('#chainClearDialogCancel') });
 }
 
 function closeChainClearDialog() {
-  $('#chainClearDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#chainClearDialogScrim'));
 }
 
 /* ── 重置设置（设置 → 关于） ─────────────────────────────────────
@@ -792,11 +915,11 @@ function closeChainClearDialog() {
 function openResetDialog() {
   const hint = $('#resetStopHint');
   if (hint) hint.hidden = !state.proxyRunning;
-  $('#resetDialogScrim')?.classList.add('open');
+  openDialogLayer($('#resetDialogScrim'), { initial: $('#resetDialogCancel') });
 }
 
 function closeResetDialog() {
-  $('#resetDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#resetDialogScrim'));
 }
 
 async function resetSettings() {
@@ -827,11 +950,14 @@ function openWarpFailDialog(message) {
     const text = message || '注册接入凭据时出错，请检查网络后重试';
     body.textContent = text.length > 90 ? `${text.slice(0, 89)}…` : text;
   }
-  $('#warpFailDialogScrim')?.classList.add('open');
+  // Auto-run can fail repeatedly; refresh the text instead of stacking layers
+  // (stacking would also lose the original focus trigger).
+  if (isWarpFailDialogOpen()) return;
+  openDialogLayer($('#warpFailDialogScrim'), { initial: $('#warpFailDialogCancel') });
 }
 
 function closeWarpFailDialog() {
-  $('#warpFailDialogScrim')?.classList.remove('open');
+  closeDialogLayer($('#warpFailDialogScrim'));
 }
 
 // 重试 = 仅重新注册（用户已确认；不自动继续启动）。失败会再次进入
@@ -929,11 +1055,51 @@ function renderGuide() {
 function openGuide() {
   guidePage = 0;
   renderGuide();
-  $('#guideScrim')?.classList.add('open');
+  // The guide is a blocking consent screen: no Escape, no backdrop dismissal,
+  // but it must still trap focus and start on its own primary action.
+  openDialogLayer($('#guideScrim'), { dismissible: false, initial: $('#guideNext') });
 }
 
 function closeGuide() {
-  $('#guideScrim')?.classList.remove('open');
+  closeDialogLayer($('#guideScrim'));
+}
+
+/* ── Log drawer ──────────────────────────────────────────────── */
+
+function openLogsDrawer() {
+  const drawer = $('#logDrawer');
+  if (!drawer) return;
+  drawer.removeAttribute('inert');
+  drawer.classList.add('open');
+  $('#scrim')?.classList.add('open');
+  $('#closeLogs')?.focus();
+}
+
+function closeLogsDrawer() {
+  const drawer = $('#logDrawer');
+  if (!drawer?.classList.contains('open')) return;
+  drawer.classList.remove('open');
+  drawer.setAttribute('inert', '');
+  $('#scrim')?.classList.remove('open');
+  $('#logsButton')?.focus();
+}
+
+// Settings rows were plain divs with a click handler, so the whole settings
+// page was unreachable by keyboard. Give them button semantics without
+// changing the visual markup.
+function makeButtonLike(el) {
+  if (!el || el.dataset.keyboardReady === '1') return;
+  el.dataset.keyboardReady = '1';
+  if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+  const label = el.querySelector('.setting-label')?.textContent?.trim();
+  if (label && !el.getAttribute('aria-label')) el.setAttribute('aria-label', label);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      el.click();
+    }
+  });
 }
 
 // 翻页；到最后一页再点 → 记录已读并关闭（条款只能通过按钮同意）
@@ -1096,13 +1262,16 @@ function openUpdateDialog() {
   $('#updateNotes').textContent = section || '打开 Release 页面查看更新内容。';
   $('#updateStopHint').hidden = !state.proxyRunning;
   setUpdatePhase('ready');
-  $('#updateDialogScrim').classList.add('open');
+  openDialogLayer($('#updateDialogScrim'), {
+    initial: $('#updateNow'),
+    canClose: () => !updateBusy(),
+  });
 }
 
 function closeUpdateDialog() {
   if (updateBusy()) return; // 下载/安装进行中不允许关闭
   state.updatePhase = null;
-  $('#updateDialogScrim').classList.remove('open');
+  closeDialogLayer($('#updateDialogScrim'));
 }
 
 function setUpdatePhase(phase) {
@@ -1196,7 +1365,7 @@ async function startUpdate() {
   setUpdateStatus('正在安装新版本并重启…');
   let applied;
   try {
-    applied = await tauriInvoke('update_apply', { installer: prog.path });
+    applied = await tauriInvoke('update_apply');
   } catch (e) {
     updateFailed(`启动安装器失败: ${e.message}`);
     return;
@@ -1264,6 +1433,27 @@ function showToast(message, type = 'success') {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// Uncaught errors used to disappear into the WebView console, which nobody can
+// open in a release build. Surface them in the in-app log, rate-limited so a
+// render loop cannot turn the drawer into a storm.
+let lastErrorReport = { key: '', at: 0 };
+function reportUiError(label, detail) {
+  const msg = String(detail || '未知错误').split('\n')[0].slice(0, 200);
+  const key = `${label}|${msg}`;
+  const now = Date.now();
+  if (key === lastErrorReport.key && now - lastErrorReport.at < 5000) return;
+  lastErrorReport = { key, at: now };
+  try {
+    addLog(`${label}: ${msg}`, true);
+    showToast('界面出现异常，详情见日志', 'error');
+  } catch (_) { /* never let the reporter throw */ }
+}
+
+function installErrorReporting() {
+  window.addEventListener('error', (e) => reportUiError('界面错误', e?.message || e?.error?.message));
+  window.addEventListener('unhandledrejection', (e) => reportUiError('未处理异步错误', e?.reason?.message || String(e?.reason)));
 }
 
 // 免流运行中，模式 / 绕过白名单 / 开发者模式的改动要重启免流才生效；
@@ -1981,6 +2171,7 @@ async function refreshBackendState() {
 /* ── Traffic Polling ──────────────────────────────────────────── */
 
 async function pollTraffic() {
+  if (document.hidden) return;
   if (!state.proxyRunning) {
     // Stopped: zero the chart history, the kernel-counter baseline and the speed readout
     resetTrafficDisplay(true);
@@ -2091,6 +2282,7 @@ function resetTrafficDisplay(clearCounters) {
 // 数据来自 Rust get_memory_usage（Working Set）。浏览器直接调试时没有
 // Tauri bridge，调用返回 undefined —— 保持占位符，且不写日志以免刷屏。
 async function refreshMemory() {
+  if (document.hidden) return;
   let usage;
   try {
     usage = await tauriInvoke('get_memory_usage');
@@ -2125,6 +2317,7 @@ function renderMemory(appBytes, kernelBytes) {
 }
 
 async function pollStatus() {
+  if (document.hidden) return;
   const genAtStart = settingsWriteGen;
   const opGenAtStart = proxyOpGen;
   try {
@@ -2153,6 +2346,10 @@ async function pollStatus() {
       // 首次连上：公告与内核版本各补查一次（启动瞬间的检查可能早于 helper 就绪）
       ensureNoticeChecked();
       ensureCoreChecked();
+      // chain/cloud 的开关不会在 /status 里回灌；helper 重连后必须各自刷新，
+      // 否则一次失败的写入会一直显示成"已开"（chain 尤其没有别的自愈路径）。
+      refreshChainStatus();
+      refreshCloudStatus();
     }
     const wasRunning = state.proxyRunning;
     const isRunning = Boolean(status.proxy?.running);
@@ -2263,22 +2460,12 @@ function wireEvents() {
   });
 
   // Log drawer
-  $('#logsButton')?.addEventListener('click', () => {
-    $('#logDrawer')?.classList.add('open');
-    $('#scrim')?.classList.add('open');
-  });
-  const closeLogs = () => {
-    $('#logDrawer')?.classList.remove('open');
-    $('#scrim')?.classList.remove('open');
-  };
+  $('#logsButton')?.addEventListener('click', openLogsDrawer);
 
   // Unsupported-network dialog: dismiss via button, backdrop or Escape
   $('#netDialogOk')?.addEventListener('click', closeNetGateDialog);
   $('#netDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'netDialogScrim') closeNetGateDialog();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeNetGateDialog();
   });
 
   // Missing-core dialog: 下载 / 取消 / 遮罩 / Escape（下载成功后自动关闭）
@@ -2290,18 +2477,12 @@ function wireEvents() {
   $('#coreDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'coreDialogScrim') closeCoreDialog();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeCoreDialog();
-  });
 
   // Quit confirm dialog: act via buttons, dismiss via backdrop or Escape
   $('#quitDialogCancel')?.addEventListener('click', closeQuitDialog);
   $('#quitDialogStopQuit')?.addEventListener('click', stopAndQuit);
   $('#quitDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'quitDialogScrim') closeQuitDialog();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeQuitDialog();
   });
 
   // Developer mode confirm
@@ -2313,9 +2494,6 @@ function wireEvents() {
   $('#devModeDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'devModeDialogScrim') closeDevModeDialog();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeDevModeDialog();
-  });
 
   // Chain-clear confirm dialog: act via buttons, dismiss via backdrop or Escape
   $('#chainClearDialogCancel')?.addEventListener('click', closeChainClearDialog);
@@ -2325,9 +2503,6 @@ function wireEvents() {
   });
   $('#chainClearDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'chainClearDialogScrim') closeChainClearDialog();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeChainClearDialog();
   });
 
   // 重置设置确认弹窗：确认 = 重置，取消/遮罩/Escape 关闭
@@ -2339,18 +2514,12 @@ function wireEvents() {
   $('#resetDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'resetDialogScrim') closeResetDialog();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeResetDialog();
-  });
 
   // WARP 注册失败弹窗：重试 = 纯重新注册；取消/遮罩/Escape 关闭
   $('#warpFailDialogCancel')?.addEventListener('click', closeWarpFailDialog);
   $('#warpFailDialogRetry')?.addEventListener('click', retryWarpRegistration);
   $('#warpFailDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'warpFailDialogScrim') closeWarpFailDialog();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeWarpFailDialog();
   });
 
   // First-run guide: 翻页按钮 / 页码点；只能点「开始使用」关闭
@@ -2391,11 +2560,8 @@ function wireEvents() {
   $('#updateDialogScrim')?.addEventListener('click', (e) => {
     if (e.target?.id === 'updateDialogScrim') closeUpdateDialog();
   });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeUpdateDialog();
-  });
-  $('#closeLogs')?.addEventListener('click', closeLogs);
-  $('#scrim')?.addEventListener('click', closeLogs);
+  $('#closeLogs')?.addEventListener('click', closeLogsDrawer);
+  $('#scrim')?.addEventListener('click', closeLogsDrawer);
 
   // Refresh：整页重载，与 Ctrl+R 等效——重新初始化 UI、状态与轮询。
   // 只同步数据而不重绘时，无变化的界面看起来就是"点了没反应"。
@@ -2502,8 +2668,11 @@ function clearProxyList() {
 }
 
 async function fetchProxies() {
+  if (document.hidden) return;
   // 只在免流运行中拉取：停止后 :9090 已死，僵尸实例/时序竞态不得回填列表
   if (!state.helperOnline || !state.proxyRunning) return;
+  if (state.proxiesPolling) return;
+  state.proxiesPolling = true;
   try {
     const resp = await fetch('http://127.0.0.1:9090/proxies', { headers: controllerHeaders() });
     if (!resp.ok) return;
@@ -2516,6 +2685,31 @@ async function fetchProxies() {
     };
     renderNodeGrid();
   } catch (_) { /* mihomo not reachable */ }
+  finally { state.proxiesPolling = false; }
+}
+
+let nodeGridSignature = '';
+
+// Delay text for one node. Delay comes from mihomo's JSON, so coerce it before
+// it reaches innerHTML — a string payload used to be interpolated verbatim.
+function latencyView(name, { spinner = true } = {}) {
+  const raw = state.proxyDelays[name];
+  const delay = raw === undefined ? undefined : Number(raw);
+  if (state.testingDelay && delay === undefined) {
+    return {
+      cls: 'testing',
+      testing: true,
+      html: spinner
+        ? '<md-circular-progress class="node-spinner" indeterminate></md-circular-progress>测试中'
+        : '测试中…',
+    };
+  }
+  if (delay === undefined || !Number.isFinite(delay)) {
+    return { cls: 'unknown', testing: false, html: '未测试' };
+  }
+  if (delay < 100) return { cls: 'good', testing: false, html: `${delay} ms` };
+  if (delay < 500) return { cls: 'medium', testing: false, html: `${delay} ms` };
+  return { cls: 'bad', testing: false, html: delay >= 5000 ? 'Timeout' : `${delay} ms` };
 }
 
 function renderNodeGrid() {
@@ -2533,6 +2727,7 @@ function renderNodeGrid() {
         : '启动免流模式以加载链式代理节点';
     }
     el.innerHTML = `<div class="empty-state"><md-icon class="empty-state-icon">cloud_off</md-icon><span>${message}</span></div>`;
+    nodeGridSignature = '';
     return;
   }
 
@@ -2541,35 +2736,62 @@ function renderNodeGrid() {
   // Auto-sort by delay after test
   if (state.delaysReady) {
     nodes.sort((a, b) => {
-      const da = state.proxyDelays[a] ?? Infinity;
-      const db = state.proxyDelays[b] ?? Infinity;
-      return da - db;
+      const da = Number(state.proxyDelays[a]);
+      const db = Number(state.proxyDelays[b]);
+      return (Number.isFinite(da) ? da : Infinity) - (Number.isFinite(db) ? db : Infinity);
     });
   }
 
+  const signature = `${group.now}\u0000${nodes.join('\u0001')}`;
+  const canPatch = signature === nodeGridSignature
+    && el.querySelectorAll('.node-card').length === nodes.length;
+  if (canPatch) {
+    // Same names, same order: update only the latency cells. Rebuilding the
+    // whole grid every 5s (and once per delay result) created N² components.
+    for (const card of el.querySelectorAll('.node-card')) {
+      const name = card.dataset.name;
+      const view = latencyView(name, { spinner: false });
+      const latency = card.querySelector('.node-latency');
+      if (latency) {
+        latency.className = `node-latency ${view.cls}`;
+        latency.textContent = view.html;
+      }
+      card.classList.toggle('testing', view.testing);
+      const selected = name === group.now;
+      card.classList.toggle('selected', selected);
+      card.setAttribute('aria-checked', String(selected));
+    }
+    return;
+  }
+  nodeGridSignature = signature;
+
   el.innerHTML = nodes.map(name => {
     const selected = name === group.now;
-    const delay = state.proxyDelays[name];
-    const testing = state.testingDelay && delay === undefined;
-    let latencyClass = 'unknown';
-    let latencyText = '未测试';
-    if (testing) {
-      latencyClass = 'testing';
-      latencyText = '<md-circular-progress class="node-spinner" indeterminate></md-circular-progress>测试中';
-    } else if (delay !== undefined) {
-      if (delay < 100) { latencyClass = 'good'; latencyText = delay + ' ms'; }
-      else if (delay < 500) { latencyClass = 'medium'; latencyText = delay + ' ms'; }
-      else { latencyClass = 'bad'; latencyText = delay >= 5000 ? 'Timeout' : delay + ' ms'; }
-    }
-
-    return `<div class="node-card${selected ? ' selected' : ''}${testing ? ' testing' : ''}" data-name="${escapeHTML(name)}">
+    const view = latencyView(name);
+    return `<div class="node-card${selected ? ' selected' : ''}${view.testing ? ' testing' : ''}"
+      role="radio" tabindex="0" aria-checked="${selected}" data-name="${escapeHTML(name)}">
       <div class="node-name" title="${escapeHTML(name)}">${escapeHTML(name)}</div>
-      <div class="node-latency ${latencyClass}">${latencyText}</div>
+      <div class="node-latency ${view.cls}">${view.html}</div>
     </div>`;
   }).join('');
 
-  el.querySelectorAll('.node-card').forEach(card => {
+  const cards = [...el.querySelectorAll('.node-card')];
+  cards.forEach((card, index) => {
     card.addEventListener('click', () => switchProxy(card.dataset.name));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        switchProxy(card.dataset.name);
+        return;
+      }
+      const delta = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1
+        : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
+      if (!delta) return;
+      e.preventDefault();
+      const next = cards[(index + delta + cards.length) % cards.length];
+      next?.focus();
+      if (next) switchProxy(next.dataset.name);
+    });
   });
 }
 
@@ -3140,8 +3362,18 @@ function wireSettingsEvents() {
       showToast('请先关闭链式代理', 'error');
       return;
     }
+    const prev = state.cloud.enabled;
+    const el = e.target;
     state.cloud.enabled = next;
-    persistSettings(); // 主 PUT 携带 cloudEnabled 当前值
+    persistSettings().then((saved) => {
+      if (saved) return;
+      // The helper rejected the write: leaving the switch on would show a
+      // state the backend never accepted (and the poll does not re-sync this
+      // field). Roll state, control and derived UI back together.
+      state.cloud.enabled = prev;
+      el.selected = prev;
+      updateCloudUI();
+    });
   });
 
   // Add whitelist entries
@@ -3169,8 +3401,15 @@ function wireSettingsEvents() {
       return;
     }
     if (next === state.chain.enabled) return;
+    const prev = state.chain.enabled;
+    const el = e.target;
     state.chain.enabled = next;
-    persistSettings(); // 主 PUT 携带 chainEnabled 当前值；成功日志由它统一打
+    persistSettings().then((saved) => {
+      if (saved) return;
+      state.chain.enabled = prev;
+      el.selected = prev;
+      updateChainUI();
+    });
   });
 
   // Developer mode — 打开前必须弹窗确认（取消/遮罩/Esc → 保持关闭）；
@@ -3759,6 +3998,7 @@ function wireTitlebar() {
 /* ── Init ─────────────────────────────────────────────────────── */
 
 function init() {
+  installErrorReporting();
   setupGlassSwitches(); // 先给玻璃开关挂 .selected 兼容，再让各 wiring 读写
   loadSavedTheme();
   loadAppearancePrefs();
@@ -3769,6 +4009,10 @@ function init() {
   wireProxyEvents();
   wireSettingsEvents();
   wireBackgroundEvents();
+  installDialogKeyboard();
+  ['#wallpaperItem', '#cidrSettingItem', '#chainSettingItem', '#cloudSettingItem',
+    '#resetSettingsItem', '#readmeItem', '#feedbackItem', '#githubItem']
+    .forEach(sel => makeButtonLike($(sel)));
   renderLogs();
   initChart();
   refreshBackendState();
@@ -3801,6 +4045,15 @@ function init() {
     autoRun.lastWhy = '';
     addLog('网络已恢复，重新尝试自动启动免流');
     scheduleAutoRun(600);
+  });
+
+  // Hidden polls early-return above; on return to the foreground refresh once
+  // instead of waiting up to a full interval (traffic is 1s, status 3s).
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    pollStatus();
+    pollTraffic();
+    refreshMemory();
   });
 }
 

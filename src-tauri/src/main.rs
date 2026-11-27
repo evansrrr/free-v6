@@ -155,12 +155,15 @@ fn reserve_helper_port() -> u16 {
 // field report. Waiting for the Exit event guarantees the file is unlocked
 // before NSIS copies, so every component is replaced in the same run.
 #[tauri::command]
-fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, String> {
+fn update_apply(app: tauri::AppHandle) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
 
-    if !std::path::Path::new(&installer).is_file() {
-        return Err(format!("安装包不存在: {installer}"));
-    }
+    // The helper downloads to a fixed per-user cache path (updateSetupDest in
+    // cmd/freev6-helper/update.go). Never accept the path from the frontend:
+    // as an argument this command was "spawn any local executable" for anyone
+    // who could run script in the webview, and this process is elevated.
+    let installer = update_setup_path().ok_or_else(|| "安装包不存在，请重新下载".to_string())?;
+
     // Stop first and reap the child before touching the filesystem. If the
     // helper ignores the kill (defender hook, stuck syscall), don't hang the
     // UI forever — a bounded wait then proceeds; NSIS's own process guard is
@@ -183,6 +186,21 @@ fn update_apply(app: tauri::AppHandle, installer: String) -> Result<String, Stri
         .map_err(|e| format!("启动安装器失败: {e}"))?;
     app.exit(0);
     Ok("ok".into())
+}
+
+// Mirrors updateSetupDest in the helper: %LOCALAPPDATA%\FreeV6\... with a temp
+// fallback. Only an existing file is returned; the run is fail-closed.
+fn update_setup_path() -> Option<std::path::PathBuf> {
+    let cache = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|dir| dir.join("FreeV6").join("freev6-update-setup.exe"));
+    if let Some(path) = cache {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let temp = std::env::temp_dir().join("freev6-update-setup.exe");
+    if temp.is_file() { Some(temp) } else { None }
 }
 
 // Poll the flag set by the helper's event loop on CommandEvent::Terminated.

@@ -104,17 +104,17 @@
               <div class="speed-item">
                 <span class="speed-dot upload"></span>
                 <md-icon class="speed-arrow">arrow_upward</md-icon>
-                <span class="speed-value" id="speedUp">0 B/s</span>
+                <span class="speed-value"><span class="sr-only">上传</span><span id="speedUp">0 B/s</span></span>
               </div>
               <div class="speed-item">
                 <span class="speed-dot download"></span>
                 <md-icon class="speed-arrow">arrow_downward</md-icon>
-                <span class="speed-value" id="speedDown">0 B/s</span>
+                <span class="speed-value"><span class="sr-only">下载</span><span id="speedDown">0 B/s</span></span>
               </div>
             </div>
           </div>
           <div class="traffic-chart-wrap">
-            <canvas id="trafficCanvas"></canvas>
+            <canvas id="trafficCanvas" role="img" aria-label="最近 60 秒上下行速率曲线"></canvas>
           </div>
         </div>
 
@@ -264,7 +264,7 @@
           <md-filter-chip class="setting-seg" id="proxyTabAccess" data-proxy-tab="access" label="接入点" selected></md-filter-chip>
           <md-filter-chip class="setting-seg" id="proxyTabChain" data-proxy-tab="chain" label="链式代理"></md-filter-chip>
         </div>
-        <div class="node-grid" id="nodeGrid">
+        <div class="node-grid" id="nodeGrid" role="radiogroup" aria-label="接入点列表">
           <div class="empty-state">
             <md-icon class="empty-state-icon">cloud_off</md-icon>
             <span>启动免流模式以加载接入点列表</span>
@@ -628,7 +628,7 @@
     </main>
 
   <div class="scrim" id="scrim"></div>
-  <aside class="log-drawer" id="logDrawer" aria-label="运行日志">
+  <aside class="log-drawer" id="logDrawer" aria-label="运行日志" inert>
     <div class="drawer-header">
       <h2>运行日志</h2>
       <md-icon-button id="closeLogs" aria-label="关闭日志">
@@ -652,8 +652,8 @@
     </button>
   </div>
 
-  <div class="net-dialog-scrim" id="netDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="netDialogTitle">
+  <div class="net-dialog-scrim" inert id="netDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="netDialogTitle">
       <md-icon class="net-dialog-icon">language</md-icon>
       <h3 id="netDialogTitle">当前网络不支持免流</h3>
       <p>未检测到 IPv6 地址，或 IPv6 不属于教育网。请连接支持 IPv6 的校园网后再启动免流模式。</p>
@@ -661,8 +661,8 @@
     </div>
   </div>
 
-  <div class="net-dialog-scrim" id="quitDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="quitDialogTitle">
+  <div class="net-dialog-scrim" inert id="quitDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="quitDialogTitle">
       <md-icon class="net-dialog-icon">power_settings_new</md-icon>
       <h3 id="quitDialogTitle">退出 FreeV6？</h3>
       <p>免流模式仍在运行，仍然退出？</p>
@@ -674,8 +674,8 @@
   </div>
 
   <!-- Developer mode confirmation -->
-  <div class="net-dialog-scrim" id="devModeDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="devModeDialogTitle">
+  <div class="net-dialog-scrim" inert id="devModeDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="devModeDialogTitle">
       <md-icon class="net-dialog-icon">warning</md-icon>
       <h3 id="devModeDialogTitle">正在打开开发者模式，请谨慎操作！</h3>
       <div class="net-dialog-actions">
@@ -686,8 +686,8 @@
   </div>
 
   <!-- Missing core -->
-  <div class="net-dialog-scrim" id="coreDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="coreDialogTitle">
+  <div class="net-dialog-scrim" inert id="coreDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="coreDialogTitle">
       <md-icon class="net-dialog-icon">download</md-icon>
       <h3 id="coreDialogTitle">未检测到运行核心，请先下载</h3>
       <p id="coreDialogHint">下载并安装核心（~14MB）即可启动免流模式</p>
@@ -703,8 +703,8 @@
   </div>
 
   <!-- Chain proxy clear confirmation -->
-  <div class="net-dialog-scrim" id="chainClearDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="chainClearDialogTitle">
+  <div class="net-dialog-scrim" inert id="chainClearDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="chainClearDialogTitle">
       <md-icon class="net-dialog-icon">delete_sweep</md-icon>
       <h3 id="chainClearDialogTitle">清除链式代理？</h3>
       <p>将删除已导入的节点与订阅来源，下次启动免流恢复为普通链路</p>
@@ -716,8 +716,8 @@
   </div>
 
   <!-- 重置设置确认弹窗 -->
-  <div class="net-dialog-scrim" id="resetDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="resetDialogTitle">
+  <div class="net-dialog-scrim" inert id="resetDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="resetDialogTitle">
       <md-icon class="net-dialog-icon">autorenew</md-icon>
       <h3 id="resetDialogTitle">重置全部设置？</h3>
       <p>将恢复以下内容为默认值：免流模式、绕过网段、开发者模式、开机自启、静默启动、自动运行免流、快捷键、热点共享，并清除已导入的链式代理。</p>
@@ -730,8 +730,8 @@
   </div>
 
   <!-- WARP registration failure -->
-  <div class="net-dialog-scrim" id="warpFailDialogScrim">
-    <div class="net-dialog" role="alertdialog" aria-modal="true" aria-labelledby="warpFailDialogTitle">
+  <div class="net-dialog-scrim" inert id="warpFailDialogScrim">
+    <div class="net-dialog" role="alertdialog" aria-labelledby="warpFailDialogTitle">
       <md-icon class="net-dialog-icon">warning</md-icon>
       <h3 id="warpFailDialogTitle">接入凭据注册失败</h3>
       <p id="warpFailDialogBody">注册接入凭据时出错，请检查网络后重试</p>
@@ -743,8 +743,8 @@
   </div>
 
   <!-- Update prompt -->
-  <div class="net-dialog-scrim" id="updateDialogScrim">
-    <div class="net-dialog update-dialog" role="alertdialog" aria-modal="true" aria-labelledby="updateTitle">
+  <div class="net-dialog-scrim" inert id="updateDialogScrim">
+    <div class="net-dialog update-dialog" role="alertdialog" aria-labelledby="updateTitle">
       <md-icon class="net-dialog-icon">system_update</md-icon>
       <h3 id="updateTitle">发现新版本（~8MB）</h3>
       <p id="updateCurrent"></p>
@@ -774,8 +774,8 @@
   </div>
 
   <!-- First-run guide -->
-  <div class="guide-scrim" id="guideScrim">
-    <div class="guide-dialog" role="dialog" aria-modal="true" aria-labelledby="guideHeroTitle">
+  <div class="guide-scrim" id="guideScrim" inert>
+    <div class="guide-dialog" role="dialog" aria-labelledby="guideHeroTitle">
       <div class="guide-hero">
         <div class="guide-brand" aria-hidden="true">F 6</div>
         <h2 class="guide-hero-title" id="guideHeroTitle">欢迎使用 FreeV6</h2>
