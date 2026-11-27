@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -173,14 +174,21 @@ func parseCoreManifest(data []byte) (CoreManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return CoreManifest{}, fmt.Errorf("invalid core.json: %w", err)
 	}
-	if !ParseCoreVersion(manifest.Version).Valid() {
-		return CoreManifest{}, fmt.Errorf("core.json 缺少合法 version")
+	if !ParseCoreVersion(manifest.Version).Valid() || !coreVersionPattern.MatchString(manifest.Version) {
+		return CoreManifest{}, fmt.Errorf("core.json 版本非法: %q", manifest.Version)
 	}
 	if len(manifest.Platforms) == 0 {
 		return CoreManifest{}, fmt.Errorf("core.json 缺少 platforms")
 	}
 	return manifest, nil
 }
+
+// coreVersionPattern pins managed core versions to the exact tag shape the
+// release pipeline emits (core-v0.1.0-rc.2, core-v0.3.0-beta.1, core-v0.2.0).
+// The version is later interpolated into a file name under cores/, so anything
+// outside this shape (e.g. core-v0.1.0-../../../x) is rejected at parse time
+// before it can escape the directory.
+var coreVersionPattern = regexp.MustCompile(`^core-v\d+\.\d+\.\d+(-[0-9A-Za-z.\-]{1,32})?(\+[0-9A-Za-z.\-]+)?$`)
 
 func readCoreManifestCache(root string) (CoreManifest, time.Time, bool) {
 	data, err := os.ReadFile(coreManifestCachePath(root))

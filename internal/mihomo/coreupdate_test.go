@@ -65,6 +65,8 @@ func TestParseCoreManifest(t *testing.T) {
 		[]byte(`{"platforms":{}}`),
 		[]byte(`{"version":"core-v0.2.0"}`),
 		[]byte(`not json`),
+		// Path-traversal versions must be rejected before they reach a file name.
+		[]byte(`{"version":"core-v0.1.0-../../../x","platforms":{"windows-amd64-v3":{"url":"https://example.com/c.zip","sha256":"` + strings.Repeat("a", 64) + `"}}}`),
 	}
 	for _, data := range bad {
 		if _, err := parseCoreManifest(data); err == nil {

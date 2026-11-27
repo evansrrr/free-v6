@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -59,5 +60,35 @@ func TestLoadOrCreateSecretReplacesEmptyFile(t *testing.T) {
 	}
 	if len(secret) != 64 {
 		t.Fatalf("expected fresh 64-hex secret, got %q", secret)
+	}
+}
+
+func TestLoadOrCreateSecretConcurrent(t *testing.T) {
+	stateDir := t.TempDir()
+	const goroutines = 32
+	results := make([]string, goroutines)
+	errs := make([]error, goroutines)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = LoadOrCreateSecret(stateDir)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i := range results {
+		if errs[i] != nil {
+			t.Fatalf("goroutine %d: %v", i, errs[i])
+		}
+		if !validSecret(results[i]) {
+			t.Fatalf("goroutine %d: invalid secret %q", i, results[i])
+		}
+		if results[i] != results[0] {
+			t.Fatalf("secret mismatch across goroutines: %q != %q", results[i], results[0])
+		}
 	}
 }

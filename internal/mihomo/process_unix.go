@@ -14,3 +14,8 @@ func processRunning(pid int) bool {
 	}
 	return process.Signal(syscall.Signal(0)) == nil
 }
+
+// processIsOurs cannot be determined cheaply on non-Windows without parsing
+// /proc; keep the pre-existing kill behaviour there (the pid-reuse mis-kill
+// is a Windows elevated-process concern). Always true preserves semantics.
+func processIsOurs(int) bool { return true }

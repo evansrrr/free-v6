@@ -54,7 +54,7 @@ func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error
 	if strings.TrimSpace(binaryPath) == "" {
 		return 0, errors.New("mihomo binary path is empty")
 	}
-	if err := ensurePIDAvailable(pidPath, IsRunning); err != nil {
+	if err := ensurePIDAvailable(pidPath, IsRunning, processIsOurs); err != nil {
 		return 0, err
 	}
 	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
@@ -74,6 +74,11 @@ func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error
 		_ = logFile.Close()
 		return 0, fmt.Errorf("start mihomo: %w", err)
 	}
+	// Reap the child: without Wait the process handle leaks on Windows and the
+	// child becomes a zombie on Unix (where kill(pid,0) then always reports
+	// "running" and every stop waits out its full timeout). Stdout/Stderr are
+	// *os.File, not pipes, so no copy goroutines are needed.
+	go func() { _ = cmd.Wait() }()
 	_ = logFile.Close()
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600); err != nil {
 		_ = cmd.Process.Kill()
@@ -93,6 +98,11 @@ func Stop(pidPath string) error {
 	}
 	process, err := os.FindProcess(pid)
 	if err == nil && IsRunning(pid) {
+		if !processIsOurs(pid) {
+			// The pid was reused by an unrelated program after a crash: never
+			// TerminateProcess an innocent process (the helper runs elevated).
+			return fmt.Errorf("refusing to stop pid %d: not a FreeV6 core process", pid)
+		}
 		if err := process.Kill(); err != nil {
 			return fmt.Errorf("stop mihomo process %d: %w", pid, err)
 		}
@@ -100,7 +110,11 @@ func Stop(pidPath string) error {
 	return os.Remove(pidPath)
 }
 
-func ensurePIDAvailable(path string, running func(int) bool) error {
+// ensurePIDAvailable clears a stale pid file, or fails when the pid belongs to
+// a live FreeV6 core. running reports liveness; ours reports whether the pid
+// actually is one of our cores (see processIsOurs) — a live-but-unrelated pid
+// is treated as stale and removed rather than blocking start forever.
+func ensurePIDAvailable(path string, running, ours func(int) bool) error {
 	pid, err := readPID(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -111,7 +125,7 @@ func ensurePIDAvailable(path string, running func(int) bool) error {
 		}
 		return nil
 	}
-	if running(pid) {
+	if running(pid) && ours(pid) {
 		return ErrAlreadyRunning
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {

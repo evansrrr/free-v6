@@ -130,6 +130,10 @@ func (s *CoreStore) writeIndex(index CoreIndex) error {
 func (s *CoreStore) Active() (Core, error) {
 	index := s.Index()
 	if index.Active != "" {
+		if filepath.Base(index.Active) != index.Active || strings.Contains(index.Active, "..") {
+			// A tampered/corrupt pointer must never escape cores/.
+			return Core{}, fmt.Errorf("invalid core pointer %q", index.Active)
+		}
 		path := filepath.Join(s.CoresDir(), index.Active)
 		if isRegularFile(path) {
 			version := index.Version
@@ -230,7 +234,11 @@ func (s *CoreStore) Install(exePath, version string) (Core, error) {
 	if err := os.MkdirAll(s.CoresDir(), 0o700); err != nil {
 		return Core{}, fmt.Errorf("create cores dir: %w", err)
 	}
-	target := filepath.Join(s.CoresDir(), CoreFileName(version))
+	name := CoreFileName(version)
+	if filepath.Base(name) != name || strings.Contains(name, "..") {
+		return Core{}, fmt.Errorf("invalid core version %q", version)
+	}
+	target := filepath.Join(s.CoresDir(), name)
 	if !sameFile(exePath, target) {
 		if err := moveInto(exePath, target); err != nil {
 			return Core{}, fmt.Errorf("install core: %w", err)
