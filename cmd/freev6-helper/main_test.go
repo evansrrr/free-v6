@@ -239,3 +239,25 @@ func TestStatusSurfacesCorruptSettings(t *testing.T) {
 		t.Fatal("corrupt settings must populate settingsError")
 	}
 }
+
+// First-launch /settings GET must return full defaults (a non-nil blacklist),
+// not a zero-value struct — the UI reads settings.blacklist directly.
+func TestSettingsGetReturnsDefaultsOnFirstLaunch(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	rec := httptest.NewRecorder()
+	h.settings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out settings
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Blacklist == nil {
+		t.Fatal("first-launch blacklist must be an empty array, not null")
+	}
+	if out.Mode != mihomo.ModeRule {
+		t.Fatalf("default mode = %q, want rule", out.Mode)
+	}
+}

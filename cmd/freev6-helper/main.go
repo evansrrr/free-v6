@@ -496,11 +496,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if current.Mode == "" {
-			current.Mode = mihomo.ModeRule
-		}
-		if current.CampusCIDRs == nil {
-			current.CampusCIDRs = defaultCampusCIDRs()
+		if err != nil {
+			// First launch (no file yet): return full defaults, consistent with
+			// /status — a zero-value settings would expose a nil blacklist.
+			current = defaultSettings()
 		}
 		writeJSON(writer, http.StatusOK, current)
 	case http.MethodPut:
