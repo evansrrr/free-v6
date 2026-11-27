@@ -259,22 +259,6 @@ async function stopProxyApi() {
   return payload;
 }
 
-// Invoke a Tauri host command through __TAURI_INTERNALS__ (the same channel
-// the custom window controls use). Returns false outside the Tauri webview
-// so callers can fall back to plain browser navigation.
-async function invokeHost(cmd) {
-  try {
-    const tauri = window.__TAURI_INTERNALS__;
-    if (tauri && typeof tauri.invoke === 'function') {
-      await tauri.invoke(cmd);
-      return true;
-    }
-  } catch (e) {
-    addLog(`调用 ${cmd} 失败: ${e}`, true);
-  }
-  return false;
-}
-
 /* Open a URL in the system browser (Tauri opener plugin), or a new tab when
    the UI runs standalone in a normal browser (dev server). */
 async function openExternal(url) {
@@ -1003,7 +987,7 @@ async function stopAndQuit() {
 function quitDirectly() {
   closeQuitDialog();
   tauriInvoke('app_quit').then(() => {
-    if (!(window.__TAURI__?.core || window.__TAURI_INTERNALS__)) {
+    if (!Host.isAvailable()) {
       addLog('浏览器预览环境无法退出应用', true);
     }
   });
