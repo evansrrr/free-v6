@@ -67,6 +67,11 @@ const (
 type helper struct {
 	root string
 	mu   sync.Mutex
+	// settingsMu serializes settings.json read-modify-write transactions across
+	// the handlers that write it (settings PUT, chain/cloud import, proxy
+	// start, reset). Reads stay lock-free: the atomic write guarantees a reader
+	// never observes a partial file.
+	settingsMu sync.Mutex
 	// lastStop 是最近一次停止免流完成的时刻（UnixNano）。IPv6 前置检查用它
 	// 判断要不要重试：TUN 拆除后的几秒里出站必然失败，其余时候一轮定论。
 	lastStop atomic.Int64
@@ -470,7 +475,10 @@ func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	defaults := defaultSettings()
-	if err := h.saveSettings(defaults); err != nil {
+	if err := h.updateSettings(func(s *settings) error {
+		*s = defaults
+		return nil
+	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -478,7 +486,6 @@ func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request
 }
 
 func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
-	path := filepath.Join(h.root, "config", "settings.json")
 	switch request.Method {
 	case http.MethodGet:
 		current, err := h.loadSettings()
@@ -536,50 +543,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		if loadErr != nil {
 			persisted = defaultSettings()
 		}
-		// The GUI never sends the blacklist — when the client omits the field,
-		// keep the value from settings.json (edit it there manually).
-		if current.Blacklist == nil {
-			current.Blacklist = persisted.Blacklist
-		}
-		// Same contract for autoRunProxy: a client that predates the switch
-		// (or a partial PUT) must not silently turn 自动运行免流 off.
-		if !jsonKeyPresent(body, "autoRunProxy") {
-			current.AutoRunProxy = persisted.AutoRunProxy
-		}
-		// 同上：省略 hotkeyEnabled 时保留存储值，否则 bool 零值会悄悄解绑 F6
-		if !jsonKeyPresent(body, "hotkeyEnabled") {
-			current.HotkeyEnabled = persisted.HotkeyEnabled
-		}
-		// 同上：省略 hotspotShare 时保留存储值，否则 bool 零值会悄悄关掉热点共享
-		if !jsonKeyPresent(body, "hotspotShare") {
-			current.HotspotShare = persisted.HotspotShare
-		}
-		// 同上：sourceType/sourceUrl 只由 chain-proxy 端点维护、主 PUT 永远
-		// 省略；chainEnabled 由主 PUT 携带当前值。三者「省略即保留」，防
-		// 外部部分 PUT 把导入状态清掉、悄悄把出口切回裸 WARP。
-		if !jsonKeyPresent(body, "chainEnabled") {
-			current.ChainEnabled = persisted.ChainEnabled
-		}
-		if !jsonKeyPresent(body, "chainSourceType") {
-			current.ChainSourceType = persisted.ChainSourceType
-		}
-		if !jsonKeyPresent(body, "chainSourceUrl") {
-			current.ChainSourceURL = persisted.ChainSourceURL
-		}
-		// 备用配置同理：sourceUrl/updatedAt 只由 cloud-config 端点维护，
-		// cloudEnabled 由主 PUT 携带；三者省略即保留。
-		if !jsonKeyPresent(body, "cloudEnabled") {
-			current.CloudEnabled = persisted.CloudEnabled
-		}
-		if !jsonKeyPresent(body, "cloudSourceUrl") {
-			current.CloudSourceURL = persisted.CloudSourceURL
-		}
-		if !jsonKeyPresent(body, "cloudUpdatedAt") {
-			current.CloudUpdatedAt = persisted.CloudUpdatedAt
-		}
-		if !jsonKeyPresent(body, "portalHost") {
-			current.PortalHost = persisted.PortalHost
-		}
+		// Merge the omitted fields from the stored settings, then validate the
+		// (possibly hand-edited) blacklist. The authoritative merge + persist
+		// happens under the settings write lock below.
+		mergeSettingsOnto(&current, persisted, body)
 		blacklistEntries := make([]string, 0, len(current.Blacklist))
 		for _, entry := range current.Blacklist {
 			if err := mihomo.ValidateDomain(entry); err != nil {
@@ -589,36 +556,30 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 			blacklistEntries = append(blacklistEntries, strings.ToLower(strings.TrimSpace(entry)))
 		}
 		current.Blacklist = blacklistEntries
-		// Autostart toggles the Task Scheduler task plus its Task Manager marker
-		// entry as a side effect, BEFORE the file is written: a failure returns
-		// 500 so the GUI reverts the switch instead of claiming a state that
-		// never took effect.
-		if persisted.AutoStart != current.AutoStart {
-			var syncErr error
-			if current.AutoStart {
-				syncErr = applyAutoStart(h.root)
-			} else {
-				syncErr = removeAutoStart()
+		// Re-merge against the freshest settings and persist atomically under
+		// the write lock, so concurrent writers cannot clobber each other. The
+		// autostart side effect must run before the file is written (a failure
+		// returns 500 so the GUI reverts the toggle).
+		if err := h.updateSettings(func(s *settings) error {
+			mergeSettingsOnto(&current, *s, body)
+			if s.AutoStart != current.AutoStart {
+				var syncErr error
+				if current.AutoStart {
+					syncErr = applyAutoStart(h.root)
+				} else {
+					syncErr = removeAutoStart()
+				}
+				if syncErr != nil {
+					return syncErr
+				}
 			}
-			if syncErr != nil {
-				writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": syncErr.Error()})
-				return
-			}
+			*s = current
+			return nil
+		}); err != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
 		}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	data, err := json.MarshalIndent(current, "", "  ")
-	if err != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := writeFileAtomic(path, append(data, '\n'), 0o600); err != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(writer, http.StatusOK, current)
+		writeJSON(writer, http.StatusOK, current)
 	default:
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -880,18 +841,34 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 起内核：Start → 等 /version 就绪 → 控制器鉴权。三步合成一次尝试，
 	// 好让"新内核起不来就回滚重试"只写一遍。
 	startCore := func(binaryPath string) (int, error) {
-		if _, startErr := mihomo.Start(binaryPath, configPath, stateDir, pidPath, logPath); startErr != nil {
+		startedPID, startErr := mihomo.Start(binaryPath, configPath, stateDir, pidPath, logPath)
+		if startErr != nil {
 			return http.StatusConflict, startErr
 		}
-		ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+		// The core is already spawned, so the readiness wait must finish (and,
+		// on failure, the rollback/MarkBad below must stay meaningful) even if
+		// the client disconnects. Detach from the request context and rely on
+		// our own budget: DeadlineExceeded is still a real failure; a client
+		// cancel must not punish a healthy core with a permanent MarkBad.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 15*time.Second)
 		defer cancel()
 		if readyErr := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); readyErr != nil {
 			_ = mihomo.Stop(pidPath)
+			if errors.Is(readyErr, context.Canceled) {
+				return http.StatusBadGateway, fmt.Errorf("start canceled before ready: %w", readyErr)
+			}
 			return http.StatusBadGateway, errors.New(diagnosticError(readyErr, logPath))
 		}
 		if _, checkErr := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); checkErr != nil {
 			_ = mihomo.Stop(pidPath)
 			return http.StatusBadGateway, errors.New(diagnosticError(checkErr, logPath))
+		}
+		// A stale instance can answer 9090 with the same per-install secret
+		// while our freshly spawned core already exited: confirm OUR pid is the
+		// one still running before reporting success.
+		if !mihomo.IsRunning(startedPID) {
+			_ = mihomo.Stop(pidPath)
+			return http.StatusBadGateway, errors.New("core exited before becoming ready")
 		}
 		return http.StatusOK, nil
 	}
@@ -901,7 +878,9 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		// 自动回滚：新内核起不来时退回上一版再试一次，并把它记进 bad 列表，
 		// 后续自动更新不再推这个版本。
 		if rolled, rollErr := store.Rollback(); rollErr == nil && rolled.Path != core.Path {
-			store.MarkBad(core.Version)
+			if !errors.Is(startErr, context.Canceled) {
+				store.MarkBad(core.Version)
+			}
 			fmt.Fprintf(os.Stderr, "helper: core %s failed to start (%v), rolled back to %s\n", core.Version, startErr, rolled.Version)
 			if retryStatus, retryErr := startCore(rolled.Path); retryErr == nil {
 				statusCode, startErr = http.StatusOK, nil
@@ -923,10 +902,12 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// Persist onto the FULL stored settings — saving a partial struct here
 	// used to wipe blacklist/devMode on every proxy start, so the developer
-	// switch reverted after a page refresh. Reuse storedForChain (the same
-	// settings this start validated against) rather than re-reading and falling
-	// back to defaults, which would overwrite a user's settings on a read error.
-	_ = h.saveSettings(mergeStartSettings(storedForChain, input))
+	// switch reverted after a page refresh. Re-merge onto the freshest settings
+	// under the write lock instead of re-reading with a defaults fallback.
+	_ = h.updateSettings(func(s *settings) error {
+		*s = mergeStartSettings(*s, input)
+		return nil
+	})
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
 	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, storedForChain.HotspotShare)
@@ -1312,6 +1293,67 @@ func (h *helper) saveSettings(current settings) error {
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
+// updateSettings runs fn under the settings write lock: it re-reads the stored
+// settings, lets fn mutate them in place, then persists atomically. Every
+// handler that performs a settings read-modify-write must go through here so
+// concurrent writers cannot clobber each other. Side effects (network fetch,
+// schtasks, chain parsing) should be completed before this call. A corrupt
+// settings file is surfaced as an error instead of being silently overwritten.
+func (h *helper) updateSettings(fn func(*settings) error) error {
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
+	current, err := h.loadSettings()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("settings.json 无法解析，请在设置中重置: %w", err)
+	}
+	if err != nil {
+		current = defaultSettings()
+	}
+	if fnErr := fn(&current); fnErr != nil {
+		return fnErr
+	}
+	return h.saveSettings(current)
+}
+
+// mergeSettingsOnto copies the "omitted means keep stored value" fields from
+// src into dst, so a partial PUT never silently resets chain/cloud/hotspot/etc.
+// to their zero values.
+func mergeSettingsOnto(dst *settings, src settings, body []byte) {
+	if dst.Blacklist == nil {
+		dst.Blacklist = src.Blacklist
+	}
+	if !jsonKeyPresent(body, "autoRunProxy") {
+		dst.AutoRunProxy = src.AutoRunProxy
+	}
+	if !jsonKeyPresent(body, "hotkeyEnabled") {
+		dst.HotkeyEnabled = src.HotkeyEnabled
+	}
+	if !jsonKeyPresent(body, "hotspotShare") {
+		dst.HotspotShare = src.HotspotShare
+	}
+	if !jsonKeyPresent(body, "chainEnabled") {
+		dst.ChainEnabled = src.ChainEnabled
+	}
+	if !jsonKeyPresent(body, "chainSourceType") {
+		dst.ChainSourceType = src.ChainSourceType
+	}
+	if !jsonKeyPresent(body, "chainSourceUrl") {
+		dst.ChainSourceURL = src.ChainSourceURL
+	}
+	if !jsonKeyPresent(body, "cloudEnabled") {
+		dst.CloudEnabled = src.CloudEnabled
+	}
+	if !jsonKeyPresent(body, "cloudSourceUrl") {
+		dst.CloudSourceURL = src.CloudSourceURL
+	}
+	if !jsonKeyPresent(body, "cloudUpdatedAt") {
+		dst.CloudUpdatedAt = src.CloudUpdatedAt
+	}
+	if !jsonKeyPresent(body, "portalHost") {
+		dst.PortalHost = src.PortalHost
+	}
+}
+
 func readDevice(path string) (warp.Device, error) {
 	var device warp.Device
 	data, err := os.ReadFile(path)
@@ -1390,7 +1432,14 @@ func executableRoot() string {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		// Echo the Origin only when it is allow-listed; a foreign origin gets
+		// no Access-Control-Allow-Origin, so the browser never exposes the
+		// response to it. OPTIONS is answered further down the chain (after the
+		// Host/Origin guard, before the token check).
+		if origin := request.Header.Get("Origin"); origin != "" && allowedOrigin(origin) {
+			writer.Header().Set("Access-Control-Allow-Origin", origin)
+			writer.Header().Add("Vary", "Origin")
+		}
 		// Authorization must be allow-listed or the browser preflight rejects
 		// the bearer token before the request ever reaches requireAuth. POST
 		// and DELETE were both missing from this list even though action
@@ -1398,10 +1447,6 @@ func withCORS(next http.Handler) http.Handler {
 		// opaque "Failed to fetch" (chain-clear's DELETE hit exactly this).
 		writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		writer.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
-		if request.Method == http.MethodOptions {
-			writer.WriteHeader(http.StatusNoContent)
-			return
-		}
 		next.ServeHTTP(writer, request)
 	})
 }

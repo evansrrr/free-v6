@@ -1,6 +1,7 @@
 package mihomo
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -416,7 +417,10 @@ func writeProxyGroup(b *strings.Builder, name, groupType, options string, names 
 	b.WriteString(options)
 	b.WriteString("    proxies:\n")
 	for _, proxyName := range names {
-		fmt.Fprintf(b, "      - %s\n", proxyName)
+		// Names come from user-controlled cloud nodes; quote them so a name
+		// like "US: 洛杉矶", "123" or "- dash" can't break the YAML structure.
+		quoted, _ := json.Marshal(proxyName)
+		fmt.Fprintf(b, "      - %s\n", quoted)
 	}
 	b.WriteString("\n")
 }

@@ -201,19 +201,27 @@ func startMihomo(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Match the helper: refuse to start over a port another proxy/DNS tool owns.
+	if err := mihomo.CheckListenPorts(); err != nil {
+		return err
+	}
 	pid, err := mihomo.Start(resolvedBinary, configPathValue, filepath.Dir(configPathValue), pidPathValue, logPathValue)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := mihomo.WaitReady(ctx, "127.0.0.1:9090", 100*time.Millisecond); err != nil {
+	if err := mihomo.WaitReady(ctx, mihomo.ControllerAddress, 100*time.Millisecond); err != nil {
 		_ = mihomo.Stop(pidPathValue)
 		return err
 	}
-	if _, err := mihomo.CheckController(ctx, "127.0.0.1:9090", controllerSecret); err != nil {
+	if _, err := mihomo.CheckController(ctx, mihomo.ControllerAddress, controllerSecret); err != nil {
 		_ = mihomo.Stop(pidPathValue)
 		return err
+	}
+	if !mihomo.IsRunning(pid) {
+		_ = mihomo.Stop(pidPathValue)
+		return fmt.Errorf("core exited before becoming ready")
 	}
 	fmt.Printf("mihomo started: pid %d\n", pid)
 	return nil

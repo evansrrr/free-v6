@@ -61,19 +61,23 @@ func TestRequireAuth(t *testing.T) {
 	}
 }
 
-// CORS preflight must succeed without a token: browsers never attach
-// Authorization to OPTIONS, and the token header only reaches the server
-// after the preflight has passed.
+// CORS preflight must succeed without a token for an allow-listed origin:
+// browsers never attach Authorization to OPTIONS, and the token header only
+// reaches the server after the preflight has passed.
 func TestRequireAuthAllowsPreflightWithoutToken(t *testing.T) {
 	handler := fullChain("test-token-abc123")
 	recorder := httptest.NewRecorder()
 	request := newLoopbackRequest(http.MethodOptions, "/api/v1/ping")
-	// Even a hostile Origin gets the preflight answered — the actual request
-	// that follows is then stopped by guardLocalOnly/requireAuth.
-	request.Header.Set("Origin", "https://evil.example")
+	request.Header.Set("Origin", "http://tauri.localhost")
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, want 204", recorder.Code)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "http://tauri.localhost" {
+		t.Fatalf("ACAO = %q, want echoed allow-listed origin", got)
+	}
+	if !strings.Contains(recorder.Header().Get("Vary"), "Origin") {
+		t.Fatal("Vary must include Origin")
 	}
 	// DELETE is a non-simple method: without it in Allow-Methods the browser
 	// preflight fails and the UI sees an opaque "Failed to fetch" — the exact
@@ -86,6 +90,22 @@ func TestRequireAuthAllowsPreflightWithoutToken(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
 		t.Fatal("Allow-Headers must include Authorization")
+	}
+}
+
+// A preflight from a hostile Origin must be rejected and expose no CORS
+// allow-list: the browser must not be able to read the response.
+func TestPreflightForeignOriginRejected(t *testing.T) {
+	handler := fullChain("test-token-abc123")
+	recorder := httptest.NewRecorder()
+	request := newLoopbackRequest(http.MethodOptions, "/api/v1/ping")
+	request.Header.Set("Origin", "https://evil.example")
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", recorder.Code)
+	}
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("foreign origin must get no ACAO, got %q", recorder.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
 
@@ -128,7 +148,7 @@ func TestGuardLocalOnly(t *testing.T) {
 		{"loopback origin", "127.0.0.1:13335", "http://127.0.0.1:13335", http.StatusOK},
 		{"tauri origin", "127.0.0.1:13335", "http://tauri.localhost", http.StatusOK},
 		{"tauri scheme origin", "127.0.0.1:13335", "tauri://localhost", http.StatusOK},
-		{"opaque origin", "127.0.0.1:13335", "null", http.StatusOK},
+		{"opaque null origin", "127.0.0.1:13335", "null", http.StatusForbidden},
 		{"localhost host", "localhost:13335", "", http.StatusOK},
 		{"no origin", "127.0.0.1:13335", "", http.StatusOK},
 	}

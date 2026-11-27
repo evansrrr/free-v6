@@ -63,6 +63,10 @@ var (
 	updateStallCheckInterval = time.Second
 )
 
+// updateMaxBytes caps the installer download so a hostile/broken mirror cannot
+// fill the disk within the per-mirror hard budget.
+const updateMaxBytes = 300 << 20
+
 // updateProgress is written by the download goroutine and read by the
 // progress endpoint; state/path/err/busy live behind updateRun.mu.
 type updateProgress struct {
@@ -221,11 +225,15 @@ func downloadUpdateFileOnce(client *http.Client, rawURL, sha256Hex, dest string,
 	}
 	hasher := sha256.New()
 	counter := &progressWriter{w: io.MultiWriter(file, hasher), n: &prog.done}
-	written, copyErr := io.Copy(counter, resp.Body)
+	written, copyErr := io.Copy(counter, io.LimitReader(resp.Body, updateMaxBytes+1))
 	closeErr := file.Close()
 	if copyErr != nil {
 		_ = os.Remove(dest)
 		return 0, fmt.Errorf("download interrupted: %w", copyErr)
+	}
+	if written > updateMaxBytes {
+		_ = os.Remove(dest)
+		return 0, fmt.Errorf("download exceeds %d bytes", updateMaxBytes)
 	}
 	if closeErr != nil {
 		_ = os.Remove(dest)
@@ -289,8 +297,16 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 		}
 		// 无全局 client 超时：每次线路尝试有自己的硬限/停滞预算
 		// （downloadUpdateFileOnce），总时长被线路数天然封顶；前端轮询
-		// 自带 UI 侧上限。
-		client := &http.Client{}
+		// 自带 UI 侧上限。重定向必须仍落在白名单主机上，否则一次 302 就能
+		// 绕过 https + host 约束。
+		client := &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				return validateUpdateURL(req.URL.String(), updateAllowedHosts)
+			},
+		}
 		_, err := downloadUpdateFile(client, input.URL, input.SHA256, dest, updateAllowedHosts, &updateRun.prog)
 		updateRun.mu.Lock()
 		if err != nil {

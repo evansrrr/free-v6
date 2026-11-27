@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yourname/freev6/internal/warp"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRenderMasqueConfig(t *testing.T) {
@@ -174,5 +175,35 @@ func TestRenderControllerSecret(t *testing.T) {
 	}
 	if !strings.Contains(with, `secret: "abcdef0123456789"`) {
 		t.Fatalf("config missing injected controller secret, got:\n%.300s", with)
+	}
+}
+
+func TestRenderQuotesCloudNodeNames(t *testing.T) {
+	nodes := []ChainProxy{
+		{Name: "123", YAML: "- name: \"123\"\n  type: ss\n  server: 1.2.3.4\n  port: 8388\n  cipher: aes-128-gcm\n  password: x\n"},
+		{Name: "US: 洛杉矶", YAML: "- name: \"US: 洛杉矶\"\n  type: ss\n  server: 1.2.3.4\n  port: 8388\n  cipher: aes-128-gcm\n  password: x\n"},
+	}
+	config, err := RenderWithOptions(warp.Device{}, RenderOptions{Mode: ModeRule, CloudNodes: nodes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		ProxyGroups []struct {
+			Name    string   `yaml:"name"`
+			Proxies []string `yaml:"proxies"`
+		} `yaml:"proxy-groups"`
+	}
+	if err := yaml.Unmarshal([]byte(config), &parsed); err != nil {
+		t.Fatalf("rendered config must re-parse: %v", err)
+	}
+	for _, group := range parsed.ProxyGroups {
+		if group.Name != "☑️ 手动切换" {
+			continue
+		}
+		for i, want := range []string{"123", "US: 洛杉矶"} {
+			if i >= len(group.Proxies) || group.Proxies[i] != want {
+				t.Fatalf("group proxies = %#v, want %q at %d", group.Proxies, want, i)
+			}
+		}
 	}
 }

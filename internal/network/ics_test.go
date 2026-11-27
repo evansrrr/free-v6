@@ -387,3 +387,27 @@ func TestBuildWinRTRecoverScript(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildICSRestoreScriptPhaseOrder(t *testing.T) {
+	sharing := []SharingSnapshot{
+		{Name: "WLAN", Guid: "{AAA}", Enabled: true, Kind: "public"},
+		{Name: "Hotspot", Guid: "{BBB}", Enabled: true, Kind: "private"},
+	}
+	script := BuildICSRestoreScript(sharing, TunDeviceName)
+	firstDisable := strings.Index(script, "DisableSharing()")
+	firstEnable0 := strings.Index(script, "EnableSharing(0)")
+	firstEnable1 := strings.Index(script, "EnableSharing(1)")
+	if firstDisable < 0 || firstEnable0 < 0 || firstEnable1 < 0 {
+		t.Fatalf("missing phase markers in script:\n%s", script)
+	}
+	if firstDisable > firstEnable0 || firstDisable > firstEnable1 {
+		t.Fatal("DisableSharing must run before any EnableSharing")
+	}
+	if firstEnable0 > firstEnable1 {
+		t.Fatal("EnableSharing(0) (PUBLIC) must run before EnableSharing(1) (PRIVATE)")
+	}
+	// Props reads must happen inside the enumerate loop's try, not before it.
+	if !strings.Contains(script, "try { $conns += ,@($c, $m.NetConnectionProps($c)") {
+		t.Fatal("NetConnectionProps must be read inside the try block")
+	}
+}

@@ -2,6 +2,7 @@ package mihomo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -54,44 +55,120 @@ func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error
 	if strings.TrimSpace(binaryPath) == "" {
 		return 0, errors.New("mihomo binary path is empty")
 	}
-	if err := ensurePIDAvailable(pidPath, IsRunning, processIsOurs); err != nil {
+	// Serialize the whole check-spawn-write-pid sequence across processes: the
+	// helper and the CLI can both call Start, and a second instance's pid write
+	// would otherwise orphan the first core (which then can no longer be stopped).
+	pid := 0
+	err := withStartLock(func() error {
+		if err := ensurePIDAvailable(pidPath, IsRunning, processIsOurs); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
+			return fmt.Errorf("create runtime directory: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+			return fmt.Errorf("create log directory: %w", err)
+		}
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fmt.Errorf("open mihomo log: %w", err)
+		}
+		cmd := exec.Command(binaryPath, "-d", homeDir, "-f", configPath)
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		if err := cmd.Start(); err != nil {
+			_ = logFile.Close()
+			return fmt.Errorf("start mihomo: %w", err)
+		}
+		// Reap the child: without Wait the process handle leaks on Windows and
+		// the child becomes a zombie on Unix (where kill(pid,0) then always
+		// reports "running" and every stop waits out its full timeout).
+		// Stdout/Stderr are *os.File, not pipes, so no copy goroutines needed.
+		go func() { _ = cmd.Wait() }()
+		_ = logFile.Close()
+		if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600); err != nil {
+			_ = cmd.Process.Kill()
+			return fmt.Errorf("write mihomo pid: %w", err)
+		}
+		writeCoreMeta(pidPath, cmd.Process.Pid)
+		pid = cmd.Process.Pid
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
-	if err := os.MkdirAll(filepath.Dir(pidPath), 0o700); err != nil {
-		return 0, fmt.Errorf("create runtime directory: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
-		return 0, fmt.Errorf("create log directory: %w", err)
-	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return 0, fmt.Errorf("open mihomo log: %w", err)
-	}
-	cmd := exec.Command(binaryPath, "-d", homeDir, "-f", configPath)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	if err := cmd.Start(); err != nil {
-		_ = logFile.Close()
-		return 0, fmt.Errorf("start mihomo: %w", err)
-	}
-	// Reap the child: without Wait the process handle leaks on Windows and the
-	// child becomes a zombie on Unix (where kill(pid,0) then always reports
-	// "running" and every stop waits out its full timeout). Stdout/Stderr are
-	// *os.File, not pipes, so no copy goroutines are needed.
-	go func() { _ = cmd.Wait() }()
-	_ = logFile.Close()
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600); err != nil {
-		_ = cmd.Process.Kill()
-		return 0, fmt.Errorf("write mihomo pid: %w", err)
-	}
-	return cmd.Process.Pid, nil
+	return pid, nil
 }
+
+// coreIdentity is the stable identity of a spawned core, persisted alongside
+// the pid file so a reused pid (after a hard crash) can be told apart from the
+// core we actually started. The pid file itself stays single-line numeric for
+// the Rust shell and older CLI/helper builds that read it directly.
+type coreIdentity struct {
+	PID       int   `json:"pid"`
+	StartTime int64 `json:"startTime"`
+}
+
+const coreMetaSuffix = ".meta"
+
+func coreMetaPath(pidPath string) string { return pidPath + coreMetaSuffix }
+
+// writeCoreMeta persists {pid, startTime} atomically. A failure is non-fatal:
+// the caller falls back to the image-path check (legacy behaviour).
+func writeCoreMeta(pidPath string, pid int) {
+	identity := coreIdentity{PID: pid}
+	if start, err := processStartTime(pid); err == nil {
+		identity.StartTime = start
+	}
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return
+	}
+	path := coreMetaPath(pidPath)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
+}
+
+// readCoreMeta returns the stored identity, or ok=false when absent/invalid.
+func readCoreMeta(pidPath string) (coreIdentity, bool) {
+	data, err := os.ReadFile(coreMetaPath(pidPath))
+	if err != nil {
+		return coreIdentity{}, false
+	}
+	var identity coreIdentity
+	if err := json.Unmarshal(data, &identity); err != nil {
+		return coreIdentity{}, false
+	}
+	return identity, true
+}
+
+// coreIdentityMatches reports whether the live pid is the same process we
+// recorded at start time. A missing meta file is treated as "match" (legacy:
+// the image-path check upstream is the only gate then).
+func coreIdentityMatches(pidPath string, pid int) bool {
+	identity, ok := readCoreMeta(pidPath)
+	if !ok || identity.PID != pid {
+		return true
+	}
+	live, err := processStartTime(pid)
+	if err != nil {
+		// Cannot read the start time; the image check already passed.
+		return true
+	}
+	return identity.StartTime == live
+}
+
+func removeCoreMeta(pidPath string) { _ = os.Remove(coreMetaPath(pidPath)) }
 
 func Stop(pidPath string) error {
 	pid, err := readPID(pidPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "invalid pid file") {
 			_ = os.Remove(pidPath)
+			removeCoreMeta(pidPath)
 			return nil
 		}
 		return err
@@ -103,10 +180,15 @@ func Stop(pidPath string) error {
 			// TerminateProcess an innocent process (the helper runs elevated).
 			return fmt.Errorf("refusing to stop pid %d: not a FreeV6 core process", pid)
 		}
+		if !coreIdentityMatches(pidPath, pid) {
+			// The pid is another core process that reused our pid — also refuse.
+			return fmt.Errorf("refusing to stop pid %d: process identity changed", pid)
+		}
 		if err := process.Kill(); err != nil {
 			return fmt.Errorf("stop mihomo process %d: %w", pid, err)
 		}
 	}
+	removeCoreMeta(pidPath)
 	return os.Remove(pidPath)
 }
 

@@ -64,3 +64,20 @@ func processImagePath(pid uint32) (string, error) {
 	}
 	return windows.UTF16ToString(buffer[:size]), nil
 }
+
+// processStartTime returns the process creation time (Unix epoch ns). It is
+// the stable identity that survives pid reuse: after a crash, Windows can hand
+// the same pid to a different core process, and the start time is what tells
+// them apart.
+func processStartTime(pid int) (int64, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(handle)
+	var creation, exit, kernel, user windows.Filetime
+	if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
+		return 0, err
+	}
+	return creation.Nanoseconds(), nil
+}

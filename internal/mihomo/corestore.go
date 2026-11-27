@@ -72,6 +72,14 @@ func NewCoreStore(root string) *CoreStore {
 	return &CoreStore{root: root}
 }
 
+// coreMu serializes the index-file read-modify-write and the cores/ sweep
+// across the public mutators. NewCoreStore returns a fresh struct each call,
+// so an instance-level mutex would not protect anything; a package-level lock
+// is the only way to keep ApplyUpdate (download) from racing Rollback/Prune/
+// MarkVerified (start) and silently reverting the active pointer or deleting a
+// freshly installed core.
+var coreMu sync.Mutex
+
 // CoreFileName 是内核在 cores/ 下的文件名：版本号去掉 core- 前缀，
 // 与发布资产命名保持一致，便于肉眼对账。
 func CoreFileName(version string) string {
@@ -228,6 +236,8 @@ func (s *CoreStore) Has(version string) (Core, bool) {
 // 切换语义：新内核成为 active，原 active 退为 previous（回滚位）。
 // 旧文件此刻不删——删旧版本发生在新版本自检通过之后（GC 负责收敛）。
 func (s *CoreStore) Install(exePath, version string) (Core, error) {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	if strings.TrimSpace(version) == "" {
 		return Core{}, errors.New("core version is empty")
 	}
@@ -266,6 +276,8 @@ func (s *CoreStore) Install(exePath, version string) (Core, error) {
 
 // Rollback 把指针退回 previous。用于新内核启动失败或起不来的场景。
 func (s *CoreStore) Rollback() (Core, error) {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	index := s.Index()
 	if index.Previous == "" {
 		return Core{}, ErrNoRollback
@@ -288,6 +300,8 @@ func (s *CoreStore) Rollback() (Core, error) {
 // MarkVerified 记录"当前这份内核在本机确实跑起来了"。调用点只有一个：
 // 免流启动并通过控制器鉴权之后。它是回滚位可以被回收的唯一凭据。
 func (s *CoreStore) MarkVerified() {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	index := s.Index()
 	if index.Active == "" {
 		return
@@ -307,6 +321,8 @@ func (s *CoreStore) Verified() bool {
 
 // MarkBad 记录一个自检失败的版本，自动更新不再尝试它。
 func (s *CoreStore) MarkBad(version string) {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	version = strings.TrimSpace(version)
 	if version == "" {
 		return
@@ -336,6 +352,8 @@ func (s *CoreStore) IsBad(version string) bool {
 // 只在新版本自检通过、指针切换完成之后调用：此刻旧版本已经降级为
 // previous，更早的版本才是可以安全回收的。
 func (s *CoreStore) GC() []string {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	index := s.Index()
 	keep := map[string]bool{}
 	if index.Active != "" {
@@ -353,6 +371,8 @@ func (s *CoreStore) GC() []string {
 // 过、或者本次启动免流跑通。回滚位只在新内核尚未验证的窗口里有价值；窗口
 // 一关，多留一份 38MB 只是占磁盘。
 func (s *CoreStore) Prune() []string {
+	coreMu.Lock()
+	defer coreMu.Unlock()
 	index := s.Index()
 	if index.Active == "" {
 		return nil

@@ -144,18 +144,12 @@ func (h *helper) chainImport(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	stored, loadErr := h.loadSettings()
-	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
-		return
-	}
-	if loadErr != nil {
-		stored = defaultSettings()
-	}
-	stored.ChainEnabled = true
-	stored.ChainSourceType = sourceType
-	stored.ChainSourceURL = sourceURL
-	if err := h.saveSettings(stored); err != nil {
+	if err := h.updateSettings(func(s *settings) error {
+		s.ChainEnabled = true
+		s.ChainSourceType = sourceType
+		s.ChainSourceURL = sourceURL
+		return nil
+	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -177,18 +171,12 @@ func (h *helper) chainClear(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	stored, loadErr := h.loadSettings()
-	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
-		return
-	}
-	if loadErr != nil {
-		stored = defaultSettings()
-	}
-	stored.ChainEnabled = false
-	stored.ChainSourceType = ""
-	stored.ChainSourceURL = ""
-	if err := h.saveSettings(stored); err != nil {
+	if err := h.updateSettings(func(s *settings) error {
+		s.ChainEnabled = false
+		s.ChainSourceType = ""
+		s.ChainSourceURL = ""
+		return nil
+	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

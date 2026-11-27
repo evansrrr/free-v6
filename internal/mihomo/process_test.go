@@ -139,3 +139,19 @@ func TestConfigRejectsEmptyBinary(t *testing.T) {
 		t.Fatal("expected empty-path error")
 	}
 }
+
+func TestCoreMetaRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mihomo.pid")
+	writeCoreMeta(path, 12345)
+	identity, ok := readCoreMeta(path)
+	if !ok || identity.PID != 12345 {
+		t.Fatalf("meta round-trip failed: %+v ok=%v", identity, ok)
+	}
+	if !coreIdentityMatches(path, 12345) {
+		t.Fatal("a recorded pid whose start time cannot be re-read must match (legacy fallback)")
+	}
+	removeCoreMeta(path)
+	if _, ok := readCoreMeta(path); ok {
+		t.Fatal("meta must be gone after removeCoreMeta")
+	}
+}

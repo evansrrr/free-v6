@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -85,7 +86,30 @@ func (m CoreManifest) Asset() (CoreAsset, bool) {
 	if !ok || strings.TrimSpace(asset.URL) == "" || strings.TrimSpace(asset.SHA256) == "" {
 		return CoreAsset{}, false
 	}
+	if !validCoreAssetURL(asset.URL) {
+		return CoreAsset{}, false
+	}
 	return asset, true
+}
+
+// validCoreAssetURL pins a core.json asset URL to https + the GitHub hosts the
+// release pipeline publishes to. Anything else (plain http, an arbitrary host,
+// loopback) is rejected before it is ever fetched — the SHA is delivered by
+// the same manifest, so the URL is the only transport anchor left. A var so
+// download-flow tests can point it at a local server.
+var validCoreAssetURL = func(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com":
+		return true
+	}
+	return false
 }
 
 type coreManifestCacheFile struct {

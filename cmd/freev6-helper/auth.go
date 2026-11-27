@@ -16,6 +16,13 @@ import (
 // before this middleware runs.
 func requireAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// CORS preflights never carry Authorization; the Host/Origin guard has
+		// already rejected foreign origins, so answering here (before the token
+		// check) is safe.
+		if request.Method == http.MethodOptions {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
 		presented := bearerToken(request.Header.Get("Authorization"))
 		if token == "" || presented == "" ||
 			subtle.ConstantTimeCompare([]byte(token), []byte(presented)) != 1 {
@@ -68,9 +75,10 @@ func allowedHost(hostPort string) bool {
 	return false
 }
 
-// allowedOrigin permits: no Origin at all (curl/CLI), non-http(s) schemes
-// (tauri://, opaque "null"), and http(s) Origins on loopback or the Tauri
-// webview's host. A real website's Origin never matches.
+// allowedOrigin permits: no Origin at all (curl/CLI — the bearer token is the
+// gate), the Tauri webview origins, and local dev origins. The opaque "null"
+// origin (sandboxed iframes) is rejected: combined with the CORS headers it
+// would let a hostile page read the token-authenticated API responses.
 func allowedOrigin(origin string) bool {
 	if origin == "" {
 		return true
@@ -79,11 +87,14 @@ func allowedOrigin(origin string) bool {
 	if err != nil {
 		return false
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return true
-	}
-	switch strings.ToLower(parsed.Hostname()) {
-	case "127.0.0.1", "localhost", "tauri.localhost":
+	switch {
+	case parsed.Scheme == "http" || parsed.Scheme == "https":
+		switch strings.ToLower(parsed.Hostname()) {
+		case "127.0.0.1", "localhost", "tauri.localhost":
+			return true
+		}
+		return false
+	case parsed.Scheme == "tauri" && parsed.Host == "localhost":
 		return true
 	}
 	return false

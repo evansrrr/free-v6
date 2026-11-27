@@ -229,15 +229,17 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	stored.CloudEnabled = true
-	if portalHost != "" {
-		stored.PortalHost = portalHost
-	}
-	if sourceURL != "" {
-		stored.CloudSourceURL = sourceURL
-	}
-	stored.CloudUpdatedAt = time.Now().Format(time.RFC3339)
-	if err := h.saveSettings(stored); err != nil {
+	if err := h.updateSettings(func(s *settings) error {
+		s.CloudEnabled = true
+		if portalHost != "" {
+			s.PortalHost = portalHost
+		}
+		if sourceURL != "" {
+			s.CloudSourceURL = sourceURL
+		}
+		s.CloudUpdatedAt = time.Now().Format(time.RFC3339)
+		return nil
+	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -261,18 +263,12 @@ func (h *helper) cloudClear(writer http.ResponseWriter) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	stored, loadErr := h.loadSettings()
-	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
-		return
-	}
-	if loadErr != nil {
-		stored = defaultSettings()
-	}
-	stored.CloudEnabled = false
-	stored.CloudSourceURL = ""
-	stored.CloudUpdatedAt = ""
-	if err := h.saveSettings(stored); err != nil {
+	if err := h.updateSettings(func(s *settings) error {
+		s.CloudEnabled = false
+		s.CloudSourceURL = ""
+		s.CloudUpdatedAt = ""
+		return nil
+	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

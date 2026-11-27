@@ -201,7 +201,9 @@ func BuildICSSwitchScript(privateAlias string) string {
 
 // BuildICSRestoreScript 构造还原脚本：按快照把每个连接恢复到原角色；
 // 快照里没有的连接只有 FreeV6TUN 会被禁用共享（会话中途新建的其他共享不碰）。
-// 单连接失败收集后以非零退出码退出，输出还原结果 JSON。
+// ICS 全场只有一个 PUBLIC，且启用 PRIVATE 前必须先有 PUBLIC，所以按阶段而非
+// 枚举顺序还原：① 禁用不再需要的共享（TUN 与基线关闭项）② 启用 PUBLIC
+// ③ 启用 PRIVATE。单连接失败收集后以非零退出码退出，输出还原结果 JSON。
 func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	var b strings.Builder
 	b.WriteString(psHeader)
@@ -215,23 +217,39 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 			map[string]int{"public": 0, "private": 1}[entry.Kind])
 	}
 	b.WriteString(")\n")
+	// Enumerate once; read each connection's props inside try so a connection
+	// vanishing on hotplug cannot abort the whole script.
+	b.WriteString("$conns = @()\n")
 	b.WriteString("foreach ($c in $m.EnumEveryConnection) {\n")
-	b.WriteString("  $p = $m.NetConnectionProps($c)\n")
-	b.WriteString("  $s = $m.INetSharingConfigurationForINetConnection($c)\n")
+	b.WriteString("  try { $conns += ,@($c, $m.NetConnectionProps($c), $m.INetSharingConfigurationForINetConnection($c)) }\n")
+	b.WriteString("  catch { $errors += ('enum: ' + $_.Exception.Message) }\n")
+	b.WriteString("}\n")
+	// Phase 1: disable sharing we no longer want (the TUN adapter, and any
+	// baseline-off connection the user turned on mid-session is NOT touched —
+	// only TUN and entries that exist in $want with e=false).
+	b.WriteString("foreach ($item in $conns) {\n")
+	b.WriteString("  $p = $item[1]; $s = $item[2]\n")
 	b.WriteString("  $match = $null\n")
 	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
-	b.WriteString("  try {\n")
-	b.WriteString("    if ($null -ne $match) {\n")
-	b.WriteString("      $cur = [bool]$s.SharingEnabled\n")
-	b.WriteString("      $curT = $(if ($cur) { [int]$s.SharingType } else { -1 })\n")
-	b.WriteString("      if ($match.e -and ((-not $cur) -or $curT -ne [int]$match.t)) {\n")
-	b.WriteString("        if ($cur) { $s.DisableSharing() }\n")
-	b.WriteString("        $s.EnableSharing([int]$match.t)\n")
-	b.WriteString("      } elseif ((-not $match.e) -and $cur) { $s.DisableSharing() }\n")
-	b.WriteString("    } elseif ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled) {\n")
-	b.WriteString("      $s.DisableSharing()\n")
-	b.WriteString("    }\n")
-	b.WriteString("  } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) }\n")
+	b.WriteString("  $off = $false\n")
+	b.WriteString("  if ($null -eq $match) { $off = ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled) }\n")
+	b.WriteString("  elseif (-not $match.e) { $off = [bool]$s.SharingEnabled }\n")
+	b.WriteString("  if ($off) { try { $s.DisableSharing() } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) } }\n")
+	b.WriteString("}\n")
+	// Phase 2: enable PUBLIC unconditionally (enabling a new PUBLIC resets the
+	// private side, so it must happen before phase 3).
+	b.WriteString("foreach ($item in $conns) {\n")
+	b.WriteString("  $p = $item[1]; $s = $item[2]\n")
+	b.WriteString("  $match = $null\n")
+	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
+	b.WriteString("  if ($null -ne $match -and $match.e -and $match.t -eq 0) { try { $s.EnableSharing(0) } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) } }\n")
+	b.WriteString("}\n")
+	// Phase 3: enable PRIVATE last.
+	b.WriteString("foreach ($item in $conns) {\n")
+	b.WriteString("  $p = $item[1]; $s = $item[2]\n")
+	b.WriteString("  $match = $null\n")
+	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
+	b.WriteString("  if ($null -ne $match -and $match.e -and $match.t -eq 1) { try { $s.EnableSharing(1) } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) } }\n")
 	b.WriteString("}\n")
 	b.WriteString("ConvertTo-Json -InputObject ([pscustomobject]@{errors=$errors}) -Compress\n")
 	return b.String()

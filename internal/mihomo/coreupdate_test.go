@@ -49,7 +49,7 @@ func manifestJSON(t *testing.T, version, assetURL, sha string) []byte {
 }
 
 func TestParseCoreManifest(t *testing.T) {
-	good := manifestJSON(t, "core-v0.2.0", "https://example.com/core.zip", strings.Repeat("a", 64))
+	good := manifestJSON(t, "core-v0.2.0", "https://github.com/evansrrr/f6-core/releases/download/core-v0.2.0/core.zip", strings.Repeat("a", 64))
 	manifest, err := parseCoreManifest(good)
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +174,12 @@ func TestApplyUpdateInstallsAndDropsLegacy(t *testing.T) {
 	verifyCore = func(path, version string) error { return nil }
 	t.Cleanup(func() { verifyCore = originalVerify })
 
+	// The production asset URL is pinned to GitHub hosts; allow the local test
+	// server for this hermetic download.
+	originalValidate := validCoreAssetURL
+	validCoreAssetURL = func(string) bool { return true }
+	t.Cleanup(func() { validCoreAssetURL = originalValidate })
+
 	result, err := store.ApplyUpdate(context.Background(), manifest, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +205,7 @@ func TestApplyUpdateRejectsOlderManifest(t *testing.T) {
 	if _, err := store.Install(writeTempExe(t, "new"), "core-v0.2.0"); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := parseCoreManifest(manifestJSON(t, "core-v0.1.0", "https://example.com/x.zip", strings.Repeat("e", 64)))
+	manifest, err := parseCoreManifest(manifestJSON(t, "core-v0.1.0", "https://github.com/evansrrr/f6-core/releases/download/core-v0.1.0/core.zip", strings.Repeat("e", 64)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +218,7 @@ func TestApplyUpdateHonoursBadVersionList(t *testing.T) {
 	root := t.TempDir()
 	store := NewCoreStore(root)
 	store.MarkBad("core-v0.9.0")
-	manifest, err := parseCoreManifest(manifestJSON(t, "core-v0.9.0", "https://example.com/x.zip", strings.Repeat("f", 64)))
+	manifest, err := parseCoreManifest(manifestJSON(t, "core-v0.9.0", "https://github.com/evansrrr/f6-core/releases/download/core-v0.9.0/core.zip", strings.Repeat("f", 64)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,4 +230,21 @@ func TestApplyUpdateHonoursBadVersionList(t *testing.T) {
 // platformSuffix 拼出 legacy 内核名里的 <os>-<arch> 段。
 func platformSuffix() string {
 	return CorePlatformKey()[:len(CorePlatformKey())-len("-v3")]
+}
+
+func TestValidCoreAssetURL(t *testing.T) {
+	cases := map[string]bool{
+		"https://github.com/evansrrr/f6-core/releases/download/core-v0.3.0/core.zip": true,
+		"https://objects.githubusercontent.com/x/y":                                  true,
+		"https://release-assets.githubusercontent.com/x/y":                            true,
+		"http://github.com/x":                                                        false, // plain http
+		"https://evil.example/x.zip":                                                 false, // arbitrary host
+		"https://127.0.0.1/x.zip":                                                    false, // loopback
+		"https://github.com.evil.net/x.zip":                                          false, // suffix squat
+	}
+	for rawURL, want := range cases {
+		if got := validCoreAssetURL(rawURL); got != want {
+			t.Fatalf("validCoreAssetURL(%q) = %v, want %v", rawURL, got, want)
+		}
+	}
 }
