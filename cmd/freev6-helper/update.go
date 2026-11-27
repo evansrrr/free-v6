@@ -36,6 +36,7 @@ import (
 
 var updateAllowedHosts = []string{
 	"github.com",
+	"raw.githubusercontent.com",
 	"objects.githubusercontent.com",
 	"release-assets.githubusercontent.com",
 	"gh-proxy.com", // 大陆访问加速代理（直通 github release 资产）

@@ -28,13 +28,16 @@ const noticeRepoSlug = "evansrrr/free-v6"
 // noticeURLs 是 var 便于测试注入。github.com/raw 的 302 目标
 // （raw.githubusercontent.com）在镜像前缀下由镜像直接取回，所以这里
 // 只需要 github.com 一个 host，正好落在 updateAllowedHosts 白名单内。
+// 直连额外补一条 raw.githubusercontent.com（无 302、少一跳），给「镜像全挂、
+// github.com 又超时」的场景多一次机会。
 var noticeURLs = func() []string {
 	direct := fmt.Sprintf("https://github.com/%s/raw/main/notice.json", noticeRepoSlug)
-	urls := make([]string, 0, len(updateMirrorPrefixes)+1)
+	rawDirect := fmt.Sprintf("https://raw.githubusercontent.com/%s/main/notice.json", noticeRepoSlug)
+	urls := make([]string, 0, len(updateMirrorPrefixes)+2)
 	for _, prefix := range updateMirrorPrefixes {
 		urls = append(urls, prefix+direct)
 	}
-	return append(urls, direct)
+	return append(urls, direct, rawDirect)
 }
 
 const (
@@ -265,33 +268,54 @@ func (h *helper) saveNoticeCache(payload noticePayload, now time.Time) {
 //
 // 三种情况都是 200：公告属于「可有可无」的附加信息，任何失败都不该
 // 让前端把它当成错误弹窗。
+// fetchNoticePayload 并发拉取所有线路，首个成功即返回。镜像族是第三方、健康
+// 状态随时变：串行轮询会把「排在前面已失效的镜像」的整段超时吃进每次检查，
+// 线路一抖就全线失败、退回离线缓存。并发 + 短总预算让单条慢线路不再拖垮公告。
+func fetchNoticePayload(now time.Time) (noticePayload, error, bool) {
+	urls := noticeURLs()
+	type result struct {
+		payload noticePayload
+		err     error
+	}
+	results := make(chan result, len(urls))
+	client := &http.Client{Timeout: 6 * time.Second}
+	for _, rawURL := range urls {
+		go func(u string) {
+			// 缓存穿透参数：镜像边缘缓存不能钉住旧公告。
+			body, err := fetchNoticeJSON(client, u+"?ts="+strconv.FormatInt(now.UnixNano(), 10))
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			parsed, err := parseNoticePayload(body, now)
+			results <- result{payload: parsed, err: err}
+		}(rawURL)
+	}
+	// 每条线路自带 6s 客户端超时，这里的总预算只是兜住极端情况（线路数
+	// 远大于实际时）；首个成功立即返回，其余 goroutine 会自己超时退出。
+	timeout := time.After(12 * time.Second)
+	var lastErr error
+	for range urls {
+		select {
+		case <-timeout:
+			return noticePayload{}, lastErr, false
+		case res := <-results:
+			if res.err == nil {
+				return res.payload, nil, true
+			}
+			lastErr = res.err
+		}
+	}
+	return noticePayload{}, lastErr, false
+}
+
 func (h *helper) notice(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	now := time.Now()
-	client := &http.Client{Timeout: 8 * time.Second}
-	var payload noticePayload
-	var lastErr error
-	fetched := false
-	for _, rawURL := range noticeURLs() {
-		// 缓存穿透参数：镜像边缘缓存不能钉住旧公告。
-		body, err := fetchNoticeJSON(client, rawURL+"?ts="+strconv.FormatInt(now.UnixNano(), 10))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		parsed, err := parseNoticePayload(body, now)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		payload = parsed
-		lastErr = nil
-		fetched = true
-		break
-	}
+	payload, lastErr, fetched := fetchNoticePayload(now)
 
 	if !fetched {
 		// 全线失败（或响应是空对象）：能回退缓存就回退，并如实标注 stale。
