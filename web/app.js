@@ -93,10 +93,9 @@ const DEFAULT_API_BASE = 'http://127.0.0.1:13335/api/v1';
 let apiBase = null;
 
 async function loadApiBase() {
-  const tauri = window.__TAURI_INTERNALS__;
-  if (!tauri || typeof tauri.invoke !== 'function') return null;
+  if (!Host.isAvailable()) return null;
   try {
-    const port = await tauri.invoke('get_helper_port');
+    const port = await Host.invoke('get_helper_port');
     return typeof port === 'number' && port > 0 ? `http://127.0.0.1:${port}/api/v1` : null;
   } catch (_) {
     return null;
@@ -171,10 +170,9 @@ function controllerHeaders(extra = {}) {
 let apiToken = null;
 
 async function loadApiToken() {
-  const tauri = window.__TAURI_INTERNALS__;
-  if (!tauri || typeof tauri.invoke !== 'function') return null;
+  if (!Host.isAvailable()) return null;
   try {
-    const token = await tauri.invoke('get_api_token');
+    const token = await Host.invoke('get_api_token');
     return typeof token === 'string' && token ? token : null;
   } catch (_) {
     return null;
@@ -284,8 +282,8 @@ async function openExternal(url) {
   const target = String(url || '');
   if (!/^https?:\/\//i.test(target)) return;
   try {
-    if (window.__TAURI_INTERNALS__?.invoke) {
-      await window.__TAURI_INTERNALS__.invoke('plugin:opener|open_url', { url: target });
+    if (Host.isAvailable()) {
+      await Host.invoke('plugin:opener|open_url', { url: target });
       return;
     }
   } catch (_) { /* fall through to the browser fallback */ }
@@ -1466,6 +1464,9 @@ function resizeChart() {
 
 function drawChart() {
   if (!chartCtx) return;
+  // Off-screen (another view active): skip the per-second redraw entirely. The
+  // next tick after returning to the dashboard repaints with fresh data.
+  if (!chartCtx.canvas.offsetParent) return;
   const ctx = chartCtx;
   const data = state.trafficHistory;
   const len = data.length;
@@ -2141,13 +2142,20 @@ async function refreshBackendState() {
 
 /* ── Traffic Polling ──────────────────────────────────────────── */
 
+// Falling-edge latch: when stopped, zero the readout once instead of redrawing
+// an empty chart every second forever.
+let trafficIdle = false;
+
 async function pollTraffic() {
   if (document.hidden) return;
   if (!state.proxyRunning) {
+    if (trafficIdle) return;
+    trafficIdle = true;
     // Stopped: zero the chart history, the kernel-counter baseline and the speed readout
     resetTrafficDisplay(true);
     return;
   }
+  trafficIdle = false;
 
   // A slow /connections response (many live connections) must not overlap the
   // next tick: two snapshots could be applied out of order and look like a
@@ -2538,6 +2546,15 @@ function wireEvents() {
   });
   $('#closeLogs')?.addEventListener('click', closeLogsDrawer);
   $('#scrim')?.addEventListener('click', closeLogsDrawer);
+  $('#copyLogs')?.addEventListener('click', async () => {
+    const text = state.logs.map((l) => `[${l.time}] ${l.msg}`).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('日志已复制');
+    } catch (_) {
+      addLog('复制日志失败：剪贴板不可用', true);
+    }
+  });
 
   // Refresh：整页重载，与 Ctrl+R 等效——重新初始化 UI、状态与轮询。
   // 只同步数据而不重绘时，无变化的界面看起来就是"点了没反应"。
@@ -3914,10 +3931,9 @@ function wireBackgroundEvents() {
 
 /* ── Window Controls (immersive titlebar) ─────────────────────── */
 
-const tauriInvoke = (cmd, args) => {
-  const bridge = window.__TAURI__?.core || window.__TAURI_INTERNALS__;
-  return bridge ? bridge.invoke(cmd, args) : Promise.resolve(undefined);
-};
+// Host bridge lives in lib/host.js; app code never touches __TAURI__ directly.
+const Host = window.FreeV6Host;
+const tauriInvoke = (cmd, args) => Host.invoke(cmd, args);
 
 function wireTitlebar() {
   const bar = $('#titlebar');

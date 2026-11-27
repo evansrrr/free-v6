@@ -90,7 +90,7 @@
       <div class="view-stack">
 
       <!-- Dashboard -->
-      <section class="view active" id="dashboardView">
+      <section class="view active" id="dashboardView" role="region" aria-label="仪表盘">
 
         <div class="card card-traffic">
           <div class="card-header">
@@ -259,7 +259,7 @@
       </section>
 
       <!-- Proxies -->
-      <section class="view" id="proxiesView">
+      <section class="view" id="proxiesView" role="region" aria-label="接入点">
         <div class="setting-segmented" id="proxiesTabs" style="margin-bottom: 14px;" hidden>
           <md-filter-chip class="setting-seg" id="proxyTabAccess" data-proxy-tab="access" label="接入点" selected></md-filter-chip>
           <md-filter-chip class="setting-seg" id="proxyTabChain" data-proxy-tab="chain" label="链式代理"></md-filter-chip>
@@ -273,7 +273,7 @@
       </section>
 
       <!-- Settings -->
-      <section class="view" id="settingsView">
+      <section class="view" id="settingsView" role="region" aria-label="设置">
         <div class="settings-groups">
 
           <div class="settings-group">
@@ -631,6 +631,7 @@
   <aside class="log-drawer" id="logDrawer" aria-label="运行日志" inert>
     <div class="drawer-header">
       <h2>运行日志</h2>
+      <md-text-button id="copyLogs" class="drawer-copy">复制日志</md-text-button>
       <md-icon-button id="closeLogs" aria-label="关闭日志">
         <md-icon>close</md-icon>
       </md-icon-button>
@@ -808,6 +809,7 @@
   <script src="ipv6gate.js"></script>
   <script src="lib/version.js"></script>
   <script src="lib/palette.js"></script>
+  <script src="lib/host.js"></script>
   <script src="app.js"></script>
   <script src="halloween.js"></script>
 </body>

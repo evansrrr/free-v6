@@ -1093,6 +1093,7 @@ md-filled-button.danger {
   border-bottom: 1px solid var(--md-outline-variant);
 }
 .drawer-header h2 { font-size: 15px; font-weight: 700; }
+.drawer-header .drawer-copy { margin-left: auto; margin-right: 4px; }
 
 .log-list { flex: 1; overflow-y: auto; padding: 8px 12px; }
 .log-entry { display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--md-outline-variant); font-size: 11px; line-height: 1.5; }
