@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -133,6 +134,10 @@ func TestUpdateDownloadHandlerFlow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h := &helper{root: t.TempDir()}
+	// The real source check would hit GitHub; stub it for the handler flow.
+	originalVerify := verifyUpdateSource
+	verifyUpdateSource = func(string, string) error { return nil }
+	t.Cleanup(func() { verifyUpdateSource = originalVerify })
 	h.updateDownload(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("download accepted: HTTP %d %s", rec.Code, rec.Body.String())
@@ -401,5 +406,39 @@ func TestUpdateLatestURLsDefaultIncludesMirrors(t *testing.T) {
 	}
 	if urls[len(urls)-1] != "https://github.com/"+updateRepoSlug+"/releases/latest/download/version.json" {
 		t.Fatalf("last url must be the direct fallback, got %s", urls[len(urls)-1])
+	}
+}
+
+func TestVerifyUpdateSource(t *testing.T) {
+	payload := []byte("setup")
+	sum := sha256Hex(payload)
+	manifest := fmt.Sprintf(`{"version":"0.5.7","download":"https://github.com/evansrrr/free-v6/releases/download/v0.5.7/setup.exe","sha256":"%s"}`, sum)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(manifest))
+	}))
+	defer srv.Close()
+
+	originalHosts := append([]string(nil), updateAllowedHosts...)
+	updateAllowedHosts = append(updateAllowedHosts, "127.0.0.1")
+	t.Cleanup(func() { updateAllowedHosts = originalHosts })
+
+	originalStable := updateLatestURLs
+	originalBeta := updateBetaLatestURLs
+	updateLatestURLs = func() []string { return []string{srv.URL + "/stable.json"} }
+	updateBetaLatestURLs = func() []string { return []string{srv.URL + "/beta.json"} }
+	t.Cleanup(func() { updateLatestURLs = originalStable; updateBetaLatestURLs = originalBeta })
+
+	updateManifestCache.Lock()
+	updateManifestCache.stable, updateManifestCache.beta, updateManifestCache.at = nil, nil, time.Time{}
+	updateManifestCache.Unlock()
+
+	if err := verifyUpdateSource("https://github.com/x/setup.exe", sum); err != nil {
+		t.Fatalf("matching sha must verify, got %v", err)
+	}
+	if err := verifyUpdateSource("https://github.com/x/setup.exe", strings.Repeat("0", 64)); err == nil {
+		t.Fatal("non-matching sha must be rejected")
+	}
+	if err := verifyUpdateSource("https://github.com/x/setup.exe", "short"); err == nil {
+		t.Fatal("malformed sha must be rejected")
 	}
 }

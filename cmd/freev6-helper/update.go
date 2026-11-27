@@ -275,6 +275,18 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 	_ = os.Remove(dest) // stale file from a previous attempt
 
 	go func() {
+		// The URL and SHA come from the caller; before downloading an
+		// executable that will be run with admin rights, require the SHA to
+		// match what the official release channel actually published. The host
+		// allowlist alone only pins the host, not the artifact.
+		if err := verifyUpdateSource(input.URL, input.SHA256); err != nil {
+			updateRun.mu.Lock()
+			updateRun.state = "error"
+			updateRun.err = err.Error()
+			updateRun.busy = false
+			updateRun.mu.Unlock()
+			return
+		}
 		// 无全局 client 超时：每次线路尝试有自己的硬限/停滞预算
 		// （downloadUpdateFileOnce），总时长被线路数天然封顶；前端轮询
 		// 自带 UI 侧上限。
@@ -284,11 +296,11 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 		if err != nil {
 			updateRun.state = "error"
 			updateRun.err = err.Error()
-			updateRun.busy = false
 		} else {
 			updateRun.state = "done"
 			updateRun.path = dest
 		}
+		updateRun.busy = false
 		updateRun.mu.Unlock()
 	}()
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true})
@@ -419,6 +431,50 @@ func fetchLatestManifest(client *http.Client, urls []string) (*latestVersionInfo
 		return info, nil
 	}
 	return nil, lastErr
+}
+
+// updateManifestCache memoizes the official manifests for a short window so
+// the download path can re-verify a caller-supplied SHA without hitting
+// GitHub on every click (the frontend fetches them moments earlier).
+var updateManifestCache = struct {
+	sync.Mutex
+	stable *latestVersionInfo
+	beta   *latestVersionInfo
+	at     time.Time
+}{}
+
+const updateManifestCacheTTL = 60 * time.Second
+
+// verifyUpdateSource requires the caller's SHA256 to match the official
+// stable or beta manifest. The frontend may rewrite the download URL through a
+// mirror prefix, so only the digest (and not the raw URL) is compared — a
+// matching SHA is the integrity anchor, while the host allowlist already pins
+// the transport. Rejects with a clear message when the manifests are
+// unreachable or nothing matches. A var so tests can stub it out.
+var verifyUpdateSource = func(rawURL, sha string) error {
+	sum := strings.ToLower(strings.TrimSpace(sha))
+	if len(sum) != 64 {
+		return fmt.Errorf("更新源校验失败：sha256 无效")
+	}
+	updateManifestCache.Lock()
+	fresh := time.Since(updateManifestCache.at) <= updateManifestCacheTTL
+	stable, beta := updateManifestCache.stable, updateManifestCache.beta
+	updateManifestCache.Unlock()
+
+	if !fresh || (stable == nil && beta == nil) {
+		client := &http.Client{Timeout: 8 * time.Second}
+		stable, _ = fetchLatestManifest(client, updateLatestURLs())
+		beta, _ = fetchLatestManifest(client, updateBetaLatestURLs())
+		updateManifestCache.Lock()
+		updateManifestCache.stable, updateManifestCache.beta, updateManifestCache.at = stable, beta, time.Now()
+		updateManifestCache.Unlock()
+	}
+	for _, info := range []*latestVersionInfo{stable, beta} {
+		if info != nil && strings.EqualFold(info.SHA256, sum) {
+			return nil
+		}
+	}
+	return fmt.Errorf("更新地址与官方清单不匹配，请重新检查更新")
 }
 
 // updateLatest answers the frontend update check:

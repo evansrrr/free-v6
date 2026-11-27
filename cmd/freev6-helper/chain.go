@@ -145,6 +145,10 @@ func (h *helper) chainImport(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	stored, loadErr := h.loadSettings()
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
+		return
+	}
 	if loadErr != nil {
 		stored = defaultSettings()
 	}
@@ -174,6 +178,10 @@ func (h *helper) chainClear(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	stored, loadErr := h.loadSettings()
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
+		return
+	}
 	if loadErr != nil {
 		stored = defaultSettings()
 	}

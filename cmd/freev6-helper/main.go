@@ -187,7 +187,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "helper: FREEV6_API_TOKEN is not set; all API requests will be rejected")
 	}
 	addr := listenAddress()
-	server := &http.Server{Addr: addr, Handler: withCORS(guardLocalOnly(requireAuth(apiToken, mux))), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           withCORS(guardLocalOnly(requireAuth(apiToken, mux))),
+		ReadHeaderTimeout: 5 * time.Second,
+		// ReadTimeout bounds how long a request may dribble its body, so a slow
+		// client cannot pin a handler goroutine (or the proxy start/stop lock)
+		// indefinitely. WriteTimeout stays 0: proxy start/stop legitimately runs
+		// for minutes. IdleTimeout only reaps idle keep-alive connections.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
+	}
 	// Bind with orphan takeover: killing the desktop via Task Manager leaves
 	// its helper child alive (Windows doesn't cascade-kill), and that orphan
 	// otherwise keeps our address busy forever — every relaunch died on the
@@ -221,7 +231,11 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	currentSettings, settingsErr := h.loadSettings()
+	settingsError := ""
 	if settingsErr != nil {
+		if !errors.Is(settingsErr, os.ErrNotExist) {
+			settingsError = settingsErr.Error()
+		}
 		currentSettings = defaultSettings()
 	}
 	_, warpErr := os.Stat(filepath.Join(h.root, "state", "warp.json"))
@@ -248,6 +262,7 @@ func (h *helper) status(writer http.ResponseWriter, request *http.Request) {
 		"proxy":            map[string]any{"running": running, "pid": pid, "error": errorText(statusErr)},
 		"warp":             map[string]any{"registered": warpErr == nil},
 		"settings":         currentSettings,
+		"settingsError":    settingsError,
 		"hotspot":          hotspot,
 		"controllerSecret": controllerSecret,
 	})
@@ -479,8 +494,13 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeJSON(writer, http.StatusOK, current)
 	case http.MethodPut:
-		body, err := io.ReadAll(request.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 256<<10))
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeJSON(writer, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+				return
+			}
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 			return
 		}
@@ -509,6 +529,10 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 		}
 		current.CampusCIDRs = entries
 		persisted, loadErr := h.loadSettings()
+		if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + loadErr.Error(), "code": "settings-corrupt"})
+			return
+		}
 		if loadErr != nil {
 			persisted = defaultSettings()
 		}
@@ -581,16 +605,20 @@ func (h *helper) settings(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		data, _ := json.MarshalIndent(current, "", "  ")
-		if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(writer, http.StatusOK, current)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	data, err := json.MarshalIndent(current, "", "  ")
+	if err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := writeFileAtomic(path, append(data, '\n'), 0o600); err != nil {
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, current)
 	default:
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
@@ -634,10 +662,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	// Decode and normalize before taking the proxy lock: a slow or oversized
+	// body must never hold the start/stop mutex (start/stop takes minutes).
 	var input proxyRequest
-	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 16<<10)).Decode(&input); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
@@ -647,10 +675,18 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	if input.CampusCIDRs == nil {
 		input.CampusCIDRs = defaultCampusCIDRs()
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	// 链式代理：启用时先解析导入内容——纯读、无副作用，放在端口/权限检查
 	// 之前让坏输入最快失败。启用却缺内容必须明确报错，绝不静默降级成裸
 	// WARP 出口（用户以为出口是自有代理，实际不是，是语义欺诈）。
 	storedForChain, chainSettingsErr := h.loadSettings()
+	if chainSettingsErr != nil && !errors.Is(chainSettingsErr, os.ErrNotExist) {
+		// A corrupt settings file must abort, never silently fall back to a
+		// bare-WARP render while the UI still shows chain/cloud as enabled.
+		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "settings.json 无法解析，请在设置中重置: " + chainSettingsErr.Error(), "code": "settings-corrupt"})
+		return
+	}
 	if chainSettingsErr != nil {
 		storedForChain = defaultSettings()
 	}
@@ -740,8 +776,10 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": blErr.Error()})
 		return
 	}
-	if stored, storeErr := h.loadSettings(); storeErr == nil && len(stored.Blacklist) > 0 {
-		blacklist = stored.Blacklist
+	// Reuse the settings already loaded above (storedForChain) instead of a
+	// second read that silently swaps in the built-in blacklist on any error.
+	if len(storedForChain.Blacklist) > 0 {
+		blacklist = storedForChain.Blacklist
 	}
 	stateDir := filepath.Join(h.root, "state")
 	// Controller secret: load-or-create BEFORE any network change so a disk
@@ -773,7 +811,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+	if err := writeFileAtomic(configPath, []byte(config), 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write mihomo config: %v", err)})
 		return
 	}
@@ -885,15 +923,13 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// Persist onto the FULL stored settings — saving a partial struct here
 	// used to wipe blacklist/devMode on every proxy start, so the developer
-	// switch reverted after a page refresh.
-	stored, storeErr := h.loadSettings()
-	if storeErr != nil {
-		stored = defaultSettings()
-	}
-	_ = h.saveSettings(mergeStartSettings(stored, input))
+	// switch reverted after a page refresh. Reuse storedForChain (the same
+	// settings this start validated against) rather than re-reading and falling
+	// back to defaults, which would overwrite a user's settings on a read error.
+	_ = h.saveSettings(mergeStartSettings(storedForChain, input))
 	// 热点共享（设置 → 通用，非阻断）：mihomo 就绪后才切 ICS，失败回滚
 	// 到启动前基线；结果随响应带回前端（成功记日志、失败弹日志界面）。
-	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, stored.HotspotShare)
+	hotspotResult := applyHotspotShare(snapshot, baseline, snapshotPath, storedForChain.HotspotShare)
 	// 自愈结果随响应回给前端（快照损坏 / 上次基线还原失败）：都只影响
 	// 历史残留，本次免流照常，因此前端只记日志、不弹窗。
 	//
@@ -1208,7 +1244,7 @@ func (h *helper) registerWarp(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	var input registerRequest
-	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4<<10)).Decode(&input); err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
@@ -1269,14 +1305,11 @@ func mergeStartSettings(stored settings, input proxyRequest) settings {
 
 func (h *helper) saveSettings(current settings) error {
 	path := filepath.Join(h.root, "config", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 func readDevice(path string) (warp.Device, error) {
@@ -1296,10 +1329,48 @@ func writePrivateJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+// writeFileAtomic writes data to path through a unique temp file, fsync and an
+// atomic rename, so a crash or a concurrent reader never observes a truncated
+// settings/state file. The rename is retried briefly for Windows sharing
+// violations (AV/backup software holding a transient handle).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := os.Rename(tmpName, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	return lastErr
 }
 
 func executableRoot() string {
