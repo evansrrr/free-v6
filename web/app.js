@@ -3656,12 +3656,9 @@ const DYNAMIC_PALETTE_VARS = [
 ];
 
 // Pure colour maths lives in lib/palette.js (UMD) so node:test can cover it
-// without a DOM. Kept as thin wrappers to avoid touching the call sites.
+// without a DOM. Only derivePalette is reachable from app code.
 const PaletteLib = window.FreeV6Palette;
-const { clamp } = PaletteLib;
 
-function hexToHsl(hex) { return PaletteLib.hexToHsl(hex); }
-function hslToHex(h, s, l) { return PaletteLib.hslToHex(h, s, l); }
 function derivePalette(seedHex, dark) { return PaletteLib.derivePalette(seedHex, dark); }
 
 function isDarkTheme() {
