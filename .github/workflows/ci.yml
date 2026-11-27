@@ -71,7 +71,12 @@ jobs:
         with:
           node-version: '20'
       - name: Frontend syntax
-        run: node --check web/app.js && node --check web/traffic.js && node --check web/ipv6gate.js
+        # Every served script, including the classic-script libs: naming files
+        # individually let halloween.js/material.js drift out of the guard.
+        run: |
+          for file in web/*.js web/lib/*.js; do
+            node --check "$file"
+          done
       # 整个目录跑，而不是点名某个文件：新增的用例（如 ipv6-gate）自动进入
       # CI，不会因为忘记改这一行而永远不执行。
       - name: Frontend tests

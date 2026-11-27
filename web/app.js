@@ -1150,39 +1150,13 @@ function currentAppVersion() {
   return m ? m[1] : '';
 }
 
-function splitVersion(value) {
-  const [core, ...pre] = String(value || '').split('-');
-  const parts = core.split('.').map((n) => parseInt(n, 10) || 0);
-  return [parts, pre.join('-')];
-}
+// Version ordering lives in lib/version.js (UMD, covered by node:test).
+const VersionLib = window.FreeV6Version;
 
-// semver 顺序：数字段优先；无预发布 > 有预发布；预发布按段比（数字段按数值，
-// 其余按字典序）。beta.1 < beta.2 < 0.5.6。
-function cmpVersion(a, b) {
-  const [pa, preA] = splitVersion(a);
-  const [pb, preB] = splitVersion(b);
-  for (let i = 0; i < 3; i++) {
-    const delta = (pa[i] || 0) - (pb[i] || 0);
-    if (delta !== 0) return delta;
-  }
-  if (preA === preB) return 0;
-  if (!preA) return 1;
-  if (!preB) return -1;
-  const sa = preA.split('.');
-  const sb = preB.split('.');
-  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
-    if (sa[i] === undefined) return -1;
-    if (sb[i] === undefined) return 1;
-    if (sa[i] === sb[i]) continue;
-    const na = parseInt(sa[i], 10);
-    const nb = parseInt(sb[i], 10);
-    if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
-    if (!Number.isNaN(na)) return -1;
-    if (!Number.isNaN(nb)) return 1;
-    return sa[i] < sb[i] ? -1 : 1;
-  }
-  return 0;
-}
+function splitVersion(value) { return VersionLib.splitVersion(value); }
+
+// beta.1 < beta.2 < 0.5.6
+function cmpVersion(a, b) { return VersionLib.cmpVersion(a, b); }
 
 function renderUpdateBadge() {
   const badge = $('#updateBadge');
@@ -1520,35 +1494,8 @@ function drawChart() {
   const stepX = chartW / (TRAFFIC_POINTS - 1);
   const getStyle = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-  // Draw filled area + line for each series
-  function drawLine(values, color, alpha) {
-    const len = values.length;
-    if (len < 2) return;
-
-    ctx.beginPath();
-    for (let i = 0; i < len; i++) {
-      const x = (TRAFFIC_POINTS - len + i) * stepX;
-      const y = chartH - (values[i] / maxVal) * (chartH - 8);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-
-    // Fill area
-    const lastX = (TRAFFIC_POINTS - 1) * stepX;
-    const firstX = (TRAFFIC_POINTS - len) * stepX;
-    ctx.lineTo(lastX, chartH);
-    ctx.lineTo(firstX, chartH);
-    ctx.closePath();
-    ctx.fillStyle = color.replace('1)', alpha + ')').replace('rgb', 'rgba');
-    ctx.fill();
-  }
-
-  const primary = getStyle('--md-primary') || '#a0c4ff';
-  const secondary = getStyle('--md-secondary') || '#bac8db';
+  const upColor = getStyle('--series-up') || getStyle('--md-secondary') || '#bac8db';
+  const downColor = getStyle('--series-down') || getStyle('--md-primary') || '#a0c4ff';
 
   // Convert to RGB for alpha
   function toRGBA(hex, a) {
@@ -1561,22 +1508,24 @@ function drawChart() {
   const upVals = data.map(d => d.up);
   const downVals = data.map(d => d.down);
 
-  // Draw upload line
+  // Draw upload line (dashed: the two series must differ by more than colour)
   ctx.beginPath();
   for (let i = 0; i < upVals.length; i++) {
     const x = (TRAFFIC_POINTS - upVals.length + i) * stepX;
     const y = chartH - (upVals[i] / maxVal) * (chartH - 8) - 2;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = secondary;
+  ctx.strokeStyle = upColor;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
+  ctx.setLineDash([4, 3]);
   ctx.stroke();
+  ctx.setLineDash([]);
   // Fill
   ctx.lineTo((TRAFFIC_POINTS - 1) * stepX, chartH);
   ctx.lineTo((TRAFFIC_POINTS - upVals.length) * stepX, chartH);
   ctx.closePath();
-  ctx.fillStyle = toRGBA(secondary, 0.08);
+  ctx.fillStyle = toRGBA(upColor, 0.08);
   ctx.fill();
 
   // Draw download line
@@ -1586,7 +1535,7 @@ function drawChart() {
     const y = chartH - (downVals[i] / maxVal) * (chartH - 8) - 2;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = primary;
+  ctx.strokeStyle = downColor;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -1594,8 +1543,29 @@ function drawChart() {
   ctx.lineTo((TRAFFIC_POINTS - 1) * stepX, chartH);
   ctx.lineTo((TRAFFIC_POINTS - downVals.length) * stepX, chartH);
   ctx.closePath();
-  ctx.fillStyle = toRGBA(primary, 0.06);
+  ctx.fillStyle = toRGBA(downColor, 0.06);
   ctx.fill();
+
+  // Endpoint markers, drawn after both fills so they are not covered. The last
+  // point sits exactly on chartW and the wrap clips overflow, so clamp it.
+  ctx.setLineDash([]);
+  const marker = (values, color) => {
+    if (!values.length) return;
+    const x = Math.min((TRAFFIC_POINTS - 1) * stepX, chartW - 3);
+    const y = chartH - (values[values.length - 1] / maxVal) * (chartH - 8) - 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  marker(upVals, upColor);
+  marker(downVals, downColor);
+
+  const canvas = $('#trafficCanvas');
+  if (canvas) {
+    canvas.setAttribute('aria-label',
+      `最近 60 秒流量曲线：上传 ${formatSpeed(upVals[upVals.length - 1] || 0)}，下载 ${formatSpeed(downVals[downVals.length - 1] || 0)}`);
+  }
 }
 
 /* ── Stats Ring Chart ─────────────────────────────────────────── */
@@ -3662,37 +3632,14 @@ const DYNAMIC_PALETTE_VARS = [
   '--md-tertiary', '--md-on-tertiary', '--md-tertiary-container', '--md-on-tertiary-container',
 ];
 
-function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+// Pure colour maths lives in lib/palette.js (UMD) so node:test can cover it
+// without a DOM. Kept as thin wrappers to avoid touching the call sites.
+const PaletteLib = window.FreeV6Palette;
+const { clamp } = PaletteLib;
 
-function hexToHsl(hex) {
-  const value = parseInt(hex.replace('#', ''), 16);
-  const r = (value >> 16 & 255) / 255;
-  const g = (value >> 8 & 255) / 255;
-  const b = (value & 255) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min) return { h: 0, s: 0, l };
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h;
-  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
-  else if (max === g) h = (b - r) / d + 2;
-  else h = (r - g) / d + 4;
-  return { h: h * 60, s, l };
-}
-
-function hslToHex(h, s, l) {
-  h = ((h % 360) + 360) % 360;
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
-  const m = l - c / 2;
-  const [r, g, b] =
-    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
-    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
-  const to = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
-  return `#${to(r)}${to(g)}${to(b)}`;
-}
+function hexToHsl(hex) { return PaletteLib.hexToHsl(hex); }
+function hslToHex(h, s, l) { return PaletteLib.hslToHex(h, s, l); }
+function derivePalette(seedHex, dark) { return PaletteLib.derivePalette(seedHex, dark); }
 
 function isDarkTheme() {
   const theme = document.documentElement.getAttribute('data-theme');
@@ -3701,51 +3648,15 @@ function isDarkTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
-// Material-You-ish three-family palette derived from one seed color.
-// Returns hex values (canvas/utils parse hex only).
-function derivePalette(seedHex, dark) {
-  const { h, s } = hexToHsl(seedHex);
-  // Gray seeds (wallpaper without a dominant hue) get a sensible chroma
-  const S = clamp(s < 0.12 ? 0.45 : s, 0.30, 0.90);
-  const hex = (hh, ss, ll) => hslToHex(hh, clamp(ss, 0, 1), clamp(ll, 0, 1));
-  const T = h + 60; // tertiary hue rotation (M3-ish)
-  if (dark) {
-    return {
-      '--md-primary': hex(h, S, 0.68),
-      '--md-on-primary': hex(h, Math.min(S, 0.45), 0.12),
-      '--md-primary-container': hex(h, S * 0.45, 0.30),
-      '--md-on-primary-container': hex(h, S, 0.86),
-      '--md-secondary': hex(h, S * 0.35, 0.74),
-      '--md-on-secondary': hex(h, 0.20, 0.12),
-      '--md-secondary-container': hex(h, S * 0.25, 0.30),
-      '--md-on-secondary-container': hex(h, S * 0.50, 0.86),
-      '--md-tertiary': hex(T, S * 0.50, 0.72),
-      '--md-on-tertiary': hex(T, 0.30, 0.12),
-      '--md-tertiary-container': hex(T, S * 0.35, 0.30),
-      '--md-on-tertiary-container': hex(T, S * 0.60, 0.86),
-    };
-  }
-  return {
-    '--md-primary': hex(h, S, 0.42),
-    '--md-on-primary': hex(h, Math.min(S, 0.6), 0.99),
-    '--md-primary-container': hex(h, S * 0.40, 0.90),
-    '--md-on-primary-container': hex(h, S, 0.18),
-    '--md-secondary': hex(h, S * 0.30, 0.45),
-    '--md-on-secondary': hex(h, 0.30, 0.99),
-    '--md-secondary-container': hex(h, S * 0.25, 0.90),
-    '--md-on-secondary-container': hex(h, S * 0.50, 0.18),
-    '--md-tertiary': hex(T, S * 0.45, 0.45),
-    '--md-on-tertiary': hex(T, 0.35, 0.99),
-    '--md-tertiary-container': hex(T, S * 0.30, 0.90),
-    '--md-on-tertiary-container': hex(T, S * 0.50, 0.18),
-  };
-}
+// Material-You-ish palette is implemented in lib/palette.js; the wrapper at
+// the top of this section keeps this file free of colour maths.
 
 function applyDynamicPalette() {
   const root = document.documentElement;
   DYNAMIC_PALETTE_VARS.forEach(name => root.style.removeProperty(name));
   if (!state.dynamicColor || !state.dynamicSeed) return;
   const palette = derivePalette(state.dynamicSeed, isDarkTheme());
+  if (!palette) return; // invalid seed (e.g. a short hex from a future helper)
   Object.keys(palette).forEach(name => root.style.setProperty(name, palette[name]));
 }
 
@@ -3811,10 +3722,17 @@ function syncNativeVibrancy() {
 }
 
 // 设置 <html data-bg-mode> 并调用 Rust 应用/清除窗口级效果
+function setBgModeAttr(mode) {
+  const root = document.documentElement;
+  root.setAttribute('data-bg-mode', mode);
+  // Single source of truth for the glass selectors: styles.css keys off
+  // [data-glass], not the five scattered writes of data-bg-mode.
+  root.toggleAttribute('data-glass', mode !== 'default');
+}
 async function applyBackgroundMode(mode, { persist = true } = {}) {
   if (mode === 'wallpaper' && !bgState.wallpaper) mode = 'default';
   bgState.mode = mode;
-  document.documentElement.setAttribute('data-bg-mode', mode);
+  setBgModeAttr(mode);
   if (persist) { try { localStorage.setItem(BG_MODE_KEY, mode); } catch (_) {} }
   const select = $('#bgModeSelect');
   if (select) select.value = mode;
@@ -3825,14 +3743,14 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
     if (mode === 'mica' && applied === 'acrylic') {
       // 云母不可用（Win10 或新版 Win11）→ 自动落到亚克力
       bgState.mode = 'acrylic';
-      document.documentElement.setAttribute('data-bg-mode', 'acrylic');
+      setBgModeAttr('acrylic');
       if (select) select.value = 'acrylic';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'acrylic'); } catch (_) {} }
       addLog('云母不可用，已自动降级为亚克力');
     } else if ((mode === 'acrylic' || mode === 'mica') && applied === 'default') {
       // 系统完全不支持 → 回退默认
       bgState.mode = 'default';
-      document.documentElement.setAttribute('data-bg-mode', 'default');
+      setBgModeAttr('default');
       if (select) select.value = 'default';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
       addLog('该背景效果在当前系统不可用', true);
@@ -3841,7 +3759,7 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
     addLog(`背景模式切换失败: ${e}`, true);
     if (mode === 'acrylic' || mode === 'mica') {
       bgState.mode = 'default';
-      document.documentElement.setAttribute('data-bg-mode', 'default');
+      setBgModeAttr('default');
       if (select) select.value = 'default';
       if (persist) { try { localStorage.setItem(BG_MODE_KEY, 'default'); } catch (_) {} }
     }
@@ -3940,7 +3858,7 @@ function loadBackgroundPrefs() {
   const select = $('#bgModeSelect');
   if (select) select.value = bgState.mode;
 
-  document.documentElement.setAttribute('data-bg-mode', bgState.mode);
+  setBgModeAttr(bgState.mode);
   applyBackgroundMode(bgState.mode, { persist: false });
 }
 
