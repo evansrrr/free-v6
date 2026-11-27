@@ -3836,8 +3836,6 @@ function applyWallpaper(dataUrl) {
   }
   const clearBtn = $('#clearWallpaperBtn');
   if (clearBtn) clearBtn.hidden = false;
-  const desc = $('#wallpaperDesc');
-  if (desc) desc.textContent = '已设置壁纸，点击更换';
   applyBackgroundMode('wallpaper');
 }
 
@@ -3848,8 +3846,6 @@ function clearWallpaper() {
   try { localStorage.removeItem(BG_WALLPAPER_KEY); } catch (_) {}
   const clearBtn = $('#clearWallpaperBtn');
   if (clearBtn) clearBtn.hidden = true;
-  const desc = $('#wallpaperDesc');
-  if (desc) desc.textContent = '选择一张图片作为背景';
   if (bgState.mode === 'wallpaper') applyBackgroundMode('default');
 }
 
@@ -3886,8 +3882,6 @@ function loadBackgroundPrefs() {
     if (imgEl) imgEl.src = bgState.wallpaper;
     const clearBtn = $('#clearWallpaperBtn');
     if (clearBtn) clearBtn.hidden = false;
-    const desc = $('#wallpaperDesc');
-    if (desc) desc.textContent = '已设置壁纸，点击更换';
   }
   const select = $('#bgModeSelect');
   if (select) select.value = bgState.mode;
