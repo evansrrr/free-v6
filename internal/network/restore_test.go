@@ -3,11 +3,13 @@ package network
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,6 +29,7 @@ func TestSnapshotPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	got.SavedAt = time.Time{} // SavedAt is stamped by SaveSnapshot, not part of the fixture
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot mismatch: got %+v want %+v", got, want)
 	}
@@ -85,6 +88,7 @@ func TestSaveSnapshotHealsCorruptFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save did not heal corrupt file: %v", err)
 	}
+	got.SavedAt = time.Time{} // SavedAt is stamped by SaveSnapshot, not part of the fixture
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot mismatch: got %+v want %+v", got, want)
 	}
@@ -162,5 +166,80 @@ func TestSnapshotDoesNotPersistDNS(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(string(data)), "dns") {
 		t.Fatalf("network snapshot must not carry DNS state: %s", data)
+	}
+}
+
+// 并发写 + 读者读到的一直是完整快照（回归：固定 .tmp 名曾被并发写互相截断，
+// 读者观测到 130 次解析失败）。
+func TestSaveSnapshotConcurrentReadersSeeCompleteFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "network-snapshot.json")
+	makeSnapshot := func(seed int) Snapshot {
+		snapshot := Snapshot{CapturedAt: time.Now()}
+		for i := 0; i < 400; i++ {
+			snapshot.Interfaces = append(snapshot.Interfaces, InterfaceSnapshot{Alias: fmt.Sprintf("a-%d-%d", seed, i), Index: i})
+		}
+		return snapshot
+	}
+	var writers sync.WaitGroup
+	for w := 0; w < 8; w++ {
+		payload := makeSnapshot(w)
+		writers.Add(1)
+		go func(s Snapshot) {
+			defer writers.Done()
+			for i := 0; i < 50; i++ {
+				_ = SaveSnapshot(path, s)
+			}
+		}(payload)
+	}
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	corrupt := 0
+	var mu sync.Mutex
+	for r := 0; r < 4; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := LoadSnapshot(path); errors.Is(err, ErrCorruptSnapshot) {
+					// A half-written file must never be observable; a transient
+					// "file in use" during the rename swap is tolerated (it is
+					// not corruption and the next read succeeds).
+					mu.Lock()
+					corrupt++
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	writers.Wait()
+	close(stop)
+	readers.Wait()
+	if corrupt != 0 {
+		t.Fatalf("readers saw %d corrupt (half-written) snapshots during concurrent saves", corrupt)
+	}
+}
+
+func TestShouldRecoverTethering(t *testing.T) {
+	now := time.Now()
+	meta := &HotspotMeta{Applied: true, Path: "winrt"}
+	if !shouldRecoverTethering(meta, now.Add(-time.Minute), now) {
+		t.Fatal("a fresh winrt+applied snapshot must be allowed to recover")
+	}
+	if shouldRecoverTethering(meta, now.Add(-2*time.Hour), now) {
+		t.Fatal("a stale snapshot must not start tethering")
+	}
+	if shouldRecoverTethering(meta, time.Time{}, now) {
+		t.Fatal("a zero SavedAt (pre-upgrade) snapshot must not start tethering")
+	}
+	if shouldRecoverTethering(nil, now, now) {
+		t.Fatal("nil meta must not recover")
+	}
+	if shouldRecoverTethering(&HotspotMeta{Applied: true, Path: "ics"}, now, now) {
+		t.Fatal("a non-winrt path must not recover")
 	}
 }

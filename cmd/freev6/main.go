@@ -18,6 +18,7 @@ import (
 )
 
 func main() {
+	network.RouteCleanupLog = os.Stderr
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "freev6:", err)
 		os.Exit(1)

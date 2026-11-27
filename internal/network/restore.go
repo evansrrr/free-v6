@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ErrCorruptSnapshot marks a snapshot file that exists but cannot be decoded
@@ -19,6 +20,7 @@ func SaveSnapshot(path string, snapshot Snapshot) error {
 	if path == "" {
 		return fmt.Errorf("network snapshot path is empty")
 	}
+	snapshot.SavedAt = time.Now().UTC()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create network snapshot directory: %w", err)
 	}
@@ -26,32 +28,30 @@ func SaveSnapshot(path string, snapshot Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("encode network snapshot: %w", err)
 	}
-	// Atomic replace: a plain os.WriteFile truncates first, so a kill mid-write
-	// (update child.kill, orphan taskkill, power loss) or a full disk leaves a
-	// 0-byte/partial network-snapshot.json behind. Write a temp file, flush it
-	// to disk, then rename over the target — the visible file is either the
-	// old snapshot or the new one, never a half-written one.
-	tmpPath := path + ".tmp"
-	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Atomic replace via a UNIQUE temp file: a plain os.WriteFile truncates
+	// first, so a kill mid-write (update child.kill, orphan taskkill, power
+	// loss) or a full disk leaves a 0-byte/partial network-snapshot.json
+	// behind. A fixed "path.tmp" name is not enough — the CLI and the helper
+	// can both save and would truncate each other's temp file; a unique name
+	// plus rename means the visible file is always one complete snapshot.
+	file, err := os.CreateTemp(filepath.Dir(path), ".network-snapshot-*.tmp")
 	if err != nil {
 		return fmt.Errorf("write network snapshot: %w", err)
 	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		_ = file.Close()
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write network snapshot: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("sync network snapshot: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close network snapshot: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("replace network snapshot: %w", err)
 	}
 	return nil

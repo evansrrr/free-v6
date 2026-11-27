@@ -130,6 +130,9 @@ func defaultSettings() settings {
 }
 
 func main() {
+	// Route-cleanup failures land in helper.log (this process's stderr) instead
+	// of being swallowed.
+	network.RouteCleanupLog = os.Stderr
 	// Task Manager's Startup tab runs the HKCU Run marker (helper --autostart)
 	// at logon; the real launch is the "FreeV6 Autostart" logon task. Exit
 	// before binding the API port so the marker never collides with the helper
@@ -1208,11 +1211,13 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	if restoreErr == nil {
 		_ = os.Remove(snapshotPath)
 	}
-	if restoreErr != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": restoreErr.Error()})
-		return
-	}
+	// The proxy has stopped regardless of the hotspot restore outcome; report
+	// 200 with a structured restoreError instead of 500 (which the UI reads as
+	// "still running"). The snapshot is kept so the next start self-heals.
 	response := map[string]any{"running": false}
+	if restoreErr != nil {
+		response["restoreError"] = restoreErr.Error()
+	}
 	if restoreSkipped != "" {
 		response["restoreSkipped"] = restoreSkipped
 	}
@@ -1466,17 +1471,36 @@ func errorText(err error) string {
 
 func diagnosticError(err error, logPath string) string {
 	message := err.Error()
-	data, readErr := os.ReadFile(logPath)
-	if readErr != nil {
+	tail, tailErr := readFileTail(logPath, 4000)
+	if tailErr != nil || tail == "" {
 		return message
 	}
-	const maxTail = 4000
-	if len(data) > maxTail {
-		data = data[len(data)-maxTail:]
+	return message + "; mihomo log: " + tail
+}
+
+// readFileTail returns the last maxBytes of path without slurping the whole
+// file — mihomo.log grows to tens of MB over a long session and this runs
+// while holding the proxy start/stop lock.
+func readFileTail(path string, maxBytes int64) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
 	}
-	logTail := strings.TrimSpace(string(data))
-	if logTail == "" {
-		return message
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
 	}
-	return message + "; mihomo log: " + logTail
+	offset := int64(0)
+	if info.Size() > maxBytes {
+		offset = info.Size() - maxBytes
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return "", err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }

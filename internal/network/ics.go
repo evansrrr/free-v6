@@ -224,16 +224,12 @@ func BuildICSRestoreScript(sharing []SharingSnapshot, tunName string) string {
 	b.WriteString("  try { $conns += ,@($c, $m.NetConnectionProps($c), $m.INetSharingConfigurationForINetConnection($c)) }\n")
 	b.WriteString("  catch { $errors += ('enum: ' + $_.Exception.Message) }\n")
 	b.WriteString("}\n")
-	// Phase 1: disable sharing we no longer want (the TUN adapter, and any
-	// baseline-off connection the user turned on mid-session is NOT touched —
-	// only TUN and entries that exist in $want with e=false).
+	// Phase 1: disable sharing we no longer want. Only the TUN adapter is
+	// touched here — a connection the user shared themselves mid-session (it is
+	// in $want with e=false, or not in $want at all) must NOT be turned off.
 	b.WriteString("foreach ($item in $conns) {\n")
 	b.WriteString("  $p = $item[1]; $s = $item[2]\n")
-	b.WriteString("  $match = $null\n")
-	b.WriteString("  foreach ($w in $want) { if ($w.guid -eq $p.Guid) { $match = $w; break } }\n")
-	b.WriteString("  $off = $false\n")
-	b.WriteString("  if ($null -eq $match) { $off = ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled) }\n")
-	b.WriteString("  elseif (-not $match.e) { $off = [bool]$s.SharingEnabled }\n")
+	b.WriteString("  $off = ($p.Name -eq " + psQuote(tunName) + " -and [bool]$s.SharingEnabled)\n")
 	b.WriteString("  if ($off) { try { $s.DisableSharing() } catch { $errors += ($p.Name + ': ' + $_.Exception.Message) } }\n")
 	b.WriteString("}\n")
 	// Phase 2: enable PUBLIC unconditionally (enabling a new PUBLIC resets the

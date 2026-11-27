@@ -126,8 +126,23 @@ func (s *CoreStore) writeIndex(index CoreIndex) error {
 	if err != nil {
 		return err
 	}
-	temporary := s.IndexPath() + ".tmp"
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
+	// A unique temp name: a fixed "core.json.tmp" would be deleted by sweep()
+	// (which removes *.tmp) from another goroutine while this rename is pending.
+	file, err := os.CreateTemp(s.CoresDir(), ".index-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
 		return err
 	}
 	return os.Rename(temporary, s.IndexPath())
@@ -169,6 +184,11 @@ func (s *CoreStore) Installed() []Core {
 	var cores []Core
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".exe") {
+			continue
+		}
+		// A crash mid-extract leaves ".incoming-*.exe" (never self-tested);
+		// never count it as an installed, runnable core.
+		if strings.HasPrefix(entry.Name(), ".incoming-") {
 			continue
 		}
 		cores = append(cores, Core{
@@ -454,11 +474,11 @@ func sameFile(a, b string) bool {
 	return os.SameFile(left, right)
 }
 
-// moveInto 优先用 rename（同目录 = 同卷，零拷贝且原子）；跨目录或目标被占用
-// 时退回复制。重装同一版本需要先删掉旧文件，否则 Windows 会拒绝覆盖。
+// moveInto 优先用 rename（同目录 = 同卷，零拷贝且原子；Windows 上 rename
+// 会覆盖目标）；失败再退回复制，绝不先删目标——先删再 rename 失败会留下
+// 「一个内核都不剩」的空目录。
 func moveInto(source, target string) error {
 	if filepath.Dir(source) == filepath.Dir(target) {
-		_ = os.Remove(target)
 		if err := os.Rename(source, target); err == nil {
 			return nil
 		}
@@ -466,34 +486,31 @@ func moveInto(source, target string) error {
 	return copyExecutable(source, target)
 }
 
-// copyExecutable 先写 .tmp 再 rename，避免中途失败留下半截可执行文件。
+// copyExecutable 先写唯一临时文件再 rename，避免中途失败留下半截可执行文件。
 func copyExecutable(source, target string) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer input.Close()
-	temporary := target + ".tmp"
-	output, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	output, err := os.CreateTemp(filepath.Dir(target), ".incoming-copy-*.tmp")
 	if err != nil {
 		return err
 	}
+	temporary := output.Name()
+	defer os.Remove(temporary)
 	if _, err := io.Copy(output, input); err != nil {
 		_ = output.Close()
-		_ = os.Remove(temporary)
 		return err
 	}
 	if err := output.Sync(); err != nil {
 		_ = output.Close()
-		_ = os.Remove(temporary)
 		return err
 	}
 	if err := output.Close(); err != nil {
-		_ = os.Remove(temporary)
 		return err
 	}
 	if err := os.Rename(temporary, target); err != nil {
-		_ = os.Remove(temporary)
 		return err
 	}
 	return nil

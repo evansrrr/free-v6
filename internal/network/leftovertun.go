@@ -1,6 +1,15 @@
 package network
 
-import "context"
+import (
+	"context"
+	"io"
+)
+
+// RouteCleanupLog is where route-cleanup diagnostics go. The helper and the CLI
+// point it at stderr (helper.log) at startup so a failed netsh delete — e.g.
+// running without elevation — leaves a trace instead of silently stranding the
+// user with "an address but no egress". Tests leave it at io.Discard.
+var RouteCleanupLog io.Writer = io.Discard
 
 // shouldClearLeftoverTunRoutes 决定是否清理残留 TUN 路由。内核在跑时绝不动：
 // 那些路由正是它写进去的；状态读不到时也不动，宁可留给下一处再试。

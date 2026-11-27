@@ -15,6 +15,10 @@ type Snapshot struct {
 	// CapturedAt 仅用于排障（确认残留基线来自哪次会话），不参与任何还原
 	// 决策：热点/共享是本程序自己的开关，与采集时间无关。
 	CapturedAt time.Time `json:"capturedAt"`
+	// SavedAt 是快照最后一次落盘的时刻，用于「是否该主动拉起热点」的新鲜度
+	// 判断：它随每次 SaveSnapshot 刷新，约等于最后一次切换/停止的时刻。零值
+	// 表示旧版本写的快照，按「过旧」处理（只做严格还原、不主动拉起）。
+	SavedAt time.Time `json:"savedAt,omitempty"`
 	// Interfaces 仅用于排障日志（各网卡的默认网关），不会被还原。
 	Interfaces []InterfaceSnapshot `json:"interfaces,omitempty"`
 	// Sharing 是切换前的 ICS 共享状态基线（internal/network/ics.go）：

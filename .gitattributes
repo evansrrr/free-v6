@@ -1,0 +1,3 @@
+# Keep line endings LF across checkout platforms so `gofmt -l` is stable.
+# text=auto lets Git auto-detect binary files and leave them untouched.
+* text=auto eol=lf

@@ -73,9 +73,18 @@ func ClearTunRoutes(ctx context.Context, name string) int {
 			"interface=" + strconv.Itoa(index),
 			"store=active",
 		}
-		if err := exec.CommandContext(ctx, "netsh", args...).Run(); err == nil {
+		output, err := exec.CommandContext(ctx, "netsh", args...).CombinedOutput()
+		if err == nil {
 			removed++
+			continue
 		}
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		// A non-zero exit (typically access-denied when not elevated) must not
+		// stay silent: it leaves the user with an address but no egress.
+		fmt.Fprintf(RouteCleanupLog, "clear tun route %s failed: %s\n", prefix, detail)
 	}
 	return removed
 }

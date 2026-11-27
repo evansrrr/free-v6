@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // RestoreHotspot 还原热点上游（WinRT/ICS 角色）。必须在 TUN 适配器仍在时
@@ -75,7 +76,7 @@ func restoreLeftoverHotspot(ctx context.Context, snapshot Snapshot) error {
 		return nil
 	}
 	var issues []string
-	if snapshot.Hotspot.Path == "winrt" {
+	if snapshot.Hotspot.Path == "winrt" && shouldRecoverTethering(snapshot.Hotspot, snapshot.SavedAt, time.Now()) {
 		if err := winRTRecover(ctx, snapshot.Hotspot.OriginalProfile); err != nil {
 			issues = append(issues, err.Error())
 		}

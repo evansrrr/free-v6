@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/yourname/freev6/internal/mihomo"
 )
 
 // A proxy start must not drop settings fields the start request never carries.
@@ -180,5 +183,59 @@ func TestSettingsPutOmittedAutoRunProxyKeepsStored(t *testing.T) {
 	h.settings(thirdRec, third)
 	if !bytes.Contains(thirdRec.Body.Bytes(), []byte(`"autoRunProxy":false`)) {
 		t.Fatalf("explicit false must persist, got: %s", thirdRec.Body.String())
+	}
+}
+
+// /status must keep 200 when the settings file is missing (first launch) and
+// return defaults; it is the frontend's connectivity probe and must not 5xx.
+func TestStatusReturnsDefaultsWithEmptyRoot(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	rec := httptest.NewRecorder()
+	h.status(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Proxy struct {
+			Running bool `json:"running"`
+		} `json:"proxy"`
+		Settings settings `json:"settings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Proxy.Running {
+		t.Fatal("no pid file => proxy must not report running")
+	}
+	if out.Settings.Mode != mihomo.ModeRule {
+		t.Fatalf("default mode = %q, want rule", out.Settings.Mode)
+	}
+}
+
+// A corrupt settings file must surface as settingsError while /status stays 200
+// (never silently present defaults as if the user's settings were empty).
+func TestStatusSurfacesCorruptSettings(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	if err := os.MkdirAll(filepath.Join(h.root, "config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.root, "config", "settings.json"), []byte("{ broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	rec := httptest.NewRecorder()
+	h.status(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out struct {
+		SettingsError string `json:"settingsError"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.SettingsError == "" {
+		t.Fatal("corrupt settings must populate settingsError")
 	}
 }

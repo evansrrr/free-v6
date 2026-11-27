@@ -12,8 +12,27 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
+      - name: Format check
+        shell: bash
+        run: test -z "$(gofmt -l cmd internal)"
       - run: go test ./...
       - run: go vet ./...
+      - name: Staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: '2024.1.1'
+
+  # The Windows-only network tests skip on Linux, but the handler and
+  # CoreStore concurrency (the parts most likely to race) are platform-neutral.
+  # Windows-latest can't run -race without a working C toolchain in PATH.
+  go-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - run: go test -race ./internal/... ./cmd/freev6-helper
 
   rust:
     runs-on: windows-latest

@@ -5,6 +5,7 @@ package network
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // 自愈面对的是「上次进程死在停与启之间」留下的现场：热点是关的，但快照里
@@ -21,7 +22,7 @@ func TestRestoreLeftoverSnapshotRecoversStoppedHotspot(t *testing.T) {
 	}
 	restoreICSSharing = func(context.Context, Snapshot) error { return nil }
 
-	snapshot := Snapshot{Hotspot: &HotspotMeta{Applied: true, Path: "winrt", OriginalProfile: "USTB-Student 2"}}
+	snapshot := Snapshot{SavedAt: time.Now(), Hotspot: &HotspotMeta{Applied: true, Path: "winrt", OriginalProfile: "USTB-Student 2"}}
 	if err := RestoreLeftoverSnapshot(context.Background(), snapshot); err != nil {
 		t.Fatalf("leftover restore must succeed: %v", err)
 	}
