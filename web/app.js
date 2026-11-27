@@ -296,7 +296,7 @@ async function openExternal(url) {
 
 function addLog(message, isError = false) {
   const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  state.logs.unshift({ time: now, msg: message, error: isError });
+  state.logs.unshift({ time: now, msg: redactSecrets(message), error: isError });
   if (state.logs.length > MAX_LOG) state.logs.length = MAX_LOG;
   renderLogs();
 }
@@ -2134,8 +2134,9 @@ async function refreshBackendState() {
     // Runtime info — must complete before updating chip/settings UI
     try {
       const runtime = await api('/runtime');
-      state.runtimePresent = Boolean(runtime.present);
-      state.runtimeChecked = true;
+      // Same mapper as pollStatus: this path used to set only present/checked,
+      // leaving runtimeVersion empty until the first 3s poll corrected it.
+      applyRuntimeInfo(runtime);
     } catch (_) { /* ignore */ }
     // 链式代理状态：拿不到不影响主流程（helper 刚回过 /status，这里基本必成）
     await refreshChainStatus();
@@ -2361,8 +2362,13 @@ async function pollStatus() {
     }
     // 设置写入期间（或写入落定前发出的慢响应）不回灌设置字段——旧值会把
     // 用户刚拨好的开关拨回去（见 settingsWriteGen）
+    // Not a user setting: the controller secret must follow the helper even
+    // while a settings write is in flight, otherwise 9090 calls 401.
+    if (typeof status.controllerSecret === 'string') state.controllerSecret = status.controllerSecret;
     if (genAtStart === settingsWriteGen) {
       state.mode = status.settings?.mode || state.mode;
+      // campusCidrs used to be synced only by refreshBackendState.
+      if (Array.isArray(status.settings?.campusCidrs)) state.cidrs = status.settings.campusCidrs;
       setMode(state.mode, false, true);
       // Sync developer mode / auto-start when they changed on the backend
       const nextDevMode = typeof status.settings?.devMode === 'boolean' ? status.settings.devMode : state.devMode;
@@ -3060,11 +3066,11 @@ function updateChainUI() {
   const statusLine = $('#chainStatusLine');
   if (statusLine) {
     if (state.chain.error) {
-      statusLine.textContent = `内容异常: ${state.chain.error}`;
+      statusLine.textContent = `内容异常: ${redactSecrets(state.chain.error)}`;
     } else if (state.chain.count === 0) {
       statusLine.textContent = '尚未导入';
     } else if (state.chain.sourceType === 'url') {
-      statusLine.textContent = `订阅：${state.chain.sourceUrl}（${state.chain.count} 个节点）`;
+      statusLine.textContent = `订阅：${maskUrl(state.chain.sourceUrl)}（${state.chain.count} 个节点）`;
     } else {
       statusLine.textContent = `本地文件（${state.chain.count} 个节点）`;
     }
@@ -3165,6 +3171,25 @@ function redactEntry(text) {
   return String(text ?? '')
     .replace(/https?:\/\/[^\s"'）)]+/gi, '入口')
     .replace(/[0-9a-z]{8,}\.freev6\.cc\.cd/gi, '入口');
+}
+
+// Subscription URLs carry their credential in the query string. Keep the host
+// so the row stays useful, drop the path/query.
+function maskUrl(value) {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '入口';
+    return `${url.origin}${url.pathname.length > 1 ? '/…' : ''}`;
+  } catch (_) {
+    return '入口';
+  }
+}
+
+// Log lines quote helper errors that can embed the request URL; scrub the
+// well-known credential parameters without hiding the rest of the message.
+function redactSecrets(text) {
+  return String(text ?? '')
+    .replace(/([?&](?:token|key|sub|auth|password|signature)=)[^&\s"']+/gi, '$1***');
 }
 
 async function refreshCloudStatus() {
