@@ -3769,10 +3769,21 @@ async function applyBackgroundMode(mode, { persist = true } = {}) {
 // 压缩图片为 ≤2560px 的 JPEG data URL（控制 localStorage 体积）
 function compressWallpaper(file) {
   return new Promise((resolve, reject) => {
+    // A wallpaper is decoded fully before it is downscaled. Cap both the file
+    // and the decoded pixel count; a 10000x10000 PNG otherwise blocks the
+    // renderer for seconds and pins ~400MB.
+    if (file.size > 20 * 1024 * 1024) {
+      reject(new Error('图片过大（上限 20 MB）'));
+      return;
+    }
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
+      if (img.naturalWidth * img.naturalHeight > 4e7) {
+        reject(new Error('图片分辨率过高（上限 4000 万像素）'));
+        return;
+      }
       const MAX = 2560;
       let { width, height } = img;
       if (width > MAX || height > MAX) {
