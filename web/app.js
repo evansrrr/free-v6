@@ -187,7 +187,10 @@ const DEFAULT_API_TIMEOUT_MS = 15000;
 
 function apiTimeoutMs(path) {
   const table = globalThis.FreeV6ApiTimeouts;
-  return (table && table.timeoutFor(path)) || DEFAULT_API_TIMEOUT_MS;
+  if (table && typeof table.timeoutFor === 'function') return table.timeoutFor(path);
+  // 表没加载成功（脚本被删/缓存错乱）：至少别让 start/stop 退回默认值——
+  // 那会让一次正常的长启动被判成超时。
+  return /^\/proxy\/(?:start|stop)\b/.test(String(path || '')) ? 180000 : DEFAULT_API_TIMEOUT_MS;
 }
 
 function apiTimeoutError(path, timeoutMs) {

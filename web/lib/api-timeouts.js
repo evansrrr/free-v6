@@ -16,12 +16,19 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // 顺序即优先级：/proxy/start 与 /proxy/stop 共用一个 180s 档（ICS 最坏
-  // 120s + 建连/调度余量）。新增接口必须同时登记服务端预算与这里的一档。
+  // 顺序即优先级。start 与 stop 分开计时：stop 的最坏是"120s 热点还原 + 拆除"
+  // （129s，档位按 ×1.5 取 200s）；start 的最坏是"残留自愈 120s + 热点探测 30s
+  // + 切换 120s + 回滚 60s + 就绪前的几步"，叠起来能到 400s 量级。档位小于真实
+  // 最坏时，用户会看到"启动超时"而 helper 还在继续——界面与真实状态分裂，比多
+  // 等几分钟糟得多。
+  //
+  // 新增接口必须同时登记服务端预算与这里的一档。
   const RULES = [
-    [/^\/proxy\/(?:start|stop)\b/, 180000],
+    [/^\/proxy\/start\b/, 420000],
+    [/^\/proxy\/stop\b/, 200000],
     [/^\/chain\b/, 45000],
     [/^\/cloud-config\b/, 45000],
+    [/^\/warp\/register\b/, 35000],
     [/^\/runtime\/check\b/, 30000],
     [/^\/update\/latest\b/, 25000],
     [/^\/notice\b/, 20000],
