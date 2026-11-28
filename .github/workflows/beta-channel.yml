@@ -49,8 +49,9 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      # 三种触发方式统一成一个 TARGET_TAG：后面的步骤只认它。
+      # 三种触发方式统一成一个 tag 输出：后面的步骤只认它。
       - name: Resolve target tag
+        id: resolve
         env:
           # gh 需要仓库上下文：虽然现在有 checkout，仍显式给 GH_REPO，
           # 避免工作目录变化后 gh 去猜。
@@ -77,13 +78,14 @@ jobs:
           else
             echo "target tag: $TAG"
           fi
-          echo "TARGET_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Point beta-channel at the prerelease
-        if: env.TARGET_TAG != ''
+        if: steps.resolve.outputs.tag != ''
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -euo pipefail
           TAG="$TARGET_TAG"
@@ -121,7 +123,7 @@ jobs:
           echo "beta-channel -> $TAG"
 
       - name: Verify the mirrored pointer
-        if: env.TARGET_TAG != ''
+        if: steps.resolve.outputs.tag != ''
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
