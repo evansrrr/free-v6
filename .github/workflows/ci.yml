@@ -17,10 +17,11 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - run: go test ./...
       - run: go vet ./...
+      # The staticcheck-action bundles an old x/tools that no longer compiles
+      # against current Go ("invalid array length -delta * delta"); pin the
+      # toolchain by module instead so it tracks the runner's Go version.
       - name: Staticcheck
-        uses: dominikh/staticcheck-action@v1
-        with:
-          version: '2024.1.1'
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
   # The Windows-only network tests skip on Linux, but the handler and
   # CoreStore concurrency (the parts most likely to race) are platform-neutral.
