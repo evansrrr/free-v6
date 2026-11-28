@@ -172,9 +172,29 @@ fn update_apply(app: tauri::AppHandle) -> Result<String, String> {
     // 弹"组件异常"并 exit(1)），再请求 helper 自己停干净并退出，最后才允许
     // NSIS 覆盖文件。helper 没确认退出就装，正是混合构建的来源。
     mark_helper_stopping(&app);
-    let _ = request_helper_shutdown(&app, Duration::from_secs(6));
-    if !wait_helper_terminated(Duration::from_secs(6)) {
-        return Err("helper 未在 6 秒内退出，已中止更新。请手动退出 FreeV6 后重试。".into());
+    match request_helper_shutdown(&app, Duration::from_secs(6)) {
+        ShutdownRequest::Accepted => {
+            if !wait_helper_terminated(Duration::from_secs(6)) {
+                // 已确认收尾、只是还没退出：stopping 保持置位（它随后会退），
+                // 但文件还被占着，安装必须中止。
+                return Err("helper 已接受停止请求，但未在 6 秒内退出，已中止更新。请稍后重试。".into());
+            }
+        }
+        ShutdownRequest::StoppedOnly => {
+            // 旧 helper 没有 /shutdown：/proxy/stop 返回 200 说明会话已停、网络
+            // 已还原，剩下的只是进程占着 exe。这时杀它是安全的，也是混合构建
+            // 能完成应用内更新的唯一方式（否则旧客户端只能手动重装）。
+            stop_helper(&app);
+            let _ = wait_helper_terminated(Duration::from_secs(3));
+        }
+        ShutdownRequest::Refused => {
+            // 明确没接受：helper 可能还在跑，而且不会自己退。复位 stopping，
+            // 否则它之后真的崩溃时会被当成主动退出——既不弹"组件异常"也不退出。
+            if !HELPER_TERMINATED.load(Ordering::Acquire) {
+                clear_helper_stopping(&app);
+                return Err("helper 未接受退出请求，已中止更新。请手动退出 FreeV6 后重试。".into());
+            }
+        }
     }
     // A mixed build left behind by an earlier failed update still runs a helper
     // this shell never spawned, so stop_helper cannot reach it: it sits on
@@ -183,6 +203,11 @@ fn update_apply(app: tauri::AppHandle) -> Result<String, String> {
     // instance can exist (single-instance mutex) and it just stopped its own
     // helper, so anything left with that image name is a stray.
     reap_stray_helpers(Duration::from_secs(3));
+    // 兜底：reap 之后还有 helper 活着说明杀不掉，此时安装会把 exe 写成半截。
+    if !process_memory::helper_pids().is_empty() {
+        clear_helper_stopping(&app);
+        return Err("仍有 freev6-helper 进程在运行，已中止更新。请手动退出 FreeV6 后重试。".into());
+    }
 
     std::process::Command::new(&installer)
         .args(["/S", "/FREEV6REL"])
@@ -1018,11 +1043,26 @@ fn mark_helper_stopping(app: &tauri::AppHandle) {
     }
 }
 
-/// 请 helper 自己停止会话并退出。true 表示它确认收到。
+/// helper 对退出请求的回应。
 ///
-/// 旧 helper 没有 /api/v1/shutdown（404/405）：回落到 /proxy/stop，让它至少把
-/// 网络还原做掉，剩下的交给调用方的有界等待 + 强杀。
-fn request_helper_shutdown(app: &tauri::AppHandle, timeout: Duration) -> bool {
+/// 三种结果必须分开：只有 `Accepted` 能让 `stopping` 保持置位。
+#[derive(Debug, PartialEq)]
+enum ShutdownRequest {
+    /// 新 helper 的 /shutdown 返回 200：它会收尾并自己退出。
+    Accepted,
+    /// 旧 helper（404/405）：/proxy/stop 返回 200，会话已停、网络已还原，
+    /// 但进程不会自己退。杀它是安全的。
+    StoppedOnly,
+    /// 明确没接受（409 / 连接失败 / 回落也失败）：helper 可能还在跑。
+    Refused,
+}
+
+/// 请 helper 自己停止会话并退出。
+///
+/// 旧 helper 没有 /api/v1/shutdown（404/405）：回落到 /proxy/stop。它只能还原
+/// 网络，进程不会退出——所以那是 `StoppedOnly`，不是"退出确认"。以前这里返回
+/// true，门禁误以为它会退，等 6s 超时后把 stopping 永久留在置位状态。
+fn request_helper_shutdown(app: &tauri::AppHandle, timeout: Duration) -> ShutdownRequest {
     let port = app
         .try_state::<HelperPort>()
         .map(|state| state.0)
@@ -1033,13 +1073,34 @@ fn request_helper_shutdown(app: &tauri::AppHandle, timeout: Duration) -> bool {
         .map(|state| state.0.clone())
         .unwrap_or_default();
     let client = helper_client::HelperClient::new(port, token, timeout);
-    match client.post("/api/v1/shutdown") {
-        Ok(response) if response.status == 200 => true,
-        Ok(response) if response.status == 404 || response.status == 405 => client
-            .post("/api/v1/proxy/stop")
-            .map(|fallback| fallback.status == 200)
-            .unwrap_or(false),
-        _ => false,
+    let shutdown = client.post("/api/v1/shutdown").ok().map(|reply| reply.status);
+    // 只有"路由不存在"才值得回落；409 是在告诉你它正忙，再发一个 stop 只会
+    // 在同一个互斥上空等一个超时。
+    let fallback = if matches!(shutdown, Some(404) | Some(405)) {
+        client.post("/api/v1/proxy/stop").ok().map(|reply| reply.status)
+    } else {
+        None
+    };
+    classify_shutdown(shutdown, fallback)
+}
+
+/// 把两次请求的状态码映射成结论。纯函数，单测覆盖全部分支：
+/// 判定错了会让 stopping 永久置位（崩溃被当成主动退出）或过早复位。
+fn classify_shutdown(shutdown: Option<u16>, fallback: Option<u16>) -> ShutdownRequest {
+    match shutdown {
+        Some(200) => ShutdownRequest::Accepted,
+        Some(404) | Some(405) => match fallback {
+            Some(200) => ShutdownRequest::StoppedOnly,
+            _ => ShutdownRequest::Refused,
+        },
+        _ => ShutdownRequest::Refused,
+    }
+}
+
+/// 更新被中止时复位 stopping：helper 还在跑，之后真的崩溃仍要按崩溃处理。
+fn clear_helper_stopping(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<HelperState>() {
+        state.stopping.store(false, Ordering::Release);
     }
 }
 
@@ -1088,6 +1149,31 @@ mod tests {
     // update_apply must not hang when the helper never confirms termination,
     // and must return promptly once it does. Guards the bounded-wait contract
     // that keeps NSIS from copying over a still-running freev6-helper.exe.
+    #[test]
+    fn classifies_shutdown_outcomes() {
+        assert_eq!(classify_shutdown(Some(200), None), ShutdownRequest::Accepted);
+        assert_eq!(
+            classify_shutdown(Some(404), Some(200)),
+            ShutdownRequest::StoppedOnly,
+            "an old helper restores the network but keeps running"
+        );
+        assert_eq!(
+            classify_shutdown(Some(405), Some(200)),
+            ShutdownRequest::StoppedOnly
+        );
+        assert_eq!(
+            classify_shutdown(Some(404), Some(500)),
+            ShutdownRequest::Refused,
+            "a failed fallback means nothing was stopped"
+        );
+        assert_eq!(
+            classify_shutdown(Some(409), None),
+            ShutdownRequest::Refused,
+            "busy is not a shutdown confirmation"
+        );
+        assert_eq!(classify_shutdown(None, None), ShutdownRequest::Refused);
+    }
+
     #[test]
     fn wait_helper_terminated_is_bounded_and_reacts_to_flag() {
         HELPER_TERMINATED.store(false, Ordering::Release);
