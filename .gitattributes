@@ -1,3 +1,10 @@
 # Keep line endings LF across checkout platforms so `gofmt -l` is stable.
 # text=auto lets Git auto-detect binary files and leave them untouched.
 * text=auto eol=lf
+
+# 更新签名资产按二进制处理：签名覆盖的是字节本身，任何行尾/编码归一
+# （checkout 转换、另存为）都会让客户端验签失败。
+*.sig -text
+# version.json 由发布流水线生成并签名，正常情况下不入库；这里挡住"误提交后
+# 被 checkout 改写行尾"的可能，避免签了 A 字节却发了 B 字节。
+version.json -text

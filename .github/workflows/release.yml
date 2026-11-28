@@ -34,6 +34,9 @@ concurrency:
 env:
   # keep in sync with the local env
   TAURI_CLI_VERSION: '2.11.4'
+  # 更新清单签名的 key id，与 internal/appupdate/update_public.pem 里的
+  # Key-Id 头保持一致；留空则用公钥指纹（客户端两种 id 都认）。
+  UPDATE_KEY_ID: '2026-11'
 
 jobs:
   build-and-release:
@@ -153,12 +156,43 @@ jobs:
           $relInfo | ConvertTo-Json -Depth 4 | Out-File -FilePath version.json -Encoding utf8
           Write-Host "version.json written for $version"
 
+      # 清单与安装包同源（同一镜像族），哈希不能单独作为完整性锚点。
+      # 签名覆盖的是**即将上传的那份字节**，任何行尾/编码改动都会让客户端验签失败。
+      - name: Build update signing tool
+        run: go build -o sign.exe ./cmd/freev6-update-sign
+
+      - name: Sign version.json
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.FREEV6_UPDATE_SIGNING_KEY }}
+        run: |
+          if (-not $env:SIGNING_KEY) {
+            throw '缺少 Secret FREEV6_UPDATE_SIGNING_KEY：拒绝产出未签名版本（新客户端会拒绝这类清单）。见 docs/release.md「签名密钥运维」。'
+          }
+          # 客户端按原始字节验签，也必须能按 UTF-8 直接解析：BOM 会让首字节不是 '{'。
+          $bytes = [IO.File]::ReadAllBytes('version.json')
+          if ($bytes.Length -lt 1 -or $bytes[0] -ne 0x7B) {
+            throw "version.json 首字节不是 '{'（可能写成了带 BOM 的 UTF-8）"
+          }
+
+          $keyPath = Join-Path $env:RUNNER_TEMP 'freev6-update-signing-key.pem'
+          try {
+            # 私钥只在本次 step 的临时文件里出现，finally 里无条件删除。
+            Set-Content -Path $keyPath -Value $env:SIGNING_KEY -NoNewline -Encoding utf8
+            .\sign.exe -in version.json -out version.json.sig -key-file $keyPath -key-id $env:UPDATE_KEY_ID
+            # 上传前先自检：公钥没进仓库时这一步就会失败，而不是等用户更新时才发现。
+            .\sign.exe -verify -in version.json -sig version.json.sig
+          } finally {
+            Remove-Item $keyPath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
             version.json
+            version.json.sig
 
       - name: Create draft release and upload the setup.exe
         uses: softprops/action-gh-release@v2
@@ -171,7 +205,20 @@ jobs:
           body_path: release-notes.md
           files: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
+            version.json.sig
             version.json
           fail_on_unmatched_files: true
           # Upload assets one by one to avoid GitHub dropping parallel upload connections.
           preserve_order: true
+
+      # 上传后从 release 拉回来再验一次：证明"发出去的字节"和"签过的字节"一致
+      # （本地文件被后续步骤改写、或上传通道做了任何转换，这里都会暴露）。
+      - name: Verify the uploaded assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          New-Item -ItemType Directory -Force -Path verify | Out-Null
+          gh release download $tag --pattern 'version.json' --pattern 'version.json.sig' --dir verify --clobber
+          .\sign.exe -verify -in verify/version.json -sig verify/version.json.sig

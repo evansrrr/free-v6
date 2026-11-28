@@ -36,24 +36,48 @@ jobs:
        (github.event.release.prerelease || contains(github.event.release.tag_name, '-')))
     runs-on: ubuntu-latest
     steps:
+      # 回验需要仓库里的验签工具（内置公钥在 internal/appupdate）。
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
       - name: Point beta-channel at the new prerelease
         env:
-          # gh 需要仓库上下文：这个 job 没有 checkout（不下载整个仓库），
-          # 所以显式给 GH_REPO，否则 gh 会去跑 git 并报 "not a git repository"。
+          # gh 需要仓库上下文：虽然现在有 checkout，仍显式给 GH_REPO，
+          # 避免工作目录变化后 gh 去猜。
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           set -euo pipefail
           mkdir -p out
-          gh release download "$TAG" --pattern version.json --dir out --clobber
+          gh release download "$TAG" --pattern version.json --pattern version.json.sig --dir out --clobber
+          if [ ! -f out/version.json.sig ]; then
+            echo "::error::$TAG 没有 version.json.sig，拒绝把未签名清单推到 beta 通道"
+            exit 1
+          fi
           if gh release view beta-channel >/dev/null 2>&1; then
+            # 先传签名、再传清单：中途失败时客户端看到的是"新签名 + 旧清单"，
+            # 验签失败 → 当作没有更新；反过来会变成"新清单 + 旧签名"，
+            # 虽然同样验不过，但排障时更难看出是同步中断。
+            gh release upload beta-channel out/version.json.sig --clobber
             gh release upload beta-channel out/version.json --clobber
           else
             gh release create beta-channel \
               --prerelease \
               --title "beta-channel" \
-              --notes "滚动指针：每次发布测试版都会替换这里的 version.json。不要删除。" \
-              out/version.json
+              --notes "滚动指针：每次发布测试版都会替换这里的 version.json 与 version.json.sig。不要删除。" \
+              out/version.json.sig out/version.json
           fi
           echo "beta-channel -> $TAG"
+
+      - name: Verify the mirrored pointer
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+          gh release download beta-channel --pattern version.json --pattern version.json.sig --dir verify --clobber
+          go run ./cmd/freev6-update-sign -verify -in verify/version.json -sig verify/version.json.sig
