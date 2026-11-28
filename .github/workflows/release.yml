@@ -113,7 +113,48 @@ jobs:
           go-winres make --in winres/winres.json --arch amd64 --product-version $ver4 --file-version $ver4
 
       - name: Build setup.exe (cargo tauri build)
-        run: cargo tauri build
+        shell: pwsh
+        run: |
+          # 缓存或上一次构建可能在 bundle 目录留下别的版本：清单只能对应一个
+          # 文件，猜错就会生成指向不存在资产的下载地址（v0.5.7-beta.1 实测
+          # 5 个镜像 + 直连全部 404）。构建前先清干净。
+          Remove-Item 'src-tauri/target/release/bundle/nsis/*-setup.exe' -Force -ErrorAction SilentlyContinue
+          cargo tauri build
+
+      # 产物名必须由 tag 唯一决定，而且清单、上传、attestation 都用这同一份路径。
+      #
+      # Tauri 的 NSIS 只用 tauri.conf 里的 base 版本命名，所以 beta 构建会产出
+      # FreeV6_0.5.7_x64-setup.exe —— 和正式版同名。人工在 release 页面改名之后，
+      # 签名清单里的 setup/download 仍指向旧名字（改名不可能改已签名的清单），
+      # 于是更新链路全部 404。这里统一改成 FreeV6_<完整版本>_x64-setup.exe：
+      # 正式版名字不变，测试版一定带 -beta.N 后缀，且与清单同源。
+      - name: Name the installer
+        id: package
+        shell: pwsh
+        run: |
+          $version = ('${{ github.ref_name }}' -replace '^v', '')
+          $base = ($version -split '-')[0]
+          $dir = 'src-tauri/target/release/bundle/nsis'
+          $found = @(Get-ChildItem "$dir/*-setup.exe" -ErrorAction SilentlyContinue)
+          if ($found.Count -ne 1) {
+            throw "expected exactly one *-setup.exe under $dir, found $($found.Count): $($found.Name -join ', ')"
+          }
+          $src = $found[0]
+          $stem = $src.BaseName
+          if ($stem -like "*_${base}_*") {
+            $stem = $stem -replace "_$([regex]::Escape($base))_", "_${version}_"
+          }
+          $want = "$stem.exe"
+          if (-not $want.Contains($version)) {
+            throw "installer name '$want' does not carry the full version '$version'; beta and stable builds would be indistinguishable"
+          }
+          if ($src.Name -ne $want) {
+            Move-Item -LiteralPath $src.FullName -Destination (Join-Path $src.DirectoryName $want) -Force
+          }
+          $path = Join-Path $src.DirectoryName $want
+          "setup=$($path -replace '\\', '/')" >> $env:GITHUB_OUTPUT
+          "name=$want" >> $env:GITHUB_OUTPUT
+          Write-Host "installer: $want"
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
@@ -131,9 +172,14 @@ jobs:
           if (-not $section) {
             throw "CHANGELOG.md has no '## [$version]' or '## [$base]' section - add one before tagging."
           }
-          $setup = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' | Select-Object -First 1
-          if (-not $setup) { throw 'no *-setup.exe found under target/release/bundle/nsis' }
-          $sha = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          # 与上传、attestation 用同一份路径（见 Name the installer）：清单里的
+          # 名字必须就是 release 里的资产名，否则下载 404。
+          $setupPath = '${{ steps.package.outputs.setup }}'
+          $setupName = '${{ steps.package.outputs.name }}'
+          if (-not (Test-Path $setupPath)) {
+            throw "installer $setupName is missing after the naming step"
+          }
+          $sha = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLower()
           $runUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
           $body = @(
             $section
@@ -149,8 +195,8 @@ jobs:
             version  = $version
             tag      = $tag
             notes    = $section
-            setup    = $setup.Name
-            download = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($setup.Name)"
+            setup    = $setupName
+            download = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$setupName"
             sha256   = $sha
           }
           $relInfo | ConvertTo-Json -Depth 4 | Out-File -FilePath version.json -Encoding utf8
@@ -190,7 +236,7 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
+            ${{ steps.package.outputs.setup }}
             version.json
             version.json.sig
 
@@ -204,7 +250,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: release-notes.md
           files: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
+            ${{ steps.package.outputs.setup }}
             version.json.sig
             version.json
           fail_on_unmatched_files: true

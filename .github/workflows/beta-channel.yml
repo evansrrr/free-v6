@@ -98,6 +98,24 @@ jobs:
           # 上传前先自检：源 release 的清单与签名必须配对，否则等于把坏指针推出去。
           go run ./cmd/freev6-update-sign -verify -in out/version.json -sig out/version.json.sig
 
+          # 清单声明的安装包必须真的在这个 release 里。v0.5.7-beta.1 就是人工
+          # 改名后清单仍指向旧名字：指针合法、验签通过，但 5 个镜像 + 直连全部
+          # 404，用户点到更新才发现。指针每 6 小时对账一次，这个闸比等用户报错早。
+          SETUP=$(python3 -c "import json;print(json.load(open('out/version.json'))['setup'])")
+          DOWNLOAD=$(python3 -c "import json;print(json.load(open('out/version.json'))['download'])")
+          case "$DOWNLOAD" in
+            */"$SETUP") ;;
+            *)
+              echo "::error::$TAG 的 download 地址与 setup 名不一致：$DOWNLOAD"
+              exit 1
+              ;;
+          esac
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq -- "$SETUP"; then
+            echo "::error::$TAG 里没有清单声明的安装包 $SETUP（资产名与清单不一致）"
+            exit 1
+          fi
+          echo "installer asset present: $SETUP"
+
           # 幂等：指针内容与目标完全一致就什么都不做（定时对账每 6 小时跑一次）。
           # 缺 .sig 的坏指针会让下载失败，从而走到下面的修复分支。
           if gh release download beta-channel --pattern version.json --pattern version.json.sig --dir cur --clobber 2>/dev/null \
