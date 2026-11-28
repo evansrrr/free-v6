@@ -467,7 +467,7 @@ go build ./... && go vet ./...
 go test ./internal/appupdate ./cmd/freev6-helper -run 'Verify|Sign|Update' -v
 go test ./...                 # 期望：全绿，墙钟 39s 量级不劣化
 node --test tests/*.test.js   # 期望：32/32（或新增用例后 N/N）
-go run ./scripts/boot-measure ./freev6-helper.exe /tmp/fv6-root   # 期望 p50 ≤44ms（基线 34ms）
+go run ./scripts/boot-measure -bin ./freev6-helper.exe -root /tmp/fv6-root   # 期望 p50 ≤44ms（基线 34ms）
 python scripts/check-format.py   # 期望：exit 0（E4 落地后）
 ```
 

@@ -90,7 +90,7 @@
 
 | 项 | 原因 | 谁来做 |
 |---|---|---|
-| T3–T6（签名发布、旧客户端升级、投毒演练、指针恢复） | 需要仓库公钥 + `FREEV6_UPDATE_SIGNING_KEY` | 用户完成 §4 的 GitHub 操作后，Agent 协助跑 beta 发布 |
+| T4–T6（旧客户端升级、投毒演练、指针恢复） | v0.5.7-beta.1 已于 2026-11-28 09:10Z 发布且签名/安装包 SHA 均核对通过（T3 完成），但 `beta-channel` 指针仍停在 0.5.6-beta.3 且无 `.sig`，客户端发现不了新版本 | 手动跑一次 `beta channel` 工作流；已加定时对账防复发 |
 | 内核清单签名（A2） | `f6-core` 仓库发布流程需单独改 | 后续批次 |
 | `-race` | 本机无 cgo | CI `go-race` job |
 | 前端首屏 FCP/DCL | 需要跑壳 + Chrome Performance | 批次 4 |

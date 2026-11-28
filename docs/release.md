@@ -5,10 +5,10 @@
 
 ## 发版前
 
-- [ ] `git tag` 用完整版本：正式版 `v0.5.7`，测试版 `v0.5.6-beta.2`
+- [ ] `git tag` 用完整版本：正式版 `v0.5.7`，测试版 `v0.5.7-beta.1`
 - [ ] `src-tauri/tauri.conf.json` → `version` 写**基础版本**（`0.5.6`，不带 `-beta.N`）
 - [ ] `src-tauri/Cargo.toml` → `version` 同上
-- [ ] `web/index.html` → `#versionValue` 写**完整版本**（`FreeV6 v0.5.6-beta.2`）
+- [ ] `web/index.html` → `#versionValue` 写**完整版本**（`FreeV6 v0.5.7-beta.1`）
 - [ ] `CHANGELOG.md` 有 `## [完整版本]` 小节（工作流按 tag 提取，缺失即构建失败）
 - [ ] 内核兼容区间同步：`f6-core/compat.json` 的 `minApp` / `maxApp` 覆盖本版客户端
 - [ ] 本地跑一遍 CI 的两条校验：`go test ./...`、`cargo check --locked`
@@ -23,13 +23,18 @@ beta 通道，不带就只认正式版。这段字符串写错，正式版会永
 ## 发布流程
 
 1. 提交并推送上述改动
-2. 打 tag 并推送：`git tag v0.5.6-beta.2 && git push origin v0.5.6-beta.2`
+2. 打 tag 并推送：`git tag v0.5.7-beta.1 && git push origin v0.5.7-beta.1`
    - tag 里带 `-` 的一律标为 Pre-release（GitHub 的 `releases/latest` 会跳过它，
      正式版用户因此不会被推上测试版）
 3. 工作流产出草稿，手动点“发布”
-4. 发布测试版后，`beta channel` 工作流会把它的 `version.json` 复制到滚动指针
-   release `beta-channel`，测试版客户端从那里发现新测试版
-   - 若这一步失败或漏跑：`gh workflow run beta-channel.yml -f tag=v0.5.6-beta.2`
+4. 发布测试版后，`beta channel` 工作流会把 `version.json` 与 `version.json.sig`
+   **一起**复制到滚动指针 release `beta-channel`，测试版客户端从那里发现新测试版
+   - 该工作流另有**每 6 小时的定时对账**：`release: published` 事件有可能不触发
+     （用 `GITHUB_TOKEN` 发布/改状态的 release 会被 GitHub 抑制事件，2026-11-28
+     实际踩到过一次），定时任务会把指针推回最新预发布版本，与当前内容一致时不写入
+   - 需要立刻同步时手动跑：`gh workflow run beta-channel.yml -f tag=v0.5.7-beta.1`
+   - 同步后指针上应同时有 `version.json` 与 `version.json.sig`；只有前者说明
+     是旧状态，客户端会按"缺签名"失败关闭
 
 ## 签名密钥运维（更新信任链）
 
