@@ -222,6 +222,32 @@ func (h *helper) loadNoticeCache(now time.Time) (noticeCache, bool) {
 	return cache, true
 }
 
+// loadNoticeGate 是"备用配置开关"的门禁读：只看最后一次成功拉取的结论，
+// 不看缓存年龄。
+//
+// 与 loadNoticeCache 分开是刻意的：7 天过期是**展示**语义（过时的通知不该
+// 继续显示），不是**授权**语义。合成一个的话，离线或镜像全挂超过 7 天，已经
+// 导入过备用配置的用户会突然无法启动免流——那不是维护者关开关，是客户端把
+// "我没拿到新公告"当成了"公告说不行"。
+//
+// 代价：维护者关闭开关后，长期离线的客户端要等下次联网才生效。这个开关是
+// 资源保护，不是急停，可接受。
+func (h *helper) loadNoticeGate() (noticeCache, bool) {
+	var cache noticeCache
+	data, err := os.ReadFile(h.noticeCachePath())
+	if err != nil {
+		return cache, false
+	}
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return cache, false
+	}
+	// FetchedAt 为零说明这份缓存不是"某次成功拉取"写的，不能作为结论。
+	if cache.FetchedAt.IsZero() {
+		return cache, false
+	}
+	return cache, true
+}
+
 // filterLiveNotices 丢掉已过期或时间戳坏掉的条目（缓存同样适用）。
 func filterLiveNotices(items []noticeItem, now time.Time) []noticeItem {
 	live := make([]noticeItem, 0, len(items))

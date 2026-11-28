@@ -136,11 +136,18 @@ func (h *helper) chainImport(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	// Parse passed → persist content, then flip the settings fields.
-	if err := os.MkdirAll(filepath.Dir(h.chainPath()), 0o700); err != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	//
+	// 互斥检查、写文件、翻开关必须在同一把锁里：两个并发导入各自读到"对方没
+	// 开"，最后会两个都开，启动时才以 400 暴露——用户看到的是"导入一次就打
+	// 不开了"。锁序见 helper.configMu 的注释。
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+	if stored, loadErr := h.loadSettings(); loadErr == nil && stored.CloudEnabled {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": errOutletConflict})
 		return
 	}
-	if err := os.WriteFile(h.chainPath(), content, 0o600); err != nil {
+	// 原子写：崩溃留下的半个 YAML 会让下次启动报"解析失败"，而这里完全能避免。
+	if err := writeFileAtomic(h.chainPath(), content, 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

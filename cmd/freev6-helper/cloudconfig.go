@@ -39,6 +39,10 @@ const (
 // 决定是否下发（详见 docs/cloud-profile.md）。客户端只负责"问"，问到就
 // 存，问不到就明确告诉用户"请连校园网"。
 
+// 链式代理与备用配置改的是同一个出口，同时启用会变成"到底走的哪条"不可
+// 解释。两个导入入口共用一条文案，避免两边说法不一致。
+const errOutletConflict = "链式代理与备用配置只能启用一个，请先关闭另一个"
+
 func (h *helper) cloudProfilePath() string {
 	return filepath.Join(h.root, "config", "cloud-profile.yaml")
 }
@@ -46,13 +50,14 @@ func (h *helper) cloudProfilePath() string {
 // cloudProfileUnlocked 读取「公告里维护者开关」的最近一次结果。
 //
 // 语义与 notice.json 的 cloudProfile 一致：显式 true 才开放；公告拉不到、
-// 没写这个字段、缓存超过 7 天，一律锁定（fail-closed）。
+// 没写这个字段、**从没成功拉过**，一律锁定（fail-closed）。缓存超过 7 天不再
+// 算锁定理由——那只是公告过期，不是开关关闭（见 loadNoticeGate）。
 //
 // 读缓存而不是当场联网：启动免流不该再多一次网络往返，且离线时缓存仍能
 // 反映维护者最近一次的决定。公告本身由前端启动时的 /api/v1/notice 拉取
 // 并写入同一个缓存文件。
-func (h *helper) cloudProfileUnlocked(now time.Time) bool {
-	cache, ok := h.loadNoticeCache(now)
+func (h *helper) cloudProfileUnlocked() bool {
+	cache, ok := h.loadNoticeGate()
 	if !ok {
 		return false
 	}
@@ -89,7 +94,7 @@ func (h *helper) cloudStatus(writer http.ResponseWriter) {
 		"ignored":    []string{},
 		"portalHost": current.PortalHost,
 		// 公告开关：前端据此禁用「获取」与开关，而不是点下去才报错。
-		"locked": !h.cloudProfileUnlocked(time.Now()),
+		"locked": !h.cloudProfileUnlocked(),
 	}
 	// 只回显打码后的入口：完整地址一旦出现在界面上，截图/日志就会把它
 	// 带出去，白白抵消派生的意义。
@@ -125,7 +130,7 @@ func (h *helper) cloudStatus(writer http.ResponseWriter) {
 func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) {
 	// 总开关：维护者在公告里关闭 / 公告没拿到 → 连拉取都不允许，
 	// 免得学生反复点「获取」只看到网络错误。
-	if !h.cloudProfileUnlocked(time.Now()) {
+	if !h.cloudProfileUnlocked() {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "备用配置当前未开放（维护者已在公告中关闭或未获取到公告）", "code": "cloud-locked"})
 		return
 	}
@@ -217,15 +222,17 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": parseErr.Error()})
 		return
 	}
-	if stored.ChainEnabled {
-		writeJSON(writer, http.StatusConflict, map[string]string{"error": "链式代理已启用，两种模式改的是同一个出口，请先关闭链式代理"})
+	// 互斥检查、写文件、翻开关收进 configMu：`stored` 是在拉取之前读的，可能
+	// 已经过期（拉取最长 20s），并发链式导入会在这段时间里把 ChainEnabled 打开。
+	// 锁序见 helper.configMu 的注释。
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+	if latest, rereadErr := h.loadSettings(); rereadErr == nil && latest.ChainEnabled {
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": errOutletConflict})
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(h.cloudProfilePath()), 0o700); err != nil {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := os.WriteFile(h.cloudProfilePath(), content, 0o600); err != nil {
+	// 原子写：崩溃留下的半个 YAML 会让下次启动报"解析失败"。
+	if err := writeFileAtomic(h.cloudProfilePath(), content, 0o600); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

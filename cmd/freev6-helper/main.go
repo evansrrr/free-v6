@@ -68,6 +68,14 @@ type helper struct {
 	// start, reset). Reads stay lock-free: the atomic write guarantees a reader
 	// never observes a partial file.
 	settingsMu sync.Mutex
+	// configMu serializes "write a content file, then flip the setting that
+	// points at it" transactions (chain proxy / cloud profile), including the
+	// check that the other mode is off.
+	//
+	// 锁序固定为 configMu → settingsMu，反向（持 settingsMu 再取 configMu）
+	// 会死锁：updateSettings 在持 settingsMu 时调 fn，而 fn 里若取 configMu，
+	// 另一条导入路径正持 configMu 等 settingsMu。新增代码不得破坏这个方向。
+	configMu sync.Mutex
 	// lastStop 是最近一次停止免流完成的时刻（UnixNano）。IPv6 前置检查用它
 	// 判断要不要重试：TUN 拆除后的几秒里出站必然失败，其余时候一轮定论。
 	lastStop atomic.Int64
@@ -476,22 +484,27 @@ func (h *helper) resetSettings(writer http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	// 清除已导入的链式代理与备用配置（文件不存在不算错误）
-	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if err := os.Remove(h.cloudProfilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	// 清除已导入的链式代理与备用配置（文件不存在不算错误）。
+	//
+	// 顺序：先把设置写成默认值，再删内容文件。
+	//
+	// 写设置不能走 updateSettings —— 它会拒绝覆盖"无法解析"的 settings.json，
+	// 而 reset 恰恰是那条错误信息让用户点的按钮（"请在设置中重置"）。走 RMW
+	// 会让损坏文件永远修不好，恢复入口变成闭环。先写设置还让"删文件失败"变成
+	// 无害状态：开关已经关了，残留文件不再被任何人引用。
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
 	defaults := defaultSettings()
-	if err := h.updateSettings(func(s *settings) error {
-		*s = defaults
-		return nil
-	}); err != nil {
+	if err := h.overwriteSettings(defaults); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	for _, path := range []string{h.chainPath(), h.cloudProfilePath()} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// 已经生效：文件在不在都不影响启动（开关已关）。返回 500 会让
+			// 用户以为没重置，所以只记录。
+			fmt.Fprintf(os.Stderr, "reset: remove %s: %v\n", path, err)
+		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "settings": defaults})
 }
@@ -663,7 +676,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// 公告总开关：维护者关掉备用配置后，即使本地还留着上次的节点也不许用。
 	// 放在端口/权限/网络快照之前——纯读校验，失败不产生任何副作用。
-	if storedForChain.CloudEnabled && !h.cloudProfileUnlocked(time.Now()) {
+	if storedForChain.CloudEnabled && !h.cloudProfileUnlocked() {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置当前未开放（公告中已关闭或未获取到公告），请在设置中改用其他出口", "code": "cloud-locked"})
 		return
 	}
@@ -1211,6 +1224,16 @@ func (h *helper) saveSettings(current settings) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+// overwriteSettings 无条件写入一份设置，不读旧文件。
+//
+// 只给 reset 用：updateSettings 为了不掩盖损坏会拒绝覆盖坏文件，而 reset 的
+// 职责恰恰是把那份坏文件换掉。常规保存必须继续走 updateSettings。
+func (h *helper) overwriteSettings(value settings) error {
+	h.settingsMu.Lock()
+	defer h.settingsMu.Unlock()
+	return h.saveSettings(value)
 }
 
 // updateSettings runs fn under the settings write lock: it re-reads the stored
