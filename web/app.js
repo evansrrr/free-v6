@@ -1503,8 +1503,8 @@ function drawChart() {
     const y = chartH - (upVals[i] / maxVal) * (chartH - 8) - 2;
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
-  ctx.strokeStyle = upColor;
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = toRGBA(upColor, 0.75); // 降透明度：虚线是次要序列，不该比实线抢眼
+  ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   ctx.setLineDash([4, 3]);
   ctx.stroke();
