@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yourname/freev6/internal/appupdate"
 	"github.com/yourname/freev6/internal/stallhttp"
 )
 
@@ -94,6 +95,16 @@ func hostAllowed(host string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// validSHA256 报告字符串是否是 64 位十六进制摘要（大小写均可）。
+func validSHA256(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(trimmed)
+	return err == nil
 }
 
 // progressWriter feeds the atomic counter so /update/progress can report
@@ -265,6 +276,16 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
+	// 入参本身能判的错误同步返回。旧实现先回 200、再在后台 goroutine 里失败，
+	// 前端只能靠轮询 progress 发现——用户先看到进度条，再看到红字。
+	if !validSHA256(input.SHA256) {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "缺少有效的 sha256，已拒绝下载"})
+		return
+	}
+	if err := validateUpdateURL(input.URL, updateAllowedHosts); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "下载地址不在允许范围: " + err.Error()})
+		return
+	}
 	dest := updateSetupDest()
 
 	updateRun.mu.Lock()
@@ -353,6 +374,29 @@ func (h *helper) updateProgress(writer http.ResponseWriter, request *http.Reques
 
 const updateRepoSlug = "evansrrr/free-v6"
 
+// 更新检查的耗时预算。
+//
+// 旧实现按"候选串行 + 每条 8s"跑：6 条线路全挂时检查更新要等 48s，beta 客户端
+// 两通道再翻倍到 96s，期间 UI 的更新徽标一直不出现。改成候选并发后，最坏等待
+// 只由这两个预算决定，与线路数量无关；变量便于测试压缩时长。
+var (
+	updateCheckBudget  = 15 * time.Second // "检查更新"单通道总预算
+	updateSourceBudget = 10 * time.Second // 下载前源校验（冷缓存）总预算
+)
+
+const (
+	// updateManifestFetchTimeout 是单个候选请求（清单或签名）的硬上限。
+	updateManifestFetchTimeout = 8 * time.Second
+	// updateManifestMaxBytes 挡住恶意镜像用超大响应拖死解析。
+	updateManifestMaxBytes = 1 << 20
+	// updateSigMaxBytes 是签名信封的上限：v1.<id>.<88 base64> 量级，4 KiB 足够。
+	updateSigMaxBytes = 4 << 10
+)
+
+// verifyManifestSignature 是验签入口，变量便于测试注入临时密钥。
+// 生产路径永远是 appupdate.Verify（内置公钥 + 失败关闭）。
+var verifyManifestSignature = appupdate.Verify
+
 // updateLatestURLs is a var so tests can point it at a local server.
 // 缓存穿透参数拼在每条 URL 上；镜像顺序与安装包下载一致。
 var updateLatestURLs = func() []string {
@@ -410,49 +454,143 @@ func parseVersionJSON(data []byte) (*latestVersionInfo, error) {
 	return &info, nil
 }
 
-// fetchVersionJSON GETs rawURL with the shared scheme/host guards, capped at
-// 1 MiB (version.json is tiny; the cap keeps a hostile mirror honest).
-func fetchVersionJSON(client *http.Client, rawURL string, allowed []string) ([]byte, error) {
+// fetchBody 是清单与签名共用的取字节入口：先过 scheme/host 白名单，
+// 再带着 ctx 发请求，并把响应体限制在 max 字节以内。
+func fetchBody(ctx context.Context, client *http.Client, rawURL string, allowed []string, max int64) ([]byte, error) {
 	if err := validateUpdateURL(rawURL, allowed); err != nil {
 		return nil, err
 	}
-	resp, err := client.Get(rawURL)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "freev6")
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %d", response.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return io.ReadAll(io.LimitReader(response.Body, max))
 }
 
-// fetchLatestManifest walks one mirror chain and returns the first manifest it
-// can parse. nil + error means "this channel is unreachable"; the caller
-// decides what that means for the other channel.
-func fetchLatestManifest(client *http.Client, urls []string) (*latestVersionInfo, error) {
-	var lastErr error
+// manifestAndSignatureURLs 从同一条候选地址派生出"清单 + 签名"这一对 URL。
+//
+// 成对是硬要求：清单来自镜像 A、签名来自镜像 B 时必须失败，否则被攻破的
+// 镜像可以拿官方签名去背书自己的伪造清单。两者共享同一个缓存穿透参数。
+func manifestAndSignatureURLs(rawURL string) (manifestURL, signatureURL string, err error) {
+	parsed, parseErr := url.Parse(rawURL)
+	if parseErr != nil || parsed.Host == "" {
+		return "", "", fmt.Errorf("invalid update manifest url")
+	}
+	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	manifest := *parsed
+	query := manifest.Query()
+	query.Set("ts", stamp)
+	manifest.RawQuery = query.Encode()
+
+	signature := *parsed
+	signature.Path += ".sig"
+	signedQuery := signature.Query()
+	signedQuery.Set("ts", stamp)
+	signature.RawQuery = signedQuery.Encode()
+
+	return manifest.String(), signature.String(), nil
+}
+
+// fetchOneVerifiedManifest 是单个候选的完整判定：成对取清单与签名（并发），
+// 先验签、再解析。任何一步失败都算这个候选不可用。
+func fetchOneVerifiedManifest(ctx context.Context, client *http.Client, rawURL string) (*latestVersionInfo, error) {
+	manifestURL, signatureURL, err := manifestAndSignatureURLs(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		body, envelope []byte
+		bodyErr        error
+		signatureErr   error
+		wg             sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		body, bodyErr = fetchBody(ctx, client, manifestURL, updateAllowedHosts, updateManifestMaxBytes)
+	}()
+	go func() {
+		defer wg.Done()
+		envelope, signatureErr = fetchBody(ctx, client, signatureURL, updateAllowedHosts, updateSigMaxBytes)
+	}()
+	wg.Wait()
+
+	if bodyErr != nil {
+		return nil, bodyErr
+	}
+	if signatureErr != nil {
+		// 缺签名不是"网络问题"而是"这条候选不可信"，但仍然让其他候选继续。
+		return nil, fmt.Errorf("missing signature: %w", signatureErr)
+	}
+	if err := verifyManifestSignature(body, envelope); err != nil {
+		return nil, err
+	}
+	return parseVersionJSON(body)
+}
+
+// fetchVerifiedManifest 并发尝试所有候选，返回首个"验签通过且可解析"的清单。
+//
+// 并发是这次的性能修复本体：串行版最坏 = 候选数 × 单请求超时（6 × 8s = 48s，
+// beta 两通道 96s），单条线路挂死就会拖住整次检查。并发后最坏等待收敛到
+// budget，与候选数量无关；首个成功立即取消其余请求。
+func fetchVerifiedManifest(client *http.Client, urls []string, budget time.Duration) (*latestVersionInfo, error) {
+	if len(urls) == 0 {
+		return nil, fmt.Errorf("no update source configured")
+	}
+	if budget <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	type candidateResult struct {
+		info *latestVersionInfo
+		err  error
+	}
+	results := make(chan candidateResult, len(urls))
 	for _, rawURL := range urls {
-		// Cache-bust so the mirror's edge cache can't pin an old "latest".
-		u := rawURL + "?ts=" + strconv.FormatInt(time.Now().UnixNano(), 10)
-		body, err := fetchVersionJSON(client, u, updateAllowedHosts)
-		if err != nil {
-			lastErr = err
-			continue
+		go func(u string) {
+			info, err := fetchOneVerifiedManifest(ctx, client, u)
+			results <- candidateResult{info: info, err: err}
+		}(rawURL)
+	}
+
+	var lastErr error
+	for range urls {
+		select {
+		case <-ctx.Done():
+			if lastErr == nil {
+				lastErr = ctx.Err()
+			}
+			return nil, lastErr
+		case result := <-results:
+			if result.err == nil {
+				cancel() // 其余候选的请求随 ctx 一起放弃
+				return result.info, nil
+			}
+			lastErr = result.err
 		}
-		info, err := parseVersionJSON(body)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return info, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no candidate returned a usable manifest")
 	}
 	return nil, lastErr
 }
 
-// updateManifestCache memoizes the official manifests for a short window so
-// the download path can re-verify a caller-supplied SHA without hitting
-// GitHub on every click (the frontend fetches them moments earlier).
+// updateManifestCache 缓存**验签通过**的官方清单，供下载前的源校验复用。
+//
+// 只有 appupdate.Verify 通过的清单才会写进来，所以 at 本身就是"验证时间"；
+// 未验证的内容永远不会进入缓存（这就是为什么不需要额外的 verified 标记）。
 var updateManifestCache = struct {
 	sync.Mutex
 	stable *latestVersionInfo
@@ -461,6 +599,43 @@ var updateManifestCache = struct {
 }{}
 
 const updateManifestCacheTTL = 60 * time.Second
+
+func cachedManifests() (stable, beta *latestVersionInfo, ok bool) {
+	updateManifestCache.Lock()
+	defer updateManifestCache.Unlock()
+	if updateManifestCache.at.IsZero() || time.Since(updateManifestCache.at) > updateManifestCacheTTL {
+		return nil, nil, false
+	}
+	stable, beta = updateManifestCache.stable, updateManifestCache.beta
+	return stable, beta, stable != nil || beta != nil
+}
+
+// storeManifests 只接受验签通过的结果；nil 表示该通道这次不可用，保留旧值。
+func storeManifests(stable, beta *latestVersionInfo) {
+	if stable == nil && beta == nil {
+		return
+	}
+	updateManifestCache.Lock()
+	defer updateManifestCache.Unlock()
+	if stable != nil {
+		updateManifestCache.stable = stable
+	}
+	if beta != nil {
+		updateManifestCache.beta = beta
+	}
+	updateManifestCache.at = time.Now()
+}
+
+// resetManifestCache 只给测试用（模拟 helper 刚启动、缓存为空）。
+func resetManifestCache() {
+	updateManifestCache.Lock()
+	defer updateManifestCache.Unlock()
+	updateManifestCache.stable, updateManifestCache.beta, updateManifestCache.at = nil, nil, time.Time{}
+}
+
+func manifestHasDigest(info *latestVersionInfo, sum string) bool {
+	return info != nil && strings.EqualFold(info.SHA256, sum)
+}
 
 // verifyUpdateSource requires the caller's SHA256 to match the official
 // stable or beta manifest. The frontend may rewrite the download URL through a
@@ -473,21 +648,21 @@ var verifyUpdateSource = func(rawURL, sha string) error {
 	if len(sum) != 64 {
 		return fmt.Errorf("更新源校验失败：sha256 无效")
 	}
-	updateManifestCache.Lock()
-	fresh := time.Since(updateManifestCache.at) <= updateManifestCacheTTL
-	stable, beta := updateManifestCache.stable, updateManifestCache.beta
-	updateManifestCache.Unlock()
-
-	if !fresh || (stable == nil && beta == nil) {
-		client := &http.Client{Timeout: 8 * time.Second}
-		stable, _ = fetchLatestManifest(client, updateLatestURLs())
-		beta, _ = fetchLatestManifest(client, updateBetaLatestURLs())
-		updateManifestCache.Lock()
-		updateManifestCache.stable, updateManifestCache.beta, updateManifestCache.at = stable, beta, time.Now()
-		updateManifestCache.Unlock()
+	stable, beta, cached := cachedManifests()
+	if !cached {
+		// 冷缓存（helper 刚重启，或用户从旧页面直接点更新）：只给一份总预算。
+		// stable 命中就不再请求 beta —— 旧实现无条件串行拉两路，beta 客户端
+		// 冷缓存时最坏要等 96s 才开始下载。
+		deadline := time.Now().Add(updateSourceBudget)
+		client := &http.Client{Timeout: updateManifestFetchTimeout}
+		stable, _ = fetchVerifiedManifest(client, updateLatestURLs(), time.Until(deadline))
+		if !manifestHasDigest(stable, sum) {
+			beta, _ = fetchVerifiedManifest(client, updateBetaLatestURLs(), time.Until(deadline))
+		}
+		storeManifests(stable, beta)
 	}
 	for _, info := range []*latestVersionInfo{stable, beta} {
-		if info != nil && strings.EqualFold(info.SHA256, sum) {
+		if manifestHasDigest(info, sum) {
 			return nil
 		}
 	}
@@ -504,15 +679,44 @@ func (h *helper) updateLatest(writer http.ResponseWriter, request *http.Request)
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
-	info, stableErr := fetchLatestManifest(client, updateLatestURLs())
+	client := &http.Client{Timeout: updateManifestFetchTimeout}
 	// 测试版客户端要多查一路：stable 通道永远看不到预发布，beta-channel 是唯一
 	// 入口。两路都返回，由前端按"自己是哪个通道"挑（Go 侧不做版本比较）。
-	var betaInfo *latestVersionInfo
-	var betaErr error
-	if request.URL.Query().Get("channel") == "beta" {
-		betaInfo, betaErr = fetchLatestManifest(client, updateBetaLatestURLs())
+	// 两路**并发**：串行会让 beta 客户端的最坏等待翻倍。
+	wantBeta := request.URL.Query().Get("channel") == "beta"
+	type channelResult struct {
+		beta bool
+		info *latestVersionInfo
+		err  error
 	}
+	channels := 1
+	if wantBeta {
+		channels = 2
+	}
+	results := make(chan channelResult, channels)
+	go func() {
+		info, err := fetchVerifiedManifest(client, updateLatestURLs(), updateCheckBudget)
+		results <- channelResult{info: info, err: err}
+	}()
+	if wantBeta {
+		go func() {
+			info, err := fetchVerifiedManifest(client, updateBetaLatestURLs(), updateCheckBudget)
+			results <- channelResult{beta: true, info: info, err: err}
+		}()
+	}
+	var info, betaInfo *latestVersionInfo
+	var stableErr, betaErr error
+	for i := 0; i < channels; i++ {
+		result := <-results
+		if result.beta {
+			betaInfo, betaErr = result.info, result.err
+		} else {
+			info, stableErr = result.info, result.err
+		}
+	}
+	// 验签通过的清单缓存起来：用户随后点"立即更新"时，源校验直接命中缓存，
+	// 不再重拉两路（旧实现每次都重拉，冷缓存最坏 96s 才开始下载）。
+	storeManifests(info, betaInfo)
 	if info == nil && betaInfo == nil {
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"ok": true, "update": false, "error": errorText(stableErr),

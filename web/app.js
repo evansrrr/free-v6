@@ -1291,8 +1291,15 @@ async function startUpdate() {
     updateFailed('helper 未连接，无法更新');
     return;
   }
+  // 校验值和签名是"这个安装包就是官方发布的那份"的唯一凭据：缺了就不下载。
+  // helper 侧同样会拒绝（PUT /update/download 同步 400），这里先拦住，避免
+  // 用户先看到进度条、再看到红字。
+  if (!info.sha) {
+    updateFailed('更新清单缺少 sha256 校验值，已停止下载。请稍后重新检查更新。');
+    return;
+  }
   setUpdatePhase('downloading');
-  setUpdateStatus(info.sha ? '正在下载安装包…' : '正在下载安装包…（未附 SHA256，跳过校验）');
+  setUpdateStatus('正在下载安装包…');
   let prog;
   try {
     const ack = await api('/update/download', {

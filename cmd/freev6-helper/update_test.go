@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,8 +14,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yourname/freev6/internal/appupdate"
 )
 
 func TestHostAllowed(t *testing.T) {
@@ -210,40 +216,43 @@ func TestParseVersionJSON(t *testing.T) {
 	}
 }
 
-func TestFetchVersionJSON(t *testing.T) {
+func TestFetchBody(t *testing.T) {
 	payload := []byte(`{"version":"9.9.9","download":"https://x/y"}`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
 
-	got, err := fetchVersionJSON(server.Client(), server.URL+"/version.json", []string{"127.0.0.1"})
+	ctx := context.Background()
+	got, err := fetchBody(ctx, server.Client(), server.URL+"/version.json", []string{"127.0.0.1"}, updateManifestMaxBytes)
 	if err != nil {
-		t.Fatalf("fetchVersionJSON: %v", err)
+		t.Fatalf("fetchBody: %v", err)
 	}
 	if string(got) != string(payload) {
 		t.Fatalf("body mismatch: %q", got)
 	}
 	// host guard rejects before any network I/O
-	if _, err := fetchVersionJSON(server.Client(), "https://evil.example/version.json", []string{"github.com"}); err == nil {
+	if _, err := fetchBody(ctx, server.Client(), "https://evil.example/version.json", []string{"github.com"}, updateManifestMaxBytes); err == nil {
 		t.Fatal("expected host rejection")
+	}
+	// 上限由读取端裁掉，不是错误：签名文件用 4 KiB 的上限走同一条路径。
+	truncated, err := fetchBody(ctx, server.Client(), server.URL+"/version.json", []string{"127.0.0.1"}, 4)
+	if err != nil || len(truncated) != 4 {
+		t.Fatalf("max bytes must truncate: len=%d err=%v", len(truncated), err)
 	}
 }
 
 // Handler flow: proxy→direct URL list is overridable; success maps the JSON,
 // an unreachable list degrades to {update:false} instead of an error.
 func TestUpdateLatestHandlerFlow(t *testing.T) {
+	allowLoopback(t)
+	sign := installTestSigner(t)
+	resetCacheForTest(t)
 	orig := updateLatestURLs
 	t.Cleanup(func() { updateLatestURLs = orig })
-	origHosts := append([]string(nil), updateAllowedHosts...)
-	updateAllowedHosts = append(updateAllowedHosts, "127.0.0.1")
-	t.Cleanup(func() { updateAllowedHosts = origHosts })
 
 	payload := []byte(`{"version":"0.3.0","tag":"v0.3.0","notes":"## [0.3.0]","setup":"FreeV6_0.3.0_x64-setup.exe","download":"https://github.com/o/r/releases/download/v0.3.0/FreeV6_0.3.0_x64-setup.exe","sha256":"` + strings.Repeat("cd", 32) + `"}`)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(payload)
-	}))
-	defer server.Close()
+	server, _ := signedManifestServer(t, payload, sign)
 	updateLatestURLs = func() []string { return []string{server.URL + "/version.json"} }
 
 	h := &helper{root: t.TempDir()}
@@ -265,6 +274,7 @@ func TestUpdateLatestHandlerFlow(t *testing.T) {
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	deadURL := dead.URL
 	dead.Close()
+	resetManifestCache()
 	updateLatestURLs = func() []string { return []string{deadURL + "/version.json"} }
 	rec2 := httptest.NewRecorder()
 	h.updateLatest(rec2, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
@@ -409,28 +419,81 @@ func TestUpdateLatestURLsDefaultIncludesMirrors(t *testing.T) {
 	}
 }
 
-func TestVerifyUpdateSource(t *testing.T) {
-	payload := []byte("setup")
-	sum := sha256Hex(payload)
-	manifest := fmt.Sprintf(`{"version":"0.5.7","download":"https://github.com/evansrrr/free-v6/releases/download/v0.5.7/setup.exe","sha256":"%s"}`, sum)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(manifest))
-	}))
-	defer srv.Close()
+// ── 签名相关的测试夹具 ────────────────────────────────────────────
 
-	originalHosts := append([]string(nil), updateAllowedHosts...)
+// allowLoopback 把 127.0.0.1 临时加进更新白名单（生产只有 GitHub 与镜像族）。
+func allowLoopback(t *testing.T) {
+	t.Helper()
+	original := append([]string(nil), updateAllowedHosts...)
 	updateAllowedHosts = append(updateAllowedHosts, "127.0.0.1")
-	t.Cleanup(func() { updateAllowedHosts = originalHosts })
+	t.Cleanup(func() { updateAllowedHosts = original })
+}
+
+// installTestSigner 生成一次性密钥并替换验签入口，返回"对字节签名"的函数。
+// 用它签出的信封只被本次测试接受：客户端内置公钥仍然为空（或生产密钥）。
+func installTestSigner(t *testing.T) func(body []byte) []byte {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keySet := map[string]ed25519.PublicKey{"test": pub}
+	original := verifyManifestSignature
+	verifyManifestSignature = func(manifest, envelope []byte) error {
+		return appupdate.VerifyWith(keySet, manifest, envelope)
+	}
+	t.Cleanup(func() { verifyManifestSignature = original })
+	return func(body []byte) []byte {
+		envelope, err := appupdate.Sign(body, priv, "test")
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return envelope
+	}
+}
+
+// signedManifestServer 同时提供 version.json 与 version.json.sig，
+// 返回服务与"命中次数"计数器（用于断言缓存命中后不再发请求）。
+func signedManifestServer(t *testing.T, body []byte, sign func([]byte) []byte) (*httptest.Server, *int32) {
+	t.Helper()
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			_, _ = w.Write(sign(body))
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+	return server, &hits
+}
+
+func resetCacheForTest(t *testing.T) {
+	t.Helper()
+	resetManifestCache()
+	t.Cleanup(resetManifestCache)
+}
+
+func manifestBody(sum string) []byte {
+	return []byte(fmt.Sprintf(`{"version":"0.5.7","tag":"v0.5.7","setup":"FreeV6_0.5.7_x64-setup.exe","download":"https://github.com/evansrrr/free-v6/releases/download/v0.5.7/FreeV6_0.5.7_x64-setup.exe","sha256":"%s"}`, sum))
+}
+
+// ── 源校验 ────────────────────────────────────────────────────────
+
+func TestVerifyUpdateSource(t *testing.T) {
+	resetCacheForTest(t)
+	allowLoopback(t)
+	sign := installTestSigner(t)
+
+	sum := strings.Repeat("ab", 32)
+	server, _ := signedManifestServer(t, manifestBody(sum), sign)
 
 	originalStable := updateLatestURLs
 	originalBeta := updateBetaLatestURLs
-	updateLatestURLs = func() []string { return []string{srv.URL + "/stable.json"} }
-	updateBetaLatestURLs = func() []string { return []string{srv.URL + "/beta.json"} }
+	updateLatestURLs = func() []string { return []string{server.URL + "/stable/version.json"} }
+	updateBetaLatestURLs = func() []string { return []string{server.URL + "/beta/version.json"} }
 	t.Cleanup(func() { updateLatestURLs = originalStable; updateBetaLatestURLs = originalBeta })
-
-	updateManifestCache.Lock()
-	updateManifestCache.stable, updateManifestCache.beta, updateManifestCache.at = nil, nil, time.Time{}
-	updateManifestCache.Unlock()
 
 	if err := verifyUpdateSource("https://github.com/x/setup.exe", sum); err != nil {
 		t.Fatalf("matching sha must verify, got %v", err)
@@ -440,5 +503,269 @@ func TestVerifyUpdateSource(t *testing.T) {
 	}
 	if err := verifyUpdateSource("https://github.com/x/setup.exe", "short"); err == nil {
 		t.Fatal("malformed sha must be rejected")
+	}
+}
+
+// 冷缓存时给的是**一份**总预算：两路都挂死也不能等成两份预算之和。
+func TestVerifyUpdateSourceColdCacheBudget(t *testing.T) {
+	resetCacheForTest(t)
+	allowLoopback(t)
+
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(hang.Close)
+
+	originalStable, originalBeta := updateLatestURLs, updateBetaLatestURLs
+	updateLatestURLs = func() []string { return []string{hang.URL + "/stable/version.json"} }
+	updateBetaLatestURLs = func() []string { return []string{hang.URL + "/beta/version.json"} }
+	t.Cleanup(func() { updateLatestURLs = originalStable; updateBetaLatestURLs = originalBeta })
+
+	originalBudget := updateSourceBudget
+	updateSourceBudget = 300 * time.Millisecond
+	t.Cleanup(func() { updateSourceBudget = originalBudget })
+
+	start := time.Now()
+	err := verifyUpdateSource("https://github.com/x/setup.exe", strings.Repeat("ab", 32))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("unreachable manifests must not verify")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("cold-cache source check must respect one shared budget, took %v", elapsed)
+	}
+}
+
+// ── 清单拉取：并发、预算、成对、失败关闭 ──────────────────────────
+
+func TestUpdateLatestBudgetWithHungMirror(t *testing.T) {
+	allowLoopback(t)
+	sign := installTestSigner(t)
+	resetCacheForTest(t)
+
+	good, _ := signedManifestServer(t, manifestBody(strings.Repeat("cd", 32)), sign)
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(hang.Close)
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	original := updateLatestURLs
+	updateLatestURLs = func() []string {
+		return []string{
+			deadURL + "/a/version.json",
+			hang.URL + "/b/version.json", // 挂死：串行实现会在这里等满单请求超时
+			good.URL + "/c/version.json",
+		}
+	}
+	t.Cleanup(func() { updateLatestURLs = original })
+
+	originalBudget := updateCheckBudget
+	updateCheckBudget = 800 * time.Millisecond
+	t.Cleanup(func() { updateCheckBudget = originalBudget })
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h := &helper{root: t.TempDir()}
+	h.updateLatest(rec, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
+	elapsed := time.Since(start)
+
+	var payload struct {
+		Update  bool   `json:"update"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Update || payload.Version != "0.5.7" {
+		t.Fatalf("healthy candidate must win: %s", rec.Body.String())
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("hung mirror must not dominate the wait, took %v", elapsed)
+	}
+
+	// 全部候选都挂死：由**预算**兜底，而不是"每条线路各等一个请求超时"。
+	// 串行实现这里是 3 × 8s；带预算的并发实现应该在一个预算附近返回。
+	resetManifestCache()
+	updateLatestURLs = func() []string {
+		return []string{
+			hang.URL + "/x/version.json",
+			hang.URL + "/y/version.json",
+			hang.URL + "/z/version.json",
+		}
+	}
+	start = time.Now()
+	rec = httptest.NewRecorder()
+	h.updateLatest(rec, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
+	elapsed = time.Since(start)
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Update {
+		t.Fatalf("all-hung candidates must yield update:false: %s", rec.Body.String())
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("all-hung check must be bounded by the budget, took %v", elapsed)
+	}
+}
+
+// 两通道并发：各挂 200ms 时总耗时必须明显低于串行的 400ms。
+func TestUpdateLatestFetchesChannelsConcurrently(t *testing.T) {
+	allowLoopback(t)
+	sign := installTestSigner(t)
+	resetCacheForTest(t)
+
+	stableBody := manifestBody(strings.Repeat("11", 32))
+	betaBody := manifestBody(strings.Repeat("22", 32))
+	delayed := func(body []byte) http.HandlerFunc {
+		signature := sign(body)
+		return func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(200 * time.Millisecond)
+			if strings.HasSuffix(r.URL.Path, ".sig") {
+				_, _ = w.Write(signature)
+				return
+			}
+			_, _ = w.Write(body)
+		}
+	}
+	stable := httptest.NewServer(delayed(stableBody))
+	t.Cleanup(stable.Close)
+	beta := httptest.NewServer(delayed(betaBody))
+	t.Cleanup(beta.Close)
+
+	originalStable, originalBeta := updateLatestURLs, updateBetaLatestURLs
+	updateLatestURLs = func() []string { return []string{stable.URL + "/version.json"} }
+	updateBetaLatestURLs = func() []string { return []string{beta.URL + "/version.json"} }
+	t.Cleanup(func() { updateLatestURLs = originalStable; updateBetaLatestURLs = originalBeta })
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h := &helper{root: t.TempDir()}
+	h.updateLatest(rec, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest?channel=beta", nil))
+	elapsed := time.Since(start)
+
+	var payload struct {
+		Update bool `json:"update"`
+		Beta   struct {
+			Version string `json:"version"`
+		} `json:"beta"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Update || payload.Beta.Version != "0.5.7" {
+		t.Fatalf("beta channel must be reported: %s", rec.Body.String())
+	}
+	if elapsed > 380*time.Millisecond {
+		t.Fatalf("channels must be fetched concurrently, took %v", elapsed)
+	}
+}
+
+// 检查更新后必须把验签通过的清单写进缓存，点"立即更新"时不再发清单请求。
+func TestUpdateLatestPopulatesVerifiedCache(t *testing.T) {
+	allowLoopback(t)
+	sign := installTestSigner(t)
+	resetCacheForTest(t)
+
+	sum := strings.Repeat("ef", 32)
+	server, hits := signedManifestServer(t, manifestBody(sum), sign)
+	original := updateLatestURLs
+	updateLatestURLs = func() []string { return []string{server.URL + "/version.json"} }
+	t.Cleanup(func() { updateLatestURLs = original })
+
+	h := &helper{root: t.TempDir()}
+	rec := httptest.NewRecorder()
+	h.updateLatest(rec, httptest.NewRequest(http.MethodGet, "/api/v1/update/latest", nil))
+	afterCheck := atomic.LoadInt32(hits)
+	if afterCheck == 0 {
+		t.Fatal("update check must hit the network")
+	}
+
+	if err := verifyUpdateSource("https://github.com/x/setup.exe", sum); err != nil {
+		t.Fatalf("cached manifest must verify the published sha: %v", err)
+	}
+	if got := atomic.LoadInt32(hits); got != afterCheck {
+		t.Fatalf("source check must reuse the cache: hits %d -> %d", afterCheck, got)
+	}
+}
+
+func TestFetchVerifiedManifestRejectsPairMismatch(t *testing.T) {
+	allowLoopback(t)
+	sign := installTestSigner(t)
+
+	good := manifestBody(strings.Repeat("33", 32))
+	other := manifestBody(strings.Repeat("44", 32))
+	// 清单来自 good、签名却覆盖 other：这正是"清单 A + 签名 B"的投毒形状。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			_, _ = w.Write(sign(other))
+			return
+		}
+		_, _ = w.Write(good)
+	}))
+	t.Cleanup(server.Close)
+
+	if _, err := fetchVerifiedManifest(server.Client(), []string{server.URL + "/version.json"}, 2*time.Second); err == nil {
+		t.Fatal("manifest signed by another candidate must be rejected")
+	}
+}
+
+func TestFetchVerifiedManifestRejectsUnsigned(t *testing.T) {
+	allowLoopback(t)
+	installTestSigner(t)
+
+	body := manifestBody(strings.Repeat("55", 32))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := fetchVerifiedManifest(server.Client(), []string{server.URL + "/version.json"}, 2*time.Second)
+	if err == nil {
+		t.Fatal("unsigned manifest must be rejected")
+	}
+	if !strings.Contains(err.Error(), "missing signature") {
+		t.Fatalf("error should name the missing signature, got %v", err)
+	}
+}
+
+// ── 下载入口的同步校验 ────────────────────────────────────────────
+
+func TestUpdateDownloadRejectsMissingSHA(t *testing.T) {
+	resetUpdateRun()
+	t.Cleanup(resetUpdateRun)
+	allowLoopback(t)
+
+	h := &helper{root: t.TempDir()}
+	body, _ := json.Marshal(updateDownloadRequest{URL: "http://127.0.0.1:1/setup.exe", SHA256: ""})
+	rec := httptest.NewRecorder()
+	h.updateDownload(rec, httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing sha must be rejected synchronously, got HTTP %d %s", rec.Code, rec.Body.String())
+	}
+	if updateRun.state != "idle" {
+		t.Fatalf("no download may start, state=%s", updateRun.state)
+	}
+
+	// 短摘要同样同步拒绝。
+	body, _ = json.Marshal(updateDownloadRequest{URL: "http://127.0.0.1:1/setup.exe", SHA256: "abcd"})
+	rec = httptest.NewRecorder()
+	h.updateDownload(rec, httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed sha must be rejected synchronously, got HTTP %d", rec.Code)
+	}
+
+	// 白名单外的地址同样同步拒绝（不会起 goroutine 去连它）。
+	body, _ = json.Marshal(updateDownloadRequest{URL: "https://evil.example/setup.exe", SHA256: strings.Repeat("ab", 32)})
+	rec = httptest.NewRecorder()
+	h.updateDownload(rec, httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("disallowed host must be rejected synchronously, got HTTP %d", rec.Code)
 	}
 }
