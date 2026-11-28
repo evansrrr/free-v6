@@ -2,15 +2,19 @@ name: beta channel
 
 # GitHub's releases/latest only ever points at a non-prerelease, so a beta
 # client has no API-free way to discover a newer beta. This workflow keeps a
-# rolling "beta-channel" release whose version.json asset always mirrors the
+# rolling "beta-channel" release whose version.json (+ .sig) always mirrors the
 # newest published prerelease; the client fetches it from the same asset URL
 # scheme as the stable one (and the gh-proxy mirrors handle it too).
 #
-# Runs on publish, not on the draft the build step creates: a release stops
-# being a draft only when a human clicks "publish", and that is the moment the
-# pointer should move. Also dispatchable by hand so a failed sync (or a beta
-# published before this workflow existed) can be repaired without publishing
-# anything new.
+# 三种触发方式：
+#   release: published —— 正常路径，人工点"发布"后立刻同步；
+#   workflow_dispatch  —— 手动补一次（tag 必填）；
+#   schedule           —— 兜底对账。2026-11-28 实际踩到：v0.5.7-beta.1 发布后
+#                         本工作流**一次都没跑**（release 事件没有产生任何 run），
+#                         指针静默停在 0.5.6-beta.3 且没有 .sig，新旧客户端都
+#                         发现不了新版本。只靠事件不可靠，所以加一条定时对账：
+#                         它总是把指针推向"最新的已发布预发布版本"，与指针当前
+#                         内容一致时不做任何写入（幂等）。
 
 on:
   release:
@@ -18,20 +22,23 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要镜像的测试版 tag（例如 v0.5.6-beta.2）"
+        description: "要镜像的测试版 tag（例如 v0.5.7-beta.1）"
         required: true
         type: string
+  schedule:
+    # 4 次/天，避开整点（GitHub 的调度队列在整点更拥挤）。
+    - cron: '17 1,7,13,19 * * *'
 
 permissions:
   contents: write
 
 jobs:
   sync:
-    # 手动触发时不看 prerelease 标记：调用方已经明确指定了 tag。
-    # 自动触发时以 tag 为准（带 '-' 即预发布），不看 release 上那个可被手工
-    # 改错的复选框——发版脚本标错一次，测试版通道就会断一整轮。
+    # 手动触发/定时触发不看 prerelease 标记：调用方已经明确指定了 tag，定时任务
+    # 自己会筛出预发布。事件触发时以 tag 为准（带 '-' 即预发布），不看 release
+    # 上那个可被手工改错的复选框——发版脚本标错一次，测试版通道就会断一整轮。
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name != 'release' ||
       (github.event.release &&
        (github.event.release.prerelease || contains(github.event.release.tag_name, '-')))
     runs-on: ubuntu-latest
@@ -42,21 +49,62 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Point beta-channel at the new prerelease
+      # 三种触发方式统一成一个 TARGET_TAG：后面的步骤只认它。
+      - name: Resolve target tag
         env:
           # gh 需要仓库上下文：虽然现在有 checkout，仍显式给 GH_REPO，
           # 避免工作目录变化后 gh 去猜。
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          mkdir -p out
+          case "$EVENT_NAME" in
+            workflow_dispatch) TAG="$DISPATCH_TAG" ;;
+            release) TAG="$RELEASE_TAG" ;;
+            *)
+              # 最新一个"已发布的预发布版本"；beta-channel 自己也是预发布，排除掉。
+              TAG=$(gh release list --exclude-drafts --limit 50 \
+                      --json tagName,isPrerelease,publishedAt \
+                      --jq '[.[] | select(.isPrerelease and .tagName != "beta-channel")]
+                            | sort_by(.publishedAt) | reverse | .[0].tagName // ""')
+              ;;
+          esac
+          if [ -z "$TAG" ]; then
+            echo "没有可镜像的预发布版本，本次跳过"
+          else
+            echo "target tag: $TAG"
+          fi
+          echo "TARGET_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Point beta-channel at the prerelease
+        if: env.TARGET_TAG != ''
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$TARGET_TAG"
+          mkdir -p out cur
           gh release download "$TAG" --pattern version.json --pattern version.json.sig --dir out --clobber
           if [ ! -f out/version.json.sig ]; then
             echo "::error::$TAG 没有 version.json.sig，拒绝把未签名清单推到 beta 通道"
             exit 1
           fi
+          # 上传前先自检：源 release 的清单与签名必须配对，否则等于把坏指针推出去。
+          go run ./cmd/freev6-update-sign -verify -in out/version.json -sig out/version.json.sig
+
+          # 幂等：指针内容与目标完全一致就什么都不做（定时对账每 6 小时跑一次）。
+          # 缺 .sig 的坏指针会让下载失败，从而走到下面的修复分支。
+          if gh release download beta-channel --pattern version.json --pattern version.json.sig --dir cur --clobber 2>/dev/null \
+             && cmp -s out/version.json cur/version.json \
+             && cmp -s out/version.json.sig cur/version.json.sig; then
+            echo "beta-channel 已指向 $TAG，跳过上传"
+            exit 0
+          fi
+
           if gh release view beta-channel >/dev/null 2>&1; then
             # 先传签名、再传清单：中途失败时客户端看到的是"新签名 + 旧清单"，
             # 验签失败 → 当作没有更新；反过来会变成"新清单 + 旧签名"，
@@ -73,6 +121,7 @@ jobs:
           echo "beta-channel -> $TAG"
 
       - name: Verify the mirrored pointer
+        if: env.TARGET_TAG != ''
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
