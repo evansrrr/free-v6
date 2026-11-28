@@ -68,3 +68,28 @@
 ## 6. 回滚
 
 批次 2 的改动集中在 helper 与壳的退出路径，回滚只需回退到本批之前的提交；`/api/v1/shutdown` 是新增路由，旧二进制收到 404 时壳侧会回落 `/proxy/stop` + 强杀，不存在数据格式升级。
+
+## 7. 外部复核后的收尾（2026-11-28 晚）
+
+独立复核复跑了自动化门禁，并在真机上确认了 Job 成员、shutdown、父进程退出、CLI 停止与启动耗时：
+
+| 项 | 复核实测 |
+|---|---|
+| `go test -count=1 ./...` / `go vet` / `node --test` | 全绿；lifecycle 1.53s、helper 6.57s、mihomo 36.37s；前端 32/32 |
+| Job | helper `inJob=true`；同 Job 重复 Assign 返回 nil；关闭 Job 后子进程退出 |
+| shutdown | `POST /api/v1/shutdown` → 200，约 100ms 内退出 |
+| 父进程监视 | 杀父进程后 helper 退出（含 100ms 轮询约 431ms；helper 日志记录停止 17ms） |
+| 启动耗时 | p50 31ms（批次 1 约 30ms，+1ms，在 +5ms 预算内） |
+
+复核同时发现 4 处需要补的问题，均已在本轮修掉：
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P1 | `shutdown` 单测走真实 `ClearLeftoverTunRoutes`（netsh）；管理员机器上真实会话在跑时可能删掉在用路由 | `runStopSession` 抽成可注入变量，两个用例注入 fake，并断言"只跑一次" |
+| P2 | 快照不存在也被回传 `restoreSkipped`，前端每次停止多一条红字 | 只对非 `os.ErrNotExist` 的错误置位；新增两个生命周期用例（缺失不报、损坏要报） |
+| P2 | `update_apply` 中止后 `stopping` 不复位，之后真崩溃被当成主动退出 | 三态判定 `Accepted/StoppedOnly/Refused`：只有 `Accepted` 保持置位；`Refused` 复位并报错。旧 helper 的 `/proxy/stop` 归为 `StoppedOnly`（不是退出确认），停完会话后结束进程再继续安装 |
+| P3 | 父监视 150s 预算在等 `h.mu` 之前开始，长启动会把热点还原预算压到十几秒 | 拆成 `parentWatchLockBudget`（等锁）+ `parentWatchBudget`（收尾），等锁超时记日志后直接退出 |
+
+另修掉 CI `go-race` job 的失败：`internal/lifecycle` 的测试记录器被 PATCH goroutine 与主 goroutine 同时写，加锁后消除（本机无 gcc，`-race` 只能在 CI 验证）。
+
+> 复核提到的"混合构建更新只能手动安装"已改为支持：旧 helper 在 `/proxy/stop` 返回 200（网络已还原）之后被结束，门禁继续安装。行为变化的边界写在 `docs/release.md`。
