@@ -181,57 +181,98 @@ async function loadApiToken() {
   }
 }
 
+// 表在 lib/api-timeouts.js（纯函数，node:test 覆盖）。取不到就退到 15s：
+// 宁可保守，也不要让一个加载顺序问题把超时变成"永远"。
+const DEFAULT_API_TIMEOUT_MS = 15000;
+
+function apiTimeoutMs(path) {
+  const table = globalThis.FreeV6ApiTimeouts;
+  return (table && table.timeoutFor(path)) || DEFAULT_API_TIMEOUT_MS;
+}
+
+function apiTimeoutError(path, timeoutMs) {
+  const error = new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）: ${path}`);
+  error.code = 'timeout';
+  return error;
+}
+
 async function api(path, options = {}) {
   if (apiToken === null) apiToken = await loadApiToken();
   if (apiBase === null) apiBase = (await loadApiBase()) || DEFAULT_API_BASE;
+
+  // 每个请求自带截止时间：helper 挂死时调用方不能永远等下去（/status 轮询会
+  // 一直排队，节点列表会停在旧数据上）。fetch 与其后的 body 读取共用这个
+  // signal，所以超时不会只截断连接、留下一个永远读不完的响应。
+  const timeoutMs = apiTimeoutMs(path);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const doFetch = (base, token) =>
     fetch(`${base}${path}`, {
       ...options,
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options.headers || {}),
       },
     });
-  let response;
   try {
-    response = await doFetch(apiBase, apiToken);
-  } catch (err) {
-    // A dead reserved port means either a not-yet-up helper or a mixed build:
-    // the shell dials a random port but the un-replaced old helper still sits
-    // on 13335. Retry once on the legacy port and remember it for this session
-    // so every later request (status polling, start/stop) reaches the helper.
-    // Both helpers read FREEV6_API_TOKEN from the shell, so the token still
-    // matches — no need to reload it here.
-    const legacy = DEFAULT_API_BASE;
-    if (apiBase !== legacy) {
-      try {
-        response = await doFetch(legacy, apiToken);
-        apiBase = legacy;
-      } catch (_) {
-        throw err; // original error: the reserved port is the expected one
-      }
-    } else {
-      throw err;
-    }
-  }
-  // 401 → the token may be stale (shell reloaded) or was never fetched
-  // (invoke raced startup): re-load once and retry once, never loop.
-  if (response.status === 401) {
-    const fresh = await loadApiToken();
-    if (fresh && fresh !== apiToken) {
-      apiToken = fresh;
+    let response;
+    try {
       response = await doFetch(apiBase, apiToken);
+    } catch (err) {
+      // 超时不是"端口不对"。回落 13335 会让等待翻倍，而且 13335 上的旧 helper
+      // 也不会更快——只对连接失败回落。
+      if (err && err.name === 'AbortError') throw apiTimeoutError(path, timeoutMs);
+      // A dead reserved port means either a not-yet-up helper or a mixed build:
+      // the shell dials a random port but the un-replaced old helper still sits
+      // on 13335. Retry once on the legacy port and remember it for this session
+      // so every later request (status polling, start/stop) reaches the helper.
+      // Both helpers read FREEV6_API_TOKEN from the shell, so the token still
+      // matches — no need to reload it here.
+      const legacy = DEFAULT_API_BASE;
+      if (apiBase !== legacy) {
+        try {
+          response = await doFetch(legacy, apiToken);
+          apiBase = legacy;
+        } catch (_) {
+          throw err; // original error: the reserved port is the expected one
+        }
+      } else {
+        throw err;
+      }
     }
+    // 401 → the token may be stale (shell reloaded) or was never fetched
+    // (invoke raced startup): re-load once and retry once, never loop.
+    if (response.status === 401) {
+      const fresh = await loadApiToken();
+      if (fresh && fresh !== apiToken) {
+        apiToken = fresh;
+        response = await doFetch(apiBase, apiToken);
+      }
+    }
+    // 204/空体不是错误，但也不能让 JSON.parse 的报错盖住状态码。
+    let payload = {};
+    if (response.status !== 204) {
+      try {
+        payload = await response.json();
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw apiTimeoutError(path, timeoutMs);
+        const parseError = new Error(response.ok ? '响应格式错误' : `HTTP ${response.status}`);
+        if (response.ok) parseError.code = 'bad-json';
+        throw parseError;
+      }
+    }
+    if (!response.ok) {
+      const error = new Error(payload.error || `HTTP ${response.status}`);
+      // 机器可读错误码（如 port-conflict）随错误对象上抛，上层据此给精准提示
+      error.code = payload.code;
+      throw error;
+    }
+    return payload;
+  } finally {
+    clearTimeout(timer);
   }
-  const payload = await response.json();
-  if (!response.ok) {
-    const error = new Error(payload.error || `HTTP ${response.status}`);
-    // 机器可读错误码（如 port-conflict）随错误对象上抛，上层据此给精准提示
-    error.code = payload.code;
-    throw error;
-  }
-  return payload;
 }
 
 // 停止免流。快照损坏/读不出来时 helper 仍会成功停止、只跳过网络状态还原
@@ -2639,14 +2680,23 @@ function clearProxyList() {
   renderNodeGrid();
 }
 
+const PROXIES_TIMEOUT_MS = 3000;
+
 async function fetchProxies() {
   if (document.hidden) return;
   // 只在免流运行中拉取：停止后 :9090 已死，僵尸实例/时序竞态不得回填列表
   if (!state.helperOnline || !state.proxyRunning) return;
   if (state.proxiesPolling) return;
   state.proxiesPolling = true;
+  // 3s 上限：:9090 可能半死（端口在听、控制接口不回包）。没有超时的话这次
+  // 请求会一直挂着，而单飞标志要等它落定才复位——节点列表就此定格到下次刷新。
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROXIES_TIMEOUT_MS);
   try {
-    const resp = await fetch('http://127.0.0.1:9090/proxies', { headers: controllerHeaders() });
+    const resp = await fetch('http://127.0.0.1:9090/proxies', {
+      headers: controllerHeaders(),
+      signal: controller.signal,
+    });
     if (!resp.ok) return;
     const data = await resp.json();
     const info = data.proxies?.[activeProxyGroupKey()];
@@ -2657,7 +2707,10 @@ async function fetchProxies() {
     };
     renderNodeGrid();
   } catch (_) { /* mihomo not reachable */ }
-  finally { state.proxiesPolling = false; }
+  finally {
+    clearTimeout(timer);
+    state.proxiesPolling = false;
+  }
 }
 
 let nodeGridSignature = '';
@@ -2769,17 +2822,25 @@ function renderNodeGrid() {
 
 async function switchProxy(name) {
   if (!state.proxyRunning || !AUTO_SELECT_GROUP) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROXIES_TIMEOUT_MS);
   try {
-    await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(activeProxyGroupKey())}`, {
+    const resp = await fetch(`http://127.0.0.1:9090/proxies/${encodeURIComponent(activeProxyGroupKey())}`, {
       method: 'PUT',
       headers: controllerHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ name }),
+      signal: controller.signal,
     });
+    // 内核拒绝时（节点已删/组正在切换）不能把 now 改成本地值：界面会停在一个
+    // 并没有生效的节点上，直到下一次 5s 轮询才纠正。
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     if (state.proxyGroup) state.proxyGroup.now = name;
     renderNodeGrid();
     addLog(`切换接入点: ${name}`);
   } catch (e) {
     addLog(`切换接入点失败: ${e.message}`, true);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
