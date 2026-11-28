@@ -23,10 +23,16 @@ var (
 	// shutdownServiceBudget 是 http.Server.Shutdown 的上限。WriteTimeout=0，
 	// 不设上限的话"优雅退出"可以永不返回。
 	shutdownServiceBudget = 5 * time.Second
-	// parentWatchLockBudget 是父进程消失后等 h.mu 的上限。startProxy 持锁最坏
-	// 约 135s（就绪等待 + 热点切换），所以"等锁"与"收尾"必须分开计时：合成
-	// 一段时，一次长启动会把 120s 的热点还原预算挤到只剩十几秒，还原被截断。
-	parentWatchLockBudget = 150 * time.Second
+	// parentWatchLockBudget 是父进程消失后等 h.mu 的上限。startProxy 全程持锁，
+	// 而它的最坏耗时是**多段之和**：残留自愈 120s + 热点探测 30s + 切换 120s +
+	// 回滚 60s，再加就绪/快照/DNS/自检，可到 400s 量级。等锁必须覆盖它，否则
+	// 父进程在长启动中消失时，helper 会在启动进行到一半时直接退出（Job 顺手
+	// 杀掉核心），把热点留在半切换状态。多等几分钟换来"先收尾再退出"是划算的：
+	// 这期间核心仍在跑，用户的网络没有断。
+	//
+	// 与收尾预算分开计时：合成一段时，一次长启动会把 120s 的热点还原预算挤到
+	// 只剩十几秒，还原被截断。
+	parentWatchLockBudget = 420 * time.Second
 	// parentWatchBudget 是拿到锁之后的收尾预算（热点还原最长 120s）。
 	parentWatchBudget = 150 * time.Second
 )

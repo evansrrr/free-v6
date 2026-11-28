@@ -174,10 +174,13 @@ func (h *helper) chainImport(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (h *helper) chainClear(writer http.ResponseWriter, request *http.Request) {
-	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	// 与导入同一把锁：clear 与 import 交错会留下"内容是新导入的、开关是旧的"
+	// 或"内容已删、开关还开着"——后者下次启动直接报错。
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+	// 先关开关再删内容。反过来的话，进程在两步之间退出会留下"开关仍为开、
+	// 内容已删"，下次启动直接报"已启用但导入内容缺失"。删除失败只记日志：
+	// 开关已关，残留文件不再被任何路径引用（与 reset 一致）。
 	if err := h.updateSettings(func(s *settings) error {
 		s.ChainEnabled = false
 		s.ChainSourceType = ""
@@ -186,6 +189,9 @@ func (h *helper) chainClear(writer http.ResponseWriter, request *http.Request) {
 	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if err := os.Remove(h.chainPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "chain clear: remove %s: %v\n", h.chainPath(), err)
 	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 }

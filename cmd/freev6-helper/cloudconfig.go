@@ -236,6 +236,9 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// 回传的 updatedAt 必须是**这次写入**的时间：stored 是拉取前读的，首次导入
+	// 是空字符串、重复导入是上一次的时间，UI 的"更新时间"会一直滞后一轮。
+	updatedAt := time.Now().Format(time.RFC3339)
 	if err := h.updateSettings(func(s *settings) error {
 		s.CloudEnabled = true
 		if portalHost != "" {
@@ -244,7 +247,7 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		if sourceURL != "" {
 			s.CloudSourceURL = sourceURL
 		}
-		s.CloudUpdatedAt = time.Now().Format(time.RFC3339)
+		s.CloudUpdatedAt = updatedAt
 		return nil
 	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -261,15 +264,14 @@ func (h *helper) cloudImport(writer http.ResponseWriter, request *http.Request) 
 		"ignored":    profile.Ignored,
 		"sourceType": sourceType,
 		"sourceUrl":  sourceURL,
-		"updatedAt":  stored.CloudUpdatedAt,
+		"updatedAt":  updatedAt,
 	})
 }
 
 func (h *helper) cloudClear(writer http.ResponseWriter) {
-	if err := os.Remove(h.cloudProfilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	// 与导入同一把锁，且先关开关再删内容：理由同 chainClear。
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
 	if err := h.updateSettings(func(s *settings) error {
 		s.CloudEnabled = false
 		s.CloudSourceURL = ""
@@ -278,6 +280,9 @@ func (h *helper) cloudClear(writer http.ResponseWriter) {
 	}); err != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if err := os.Remove(h.cloudProfilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "cloud clear: remove %s: %v\n", h.cloudProfilePath(), err)
 	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 }

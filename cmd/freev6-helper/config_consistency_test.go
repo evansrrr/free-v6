@@ -199,3 +199,123 @@ func writeNoticeCache(t *testing.T, h *helper, cache noticeCache) {
 		t.Fatal(err)
 	}
 }
+
+// clear 与 import 交错时不能留下"开关与内容不一致"的终态。
+//
+// 两者各自是一个事务（configMu），所以终态只可能是：import 赢（开 + 有文件）
+// 或 clear 赢（关 + 无文件）。修复前 clear 先删文件再关开关，进程/时序在这两步
+// 之间就会留下"开 + 无文件"，下次启动直接报错。
+func TestConcurrentClearAndImportStayConsistent(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	for i := 0; i < 20; i++ {
+		if rec := chainRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(chainTestYAML)+`"}`); rec.Code != http.StatusOK {
+			t.Fatalf("setup import failed on iteration %d: %s", i, rec.Body.String())
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			chainRequest(t, h, http.MethodDelete, "")
+		}()
+		go func() {
+			defer wg.Done()
+			chainRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(chainTestYAML)+`"}`)
+		}()
+		wg.Wait()
+
+		loaded, err := h.loadSettings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, statErr := os.Stat(h.chainPath())
+		if loaded.ChainEnabled != (statErr == nil) {
+			t.Fatalf("iteration %d: enabled=%v, file exists=%v: switch and content disagree",
+				i, loaded.ChainEnabled, statErr == nil)
+		}
+	}
+}
+
+// 删内容失败也要把开关关掉：与 reset 同理，开关是权威，残留文件不再被引用。
+func TestChainClearStaysSuccessfulWhenFileCannotBeRemoved(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	if err := h.updateSettings(func(s *settings) error {
+		s.ChainEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocked := h.chainPath()
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := chainRequest(t, h, http.MethodDelete, ""); rec.Code != http.StatusOK {
+		t.Fatalf("clear must stay successful, got %d: %s", rec.Code, rec.Body.String())
+	}
+	loaded, err := h.loadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ChainEnabled {
+		t.Fatal("the switch must be off even when the file cannot be removed")
+	}
+}
+
+func TestCloudClearStaysSuccessfulWhenFileCannotBeRemoved(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	if err := h.updateSettings(func(s *settings) error {
+		s.CloudEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blocked := h.cloudProfilePath()
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "keep"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := cloudRequest(t, h, http.MethodDelete, ""); rec.Code != http.StatusOK {
+		t.Fatalf("clear must stay successful, got %d: %s", rec.Code, rec.Body.String())
+	}
+	loaded, err := h.loadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CloudEnabled {
+		t.Fatal("the switch must be off even when the file cannot be removed")
+	}
+}
+
+// 回传的 updatedAt 必须是本次写入的时间：首次导入以前返回空字符串（用的是
+// 拉取前读到的设置），重复导入返回上一轮的时间。
+func TestCloudImportReturnsFreshUpdatedAt(t *testing.T) {
+	h := &helper{root: t.TempDir()}
+	writeNoticeCache(t, h, noticeCache{FetchedAt: time.Now(), CloudProfile: boolPtr(true)})
+
+	rec := cloudRequest(t, h, http.MethodPut, `{"content":"`+jsonEscape(cloudTestYAML)+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("import failed: %s", rec.Body.String())
+	}
+	var payload struct {
+		UpdatedAt string `json:"updatedAt"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.UpdatedAt == "" {
+		t.Fatal("the first import must report the timestamp it just wrote")
+	}
+	stored, err := h.loadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.UpdatedAt != stored.CloudUpdatedAt {
+		t.Fatalf("response updatedAt %q != persisted %q", payload.UpdatedAt, stored.CloudUpdatedAt)
+	}
+}

@@ -664,7 +664,22 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	// 链式代理：启用时先解析导入内容——纯读、无副作用，放在端口/权限检查
 	// 之前让坏输入最快失败。启用却缺内容必须明确报错，绝不静默降级成裸
 	// WARP 出口（用户以为出口是自有代理，实际不是，是语义欺诈）。
+	// settings 与两个内容文件必须一起读（configMu）：导入/清除在提交事务的
+	// 瞬间，这里可能读到"开关已开、文件刚被删"的中间态，随即报"内容缺失"。
+	// 锁只包住读取，解析与后面的长操作都在锁外（start 可能要几分钟）。
+	h.configMu.Lock()
 	storedForChain, chainSettingsErr := h.loadSettings()
+	var chainData, cloudData []byte
+	var chainReadErr, cloudReadErr error
+	if chainSettingsErr == nil || errors.Is(chainSettingsErr, os.ErrNotExist) {
+		if storedForChain.ChainEnabled {
+			chainData, chainReadErr = os.ReadFile(h.chainPath())
+		}
+		if storedForChain.CloudEnabled {
+			cloudData, cloudReadErr = os.ReadFile(h.cloudProfilePath())
+		}
+	}
+	h.configMu.Unlock()
 	if chainSettingsErr != nil && !errors.Is(chainSettingsErr, os.ErrNotExist) {
 		// A corrupt settings file must abort, never silently fall back to a
 		// bare-WARP render while the UI still shows chain/cloud as enabled.
@@ -682,8 +697,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	var chainProxies []mihomo.ChainProxy
 	if storedForChain.ChainEnabled {
-		chainData, readErr := os.ReadFile(h.chainPath())
-		if readErr != nil {
+		if chainReadErr != nil {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "链式代理已启用但导入内容缺失，请在设置中重新导入"})
 			return
 		}
@@ -702,8 +716,7 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置与链式代理不能同时启用，请在设置中关闭其中一个"})
 			return
 		}
-		cloudData, readErr := os.ReadFile(h.cloudProfilePath())
-		if readErr != nil {
+		if cloudReadErr != nil {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "备用配置已启用但本地内容缺失，请在设置中重新获取"})
 			return
 		}
