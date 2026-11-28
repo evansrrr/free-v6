@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod helper_client;
+
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc, Mutex,
@@ -164,19 +166,23 @@ fn update_apply(app: tauri::AppHandle) -> Result<String, String> {
     // who could run script in the webview, and this process is elevated.
     let installer = update_setup_path().ok_or_else(|| "安装包不存在，请重新下载".to_string())?;
 
-    // Stop first and reap the child before touching the filesystem. If the
-    // helper ignores the kill (defender hook, stuck syscall), don't hang the
-    // UI forever — a bounded wait then proceeds; NSIS's own process guard is
-    // the last line of defence for the desktop exe.
-    stop_helper(&app);
-    wait_helper_terminated(Duration::from_secs(5));
+    // Stop first and reap the child before touching the filesystem.
+    //
+    // 顺序很关键：先把 stopping 置位（否则 Terminated 事件会被当成崩溃：
+    // 弹"组件异常"并 exit(1)），再请求 helper 自己停干净并退出，最后才允许
+    // NSIS 覆盖文件。helper 没确认退出就装，正是混合构建的来源。
+    mark_helper_stopping(&app);
+    let _ = request_helper_shutdown(&app, Duration::from_secs(6));
+    if !wait_helper_terminated(Duration::from_secs(6)) {
+        return Err("helper 未在 6 秒内退出，已中止更新。请手动退出 FreeV6 后重试。".into());
+    }
     // A mixed build left behind by an earlier failed update still runs a helper
     // this shell never spawned, so stop_helper cannot reach it: it sits on
     // :13335 holding freev6-helper.exe open, NSIS's File copy fails again and
     // the update "succeeds" without repairing anything. Exactly one app
     // instance can exist (single-instance mutex) and it just stopped its own
     // helper, so anything left with that image name is a stray.
-    kill_stray_helpers();
+    reap_stray_helpers(Duration::from_secs(3));
 
     std::process::Command::new(&installer)
         .args(["/S", "/FREEV6REL"])
@@ -205,11 +211,13 @@ fn update_setup_path() -> Option<std::path::PathBuf> {
 
 // Poll the flag set by the helper's event loop on CommandEvent::Terminated.
 // Bounded by `timeout` so a stuck child can never block an update forever.
-fn wait_helper_terminated(timeout: Duration) {
+/// 等 helper 真的退出（Terminated 事件落地）。返回是否观察到退出。
+fn wait_helper_terminated(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while !HELPER_TERMINATED.load(Ordering::Acquire) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
+    HELPER_TERMINATED.load(Ordering::Acquire)
 }
 
 // Show (or restore) the main GUI window — shared by the tray menu item and
@@ -540,6 +548,19 @@ mod process_memory {
 
     /// 主进程 + 其下所有 WebView2 子进程的专用工作集合计。
     /// kernel_pid 已由内核段单独统计，这里跳过以免重复计入应用。
+    /// 当前所有 freev6-helper.exe 的 PID。
+    ///
+    /// 退出/更新前用它判断"上一个实例的 helper 是不是还在收尾"：它现在有父
+    /// 进程监视，父一死就会自己停干净再退，先等一会儿比直接 taskkill 好——
+    /// 直接杀会把一次热点还原切成半截。
+    pub fn helper_pids() -> Vec<u32> {
+        snapshot()
+            .into_iter()
+            .filter(|(_, info)| info.name.eq_ignore_ascii_case("freev6-helper.exe"))
+            .map(|(pid, _)| pid)
+            .collect()
+    }
+
     pub fn app_private_working_set(kernel_pid: Option<u32>) -> u64 {
         let root = unsafe { GetCurrentProcessId() };
         let procs = snapshot();
@@ -735,7 +756,8 @@ fn main() {
             // 正卡在这里——旧 helper 占着 :13335 且用的是上一任壳的 token，
             // 新壳连不上它，UI 直接显示"组件异常"，用户连更新按钮都点不到。
             // 杀掉之后本次会拉起与当前版本配套的 helper，无需重装即可自愈。
-            kill_stray_helpers();
+            // 先给上一任 3 秒自己退出（它会先还原网络），再强杀。
+            reap_stray_helpers(Duration::from_secs(3));
             // Spawn 失败（helper 被杀软隔离/删除）→ 弹窗告知用户并退出。
             // 不能 `?`：那会一路传播成 panic（release panic=abort，用户只
             // 看到"打不开"）。return Ok(()) 跳过后续热键/托盘初始化。
@@ -841,7 +863,14 @@ fn main() {
             tauri::RunEvent::ExitRequested { code: Some(_), .. } => {
                 QUITTING.store(true, Ordering::Release);
             }
-            tauri::RunEvent::Exit => stop_helper(app),
+            tauri::RunEvent::Exit => {
+                // 正常退出路径前端已经先停过免流，这里再发一次是"第二道保险"：
+                // 有界等待，超时就强杀——用户不能看到窗口关不掉。
+                mark_helper_stopping(app);
+                let _ = request_helper_shutdown(app, Duration::from_millis(1500));
+                wait_helper_terminated(Duration::from_secs(3));
+                stop_helper(app);
+            }
             _ => {}
         });
 }
@@ -894,7 +923,10 @@ fn start_helper(
         .shell()
         .sidecar("freev6-helper")?
         .env("FREEV6_ROOT", root.clone())
-        .env("FREEV6_API_TOKEN", api_token);
+        .env("FREEV6_API_TOKEN", api_token)
+        // 父进程监视：helper 发现这个 PID 消失后自己把会话停干净再退出。
+        // 旧壳不传这个变量，新 helper 自动禁用监视（不影响旧版）。
+        .env("FREEV6_PARENT_PID", std::process::id().to_string());
     // 0 = 预留失败，helper 自己回落到默认端口。
     if helper_port > 0 {
         command = command.env("FREEV6_API_PORT", helper_port.to_string());
@@ -979,6 +1011,53 @@ fn append_helper_log(path: &std::path::Path, line: &str) {
     }
 }
 
+/// 标记"这是我们让它退出的"，避免 Terminated 事件走"异常退出"分支（弹窗 + exit(1)）。
+fn mark_helper_stopping(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<HelperState>() {
+        state.stopping.store(true, Ordering::Release);
+    }
+}
+
+/// 请 helper 自己停止会话并退出。true 表示它确认收到。
+///
+/// 旧 helper 没有 /api/v1/shutdown（404/405）：回落到 /proxy/stop，让它至少把
+/// 网络还原做掉，剩下的交给调用方的有界等待 + 强杀。
+fn request_helper_shutdown(app: &tauri::AppHandle, timeout: Duration) -> bool {
+    let port = app
+        .try_state::<HelperPort>()
+        .map(|state| state.0)
+        .filter(|port| *port > 0)
+        .unwrap_or(13335);
+    let token = app
+        .try_state::<ApiToken>()
+        .map(|state| state.0.clone())
+        .unwrap_or_default();
+    let client = helper_client::HelperClient::new(port, token, timeout);
+    match client.post("/api/v1/shutdown") {
+        Ok(response) if response.status == 200 => true,
+        Ok(response) if response.status == 404 || response.status == 405 => client
+            .post("/api/v1/proxy/stop")
+            .map(|fallback| fallback.status == 200)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// 先等残留 helper 自己退，等不到再强杀。
+///
+/// 单实例互斥成立时，任何还在跑的 freev6-helper.exe 都是上一任留下的孤儿。它
+/// 现在有父进程监视，父一死就会先还原网络再退出——直接 taskkill 会把这次还原
+/// 切成半截，热点客户端就此断网到下次启动。
+fn reap_stray_helpers(budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while !process_memory::helper_pids().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if !process_memory::helper_pids().is_empty() {
+        kill_stray_helpers();
+    }
+}
+
 fn stop_helper(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<HelperState>() {
         state.stopping.store(true, Ordering::Release);
@@ -1013,7 +1092,10 @@ mod tests {
     fn wait_helper_terminated_is_bounded_and_reacts_to_flag() {
         HELPER_TERMINATED.store(false, Ordering::Release);
         let start = Instant::now();
-        wait_helper_terminated(Duration::from_millis(60));
+        assert!(
+            !wait_helper_terminated(Duration::from_millis(60)),
+            "a timeout must report that the helper is still alive"
+        );
         assert!(
             start.elapsed() < Duration::from_millis(300),
             "wait must respect its timeout"
@@ -1021,7 +1103,10 @@ mod tests {
 
         HELPER_TERMINATED.store(true, Ordering::Release);
         let start = Instant::now();
-        wait_helper_terminated(Duration::from_secs(2));
+        assert!(
+            wait_helper_terminated(Duration::from_secs(2)),
+            "a set flag must be reported as termination"
+        );
         assert!(
             start.elapsed() < Duration::from_millis(100),
             "wait must return as soon as the flag is set"
