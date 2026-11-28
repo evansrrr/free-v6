@@ -59,7 +59,7 @@ func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error
 	// helper and the CLI can both call Start, and a second instance's pid write
 	// would otherwise orphan the first core (which then can no longer be stopped).
 	pid := 0
-	err := withStartLock(func() error {
+	err := WithSessionLock(func() error {
 		if err := ensurePIDAvailable(pidPath, IsRunning, processIsOurs); err != nil {
 			return err
 		}
@@ -86,6 +86,9 @@ func Start(binaryPath, configPath, homeDir, pidPath, logPath string) (int, error
 		// Stdout/Stderr are *os.File, not pipes, so no copy goroutines needed.
 		go func() { _ = cmd.Wait() }()
 		_ = logFile.Close()
+		// 挂进进程级 Job 要在写 pid 之前：pid 一旦可见，别的入口就可能来停它，
+		// 那时它应该已经在同一个 Job 里了（helper 自加入成功时这步是幂等的）。
+		assignCoreToJob(cmd.Process.Pid)
 		if err := os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600); err != nil {
 			_ = cmd.Process.Kill()
 			return fmt.Errorf("write mihomo pid: %w", err)
