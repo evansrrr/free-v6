@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -767,5 +768,53 @@ func TestUpdateDownloadRejectsMissingSHA(t *testing.T) {
 	h.updateDownload(rec, httptest.NewRequest(http.MethodPut, "/api/v1/update/download", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("disallowed host must be rejected synchronously, got HTTP %d", rec.Code)
+	}
+}
+
+// 重定向必须仍然落在白名单里：初始地址 127.0.0.1 合法，302 到 localhost 就不合法。
+// 没有这道守卫时内容会被成功读取，"只访问白名单主机"的传输约束形同虚设。
+func TestFetchBodyRejectsRedirectOutsideAllowlist(t *testing.T) {
+	var port string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version.json" {
+			http.Redirect(w, r, "http://localhost:"+port+"/secret", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"version":"9.9.9","download":"https://x/y"}`))
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port = parsed.Port()
+
+	_, err = fetchBody(context.Background(), server.Client(), server.URL+"/version.json", []string{"127.0.0.1"}, updateManifestMaxBytes)
+	if err == nil {
+		t.Fatal("redirect to a non-allowlisted host must be rejected")
+	}
+	if !strings.Contains(err.Error(), "host not allowed") {
+		t.Fatalf("error should name the host guard, got %v", err)
+	}
+}
+
+// 白名单内的跳转必须继续可用：GitHub 的 release 资产本来就会 302 到自家 CDN。
+func TestFetchBodyFollowsAllowlistedRedirect(t *testing.T) {
+	payload := []byte(`{"version":"9.9.9","download":"https://x/y"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version.json" {
+			http.Redirect(w, r, "/real.json", http.StatusFound)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	got, err := fetchBody(context.Background(), server.Client(), server.URL+"/version.json", []string{"127.0.0.1"}, updateManifestMaxBytes)
+	if err != nil {
+		t.Fatalf("allowlisted redirect must be followed: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("body mismatch: %q", got)
 	}
 }

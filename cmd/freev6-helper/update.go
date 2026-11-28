@@ -322,12 +322,7 @@ func (h *helper) updateDownload(writer http.ResponseWriter, request *http.Reques
 		// 自带 UI 侧上限。重定向必须仍落在白名单主机上，否则一次 302 就能
 		// 绕过 https + host 约束。
 		client := &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return validateUpdateURL(req.URL.String(), updateAllowedHosts)
-			},
+			CheckRedirect: redirectGuard(updateAllowedHosts),
 		}
 		_, err := downloadUpdateFile(client, input.URL, input.SHA256, dest, updateAllowedHosts, &updateRun.prog)
 		updateRun.mu.Lock()
@@ -454,6 +449,24 @@ func parseVersionJSON(data []byte) (*latestVersionInfo, error) {
 	return &info, nil
 }
 
+// maxUpdateRedirects 是清单/签名/安装包允许的最大跳数。GitHub 的 release
+// 资产会跳到 objects.githubusercontent.com，两跳足够；给 5 是留余量。
+const maxUpdateRedirects = 5
+
+// redirectGuard 把"https + 白名单主机"这条传输约束延伸到整条重定向链。
+//
+// 没有它，一次 302 就能把请求引向任意主机（包括 http 降级），而 helper 是以
+// 管理员身份运行的：清单本身有签名，但"只允许访问白名单"是独立的一层约束，
+// 不能因为内容可信就放弃。下载路径与清单路径共用这一个守卫，避免两处漂移。
+func redirectGuard(allowed []string) func(*http.Request, []*http.Request) error {
+	return func(request *http.Request, via []*http.Request) error {
+		if len(via) >= maxUpdateRedirects {
+			return fmt.Errorf("too many redirects")
+		}
+		return validateUpdateURL(request.URL.String(), allowed)
+	}
+}
+
 // fetchBody 是清单与签名共用的取字节入口：先过 scheme/host 白名单，
 // 再带着 ctx 发请求，并把响应体限制在 max 字节以内。
 func fetchBody(ctx context.Context, client *http.Client, rawURL string, allowed []string, max int64) ([]byte, error) {
@@ -465,7 +478,11 @@ func fetchBody(ctx context.Context, client *http.Client, rawURL string, allowed 
 		return nil, err
 	}
 	request.Header.Set("User-Agent", "freev6")
-	response, err := client.Do(request)
+	// 复制 client 而不是改它：调用方的 client 在多个候选之间共享，测试也会复用。
+	// 只覆盖 CheckRedirect，Transport/Timeout 原样继承。
+	guarded := *client
+	guarded.CheckRedirect = redirectGuard(allowed)
+	response, err := guarded.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
