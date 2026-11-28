@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yourname/freev6/internal/lifecycle"
 	"github.com/yourname/freev6/internal/mihomo"
 	"github.com/yourname/freev6/internal/network"
 	"github.com/yourname/freev6/internal/warp"
@@ -24,14 +25,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-const (
-	// 与 helper 的 stopExitTimeout / tunCleanupTimeout 同值：CLI 是排障工具，
-	// 停止行为要和正式路径一致，不然「CLI 停完是好的、界面停完是坏的」会把人
-	// 带偏。
-	stopExitTimeout   = 2 * time.Second
-	tunCleanupTimeout = 3 * time.Second
-)
 
 func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" {
@@ -238,36 +231,24 @@ func stopMihomo(args []string) error {
 	}
 	pidPathValue := resolveRootPath(*rootPath, *pidPath)
 	snapshotPathValue := resolveRootPath(*rootPath, *snapshotPath)
-	// 与 helper 同一条口径：先等进程真的退出，再清残留路由 —— 进程还在时它会
-	// 继续往路由表写，此刻删除是在跟内核收尾抢。
-	_, stopExited, err := mihomo.StopAndWait(pidPathValue, stopExitTimeout)
+
+	// 与 GUI / 退出流程走同一条路径：还原热点 → 关 TUN → 停核 → 重读 →
+	// 清路由 → 删快照。以前 CLI 完全不关 TUN，所以"CLI 停完网络恢复更慢"。
+	// 关 TUN 需要控制器密钥；读不到就跳过（不阻断停止，日志里能看出来）。
+	secret, _ := mihomo.ReadControllerSecret(filepath.Dir(pidPathValue))
+	result, err := lifecycle.StopSession(context.Background(), lifecycle.Options{
+		PidPath:          pidPathValue,
+		SnapshotPath:     snapshotPathValue,
+		ControllerSecret: secret,
+	})
 	if err != nil {
 		return err
 	}
-	if stopExited {
-		// Stop 会先删 pid 文件再等退出，所以这里要重读一次：这段时间里若有
-		// 另一个入口把新内核拉起来（running=true），删路由等于删掉新会话的
-		// 出站路径。
-		_, coreRunning, coreStatusErr := mihomo.Status(pidPathValue)
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
-		removedRoutes := network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
-		cleanupCancel()
-		if removedRoutes > 0 {
-			fmt.Fprintf(os.Stderr, "freev6: cleared %d leftover %s route(s)\n", removedRoutes, network.TunDeviceName)
-		}
+	if result.RestoreErr != nil {
+		return result.RestoreErr
 	}
-	if snapshot, err := network.LoadSnapshot(snapshotPathValue); err == nil {
-		restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		restoreErr := network.RestoreHotspot(restoreCtx, snapshot)
-		cancel()
-		if restoreErr != nil {
-			return restoreErr
-		}
-		if err := os.Remove(snapshotPathValue); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove restored network snapshot: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	if result.ClearedRoutes > 0 {
+		fmt.Fprintf(os.Stderr, "freev6: cleared %d leftover %s route(s)\n", result.ClearedRoutes, network.TunDeviceName)
 	}
 	fmt.Println("mihomo stopped")
 	return nil

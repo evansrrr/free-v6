@@ -52,13 +52,6 @@ const (
 	// 脚本最坏情况 = 停等 8s + 起等 15s + PowerShell 启动，60s 足够。
 	icsRecoverTimeout = 60 * time.Second
 
-	// tunStageTimeout 是"让内核关 TUN 并等适配器从系统消失"的总预算。内核
-	// 同步关闭 wintun 会话、实测 ~1s 才回响应，偶尔更久；给足 4s——把"关到
-	// 一半"当成失败去硬杀，才是留下幽灵适配器、网络长时间不恢复的根因。
-	tunStageTimeout = 4 * time.Second
-	// stopExitTimeout 等内核进程真正退出的上限。等的是 9090 端口释放——不等
-	// 它，紧接着的启动会在端口自检上撞出"端口被占用"。
-	stopExitTimeout = 2 * time.Second
 	// tunCleanupTimeout 是删除残留 TUN 默认路由的预算。实测本机四条 netsh
 	// 合计约 0.4s；3s 足够，又不会让停止/启动多等太久。
 	tunCleanupTimeout = 3 * time.Second
@@ -67,6 +60,9 @@ const (
 type helper struct {
 	root string
 	mu   sync.Mutex
+	// server 是本地 API 服务器，shutdown 端点用它做有界 Shutdown（不能从
+	// handler 里同步调用，所以 handler 只负责调度，见 exitAfterShutdown）。
+	server *http.Server
 	// settingsMu serializes settings.json read-modify-write transactions across
 	// the handlers that write it (settings PUT, chain/cloud import, proxy
 	// start, reset). Reads stay lock-free: the atomic write guarantees a reader
@@ -141,6 +137,13 @@ func main() {
 		return
 	}
 	root := executableRoot()
+	// 进程树诊断进 helper.log（与 RouteCleanupLog 同一套约定）。
+	mihomo.ProcessLog = os.Stderr
+	// Job 必须在任何子进程之前创建：helper 自加入后，之后派生的核心、
+	// powershell 等自动成为成员，helper 消失时一起退出。
+	if err := mihomo.InitProcessJob(); err != nil {
+		fmt.Fprintf(os.Stderr, "helper: process job unavailable: %v\n", err)
+	}
 	h := &helper{root: root}
 	// 旧版本预置的地理数据（geosite/geoip/mmdb，合计约 27MB）已经没有引用，
 	// 静默清掉；删不掉的（被占用）下次启动再试。
@@ -179,6 +182,7 @@ func main() {
 	mux.HandleFunc("/api/v1/settings/reset", h.resetSettings)
 	mux.HandleFunc("/api/v1/proxy/start", h.startProxy)
 	mux.HandleFunc("/api/v1/proxy/stop", h.stopProxy)
+	mux.HandleFunc("/api/v1/shutdown", h.shutdown)
 	mux.HandleFunc("/api/v1/warp/register", h.registerWarp)
 	mux.HandleFunc("/api/v1/update/download", h.updateDownload)
 	mux.HandleFunc("/api/v1/update/progress", h.updateProgress)
@@ -211,6 +215,10 @@ func main() {
 	// otherwise keeps our address busy forever — every relaunch died on the
 	// bind error. The shell now hands out a free port per launch, so this is
 	// the second line of defence rather than the only one.
+	h.server = server
+	// 桌面壳被强杀/崩溃时，helper 自己把会话停干净再退出（旧壳不传这个 env，
+	// 监视不启用，行为与之前一致）。
+	watchParent(h.shutdownFromParent)
 	listener, err := listenOrTakeOver(addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "helper: %v\n", err)
@@ -898,9 +906,12 @@ func (h *helper) startProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	// 内核跑通并应答了控制器：这份内核从此可信，回滚位可以回收。
 	// 失败路径不回收——那时回滚位正是要用的东西。
-	store.MarkVerified()
-	if removed := store.Prune(); len(removed) > 0 {
-		fmt.Fprintf(os.Stderr, "helper: pruned previous core: %v\n", removed)
+	// 只标记**本次实际启动的版本**：启动期间内核更新可能已经把 active 换掉，
+	// 那时不能把没跑过的内核标成"已验证"，也不能按新 active 回收旧版本。
+	if store.MarkVerified(core.Version) {
+		if removed := store.Prune(); len(removed) > 0 {
+			fmt.Fprintf(os.Stderr, "helper: pruned previous core: %v\n", removed)
+		}
 	}
 	// Persist onto the FULL stored settings — saving a partial struct here
 	// used to wipe blacklist/devMode on every proxy start, so the developer
@@ -1104,121 +1115,26 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	pidPath := filepath.Join(h.root, "state", "mihomo.pid")
-	snapshotPath := filepath.Join(h.root, "state", "network-snapshot.json")
-	// 热点上游（ICS/WinRT）必须在 TUN 适配器仍在时还原：FreeV6TUN 连接
-	// 存在才能显式禁用其共享角色。网卡 DNS 全程没有被改过，没有需要在这里
-	// 还原或写回的东西。
-	var restoreErr error
-	var restoreSkipped string
-	snapshot, err := network.LoadSnapshot(snapshotPath)
-	switch {
-	case err == nil:
-		ctx, cancel := context.WithTimeout(context.Background(), icsOpTimeout)
-		restoreErr = network.RestoreHotspot(ctx, snapshot)
-		cancel()
-	case errors.Is(err, network.ErrCorruptSnapshot):
-		// 坏文件没有可还原基线：跳过还原，但停止 mihomo 优先——快照问题
-		// 随响应回报，绝不再前置 500 把停止卡住。
-		restoreSkipped = err.Error()
-	case errors.Is(err, os.ErrNotExist):
-	default:
-		restoreSkipped = err.Error()
-	}
-	// 热点还原（若有）完成后先让内核自己关掉 TUN，再杀进程。
-	//
-	// 直接 TerminateProcess 会跳过内核的收尾：wintun 适配器与 auto-route 写进
-	// 路由表的默认路由只能等 Windows 异步回收，那几秒里出站流量仍然被吸进一个
-	// 没人接收的 TUN——"点了停止，网还要过十几秒才恢复"、紧接着点启动又检测
-	// 失败，都是这个窗口。PATCH 关掉 tun 之后适配器同步消失，路由立刻回到物理
-	// 网卡（见 mihomo.DisableTun）。必须在热点还原之后：还原 ICS 共享角色要求
-	// FreeV6TUN 连接仍然存在。任何一步失败只记日志、照旧硬杀，不退化。
-	stopStarted := time.Now()
-	tunAttempted := false
-	adapterGone := true
-	var teardownTook time.Duration
-	var patchErr error
-	if _, running, statusErr := mihomo.Status(pidPath); statusErr == nil && running {
-		tunAttempted = true
-		secret, _ := mihomo.ReadControllerSecret(filepath.Join(h.root, "state"))
-		// PATCH 与"等适配器消失"并发做，以适配器消失为准：内核要花 ~1s 才回
-		// 这个请求，串行等它只是白等。
-		stageCtx, stageCancel := context.WithTimeout(context.Background(), tunStageTimeout)
-		patchDone := make(chan error, 1)
-		go func() {
-			patchDone <- mihomo.DisableTun(stageCtx, mihomo.ControllerAddress, secret)
-		}()
-		stageStarted := time.Now()
-		// 不管 PATCH 成没成，都要等适配器真的消失再杀进程。
-		// PATCH 超时往往不是"没生效"，而是内核正关到一半：这时 TerminateProcess
-		// 会把它停在半路，wintun 适配器连同 auto-route 写进去的 ::/1、8000::/1
-		// 一起留下，网络在它被系统回收之前一直是死的——用户实测的"等很久也连
-		// 不上、提示有 IPv6 地址但出站不通"就是这一步。宁可多等一秒，也不在
-		// 拆到一半时动手。
-		adapterGone = network.WaitAdapterGone(stageCtx, network.TunDeviceName, 10*time.Millisecond)
-		if !adapterGone {
-			// 还没消失才需要知道 PATCH 的结果（用于排障），消失就不用等了。
-			select {
-			case patchErr = <-patchDone:
-			case <-stageCtx.Done():
-				patchErr = stageCtx.Err()
-			}
-		}
-		teardownTook = time.Since(stageStarted)
-		stageCancel()
-	}
-	stopWaited, stopExited, stopErr := mihomo.StopAndWait(pidPath, stopExitTimeout)
+
+	// 顺序与失败策略都收在 internal/lifecycle：还原热点 → 关 TUN → 停核 →
+	// 重读 → 清路由 → 删快照。用 Background 而不是请求上下文：客户端断开
+	// 不能把一次热点还原砍在半截。
+	result, stopErr := h.runStopSession(context.Background())
+	h.logStopResult(result)
 	if stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})
 		return
 	}
-	// 进程确认退出后就地清残留：PATCH 没关掉 TUN 时，适配器与 auto-route 写的
-	// 默认路由会留在系统里，用户若停在这里不再启动，出站会一直超时 —— 「下次
-	// 启动时清理」对这种情况等于永远不修。
-	//
-	// 只在 stopExited 为真时动手：进程还活着就会继续往路由表里写，此刻删除是在
-	// 跟内核收尾抢。清理期间 h.mu 仍被持有，紧接着的重启请求排在它之后，不会
-	// 出现「新会话刚建好的路由被上一次停止的清理删掉」。只删路由、保留适配器：
-	// 残留热点共享的还原还需要 FreeV6TUN 连接存在。
-	clearedRoutes := 0
-	if stopExited {
-		// 停止会先删 pid 文件再等进程退出，所以这里必须重新读一次：若有另一个
-		// 入口（CLI、第二个 helper）在这个窗口里刚把新内核拉起来，删路由就等于
-		// 删掉新会话的出站路径。stopExited 只证明「我们杀的那个」走了。
-		_, coreRunning, coreStatusErr := mihomo.Status(pidPath)
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
-		clearedRoutes = network.ClearLeftoverTunRoutes(cleanupCtx, coreRunning, coreStatusErr)
-		cleanupCancel()
-	}
-	// 记下停止完成的时刻：紧接着的 IPv6 前置检查据此判断"还在过渡态"，才值得
-	// 重试（见 ipv6probe.go 的 ipv6RetryWindow）。
+	// 记下停止完成的时刻：紧接着的 IPv6 前置检查据此判断"还在过渡态"。
 	h.markStopped()
-	// 一行阶段耗时进 helper.log：teardown（内核关 TUN + 适配器消失）与 exit
-	// （进程退出）分开记，才看得出时间花在哪一步。
-	if tunAttempted {
-		fmt.Fprintf(os.Stderr, "helper: stop: tun teardown %v (adapter gone=%v, patch err=%v), exit %v (exited=%v), cleared %d route(s), total %v\n",
-			teardownTook.Round(time.Millisecond), adapterGone, patchErr,
-			stopWaited.Round(time.Millisecond), stopExited, clearedRoutes, time.Since(stopStarted).Round(time.Millisecond))
-		if !adapterGone && !stopExited {
-			fmt.Fprintf(os.Stderr, "helper: stop: warning: %s 未在 %v 内消失且内核未退出，残留路由会在下次启动时清理\n",
-				network.TunDeviceName, tunStageTimeout)
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "helper: stop: core not running, cleared %d route(s), total %v\n",
-			clearedRoutes, time.Since(stopStarted).Round(time.Millisecond))
-	}
-	if restoreErr == nil {
-		_ = os.Remove(snapshotPath)
-	}
-	// The proxy has stopped regardless of the hotspot restore outcome; report
-	// 200 with a structured restoreError instead of 500 (which the UI reads as
-	// "still running"). The snapshot is kept so the next start self-heals.
+	// 不论热点还原成败都回 200：否则前端会把"已停止"读成"还在运行"。失败
+	// 通过结构化字段回传，快照保留给下次启动自愈。
 	response := map[string]any{"running": false}
-	if restoreErr != nil {
-		response["restoreError"] = restoreErr.Error()
+	if result.RestoreErr != nil {
+		response["restoreError"] = result.RestoreErr.Error()
 	}
-	if restoreSkipped != "" {
-		response["restoreSkipped"] = restoreSkipped
+	if result.RestoreSkipped != nil {
+		response["restoreSkipped"] = result.RestoreSkipped.Error()
 	}
 	writeJSON(writer, http.StatusOK, response)
 }

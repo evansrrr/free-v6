@@ -228,7 +228,9 @@ func TestPruneKeepsOnlyActiveCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.MarkVerified()
+	if !store.MarkVerified("core-v0.2.0") {
+		t.Fatal("the active version must be markable")
+	}
 
 	removed := store.Prune()
 	if len(removed) == 0 {
@@ -257,7 +259,9 @@ func TestVerifiedResetsOnEveryInstallAndRollback(t *testing.T) {
 	if store.Verified() {
 		t.Fatal("a freshly installed core is not verified yet")
 	}
-	store.MarkVerified()
+	if !store.MarkVerified("core-v0.1.0") {
+		t.Fatal("MarkVerified should accept the active version")
+	}
 	if !store.Verified() {
 		t.Fatal("MarkVerified should mark the active core as verified")
 	}
@@ -269,11 +273,37 @@ func TestVerifiedResetsOnEveryInstallAndRollback(t *testing.T) {
 		t.Fatal("installing a new core must clear the verified flag")
 	}
 
-	store.MarkVerified()
+	if !store.MarkVerified("core-v0.2.0") {
+		t.Fatal("MarkVerified should accept the newly installed version")
+	}
 	if _, err := store.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	if store.Verified() {
 		t.Fatal("rolling back must clear the verified flag")
+	}
+}
+
+// 启动期间内核更新可能把 Active 换掉：此时不能把"没跑过的那个版本"标成已验证，
+// 否则它的回滚位会被提前回收。
+func TestMarkVerifiedOnlyAcceptsTheStartedVersion(t *testing.T) {
+	store := NewCoreStore(t.TempDir())
+	if _, err := store.Install(writeTempExe(t, "v1"), "core-v0.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if store.MarkVerified("core-v9.9.9") {
+		t.Fatal("a version that is not active must not be marked")
+	}
+	if store.Verified() {
+		t.Fatal("the verified flag must stay clear")
+	}
+	if store.MarkVerified("") {
+		t.Fatal("an empty version must be rejected")
+	}
+	if !store.MarkVerified("core-v0.1.0") {
+		t.Fatal("the active version must be markable")
+	}
+	if !store.Verified() {
+		t.Fatal("the active core should now be verified")
 	}
 }

@@ -317,17 +317,23 @@ func (s *CoreStore) Rollback() (Core, error) {
 	return Core{Version: version, Path: path, Managed: true}, nil
 }
 
-// MarkVerified 记录"当前这份内核在本机确实跑起来了"。调用点只有一个：
-// 免流启动并通过控制器鉴权之后。它是回滚位可以被回收的唯一凭据。
-func (s *CoreStore) MarkVerified() {
+// MarkVerified 记录"这份内核在本机确实跑起来了"，返回是否标记成功。
+//
+// 只标记**本次实际启动的那个版本**：启动期间内核更新可能已经把 Active 换掉，
+// 此时把新 active 标成"已验证"，会让一个从未运行过的内核拿到"回滚位可回收"
+// 的资格。版本不匹配就不写，调用方据此跳过 Prune。
+func (s *CoreStore) MarkVerified(version string) bool {
 	coreMu.Lock()
 	defer coreMu.Unlock()
 	index := s.Index()
-	if index.Active == "" {
-		return
+	if index.Active == "" || strings.TrimSpace(version) == "" {
+		return false
+	}
+	if version != versionFromCoreFileName(index.Active) && version != index.Version {
+		return false
 	}
 	index.VerifiedAt = time.Now().UTC()
-	_ = s.writeIndex(index)
+	return s.writeIndex(index) == nil
 }
 
 // Verified 报告当前 active 内核是否已经在本机实测跑通过。
@@ -398,8 +404,9 @@ func (s *CoreStore) Prune() []string {
 		return nil
 	}
 	removed := s.sweep(map[string]bool{index.Active: true})
-	if len(removed) > 0 && index.Previous != "" {
-		// previous 已被删掉，指针留着只会让 Rollback 指向不存在的文件。
+	if index.Previous != "" && !isRegularFile(filepath.Join(s.CoresDir(), index.Previous)) {
+		// 只有 previous 确实不在磁盘上了才清指针。删不掉通常是它还占着 exe
+		// （旧核心正在运行），此时清指针等于把回滚位永久丢掉。
 		index.Previous = ""
 		_ = s.writeIndex(index)
 	}
