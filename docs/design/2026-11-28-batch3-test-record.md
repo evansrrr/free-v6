@@ -97,3 +97,36 @@
 
 三组改动互不依赖，可单独回退；没有数据格式变更（`settings.json` 与内容文件格式
 不变），旧版本可直接读取新版本写出的文件。
+
+## 6. 外部复核后的收尾（2026-11-28 晚）
+
+独立复核确认了主干（配置事务、分层超时、reset、门禁）并复跑了全部门禁，同时指出
+"事务的最后两个入口"没覆盖。本轮补完：
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P1 | `chainClear`/`cloudClear` 先删内容再关开关，且不取 `configMu`；崩在两步之间 = "开 + 无内容" | 两个 clear 进 `configMu`，**先关开关再删内容**，删除失败只记日志（与 reset 一致） |
+| P1 | `startProxy` 读 settings 与内容文件时不在 `configMu` 内，与导入/清除有一个分裂窗口 | 读取段（settings + 两个文件）进 `configMu`，解析与长操作在锁外；锁序 `h.mu → configMu → settingsMu` |
+| P1 | `/proxy/start` 的 180s 小于真实最坏（多段之和 ≈400s） | 档位拆开：start **420s**、stop **200s**；测试改为"覆盖各阶段之和 + 10s"而不是对单段套 ×1.5 |
+| P2 | `/warp/register` 落默认 10s，小于 WARP 客户端 20s | 新增 35s 档，并写进预算表测试 |
+| P2 | `parentWatchLockBudget=150s` 小于 start 的真实持锁时间 | 提到 **420s**：父进程在长启动中消失时，先让启动跑完再收尾，而不是半途退出把热点留在半切换 |
+| P2 | `cloudImport` 回传的 `updatedAt` 是导入前的值（首次为空） | 用本次写入的时间，回传值与持久化一致 |
+| P3 | `lib/api-timeouts.js` 加载失败时兜底 15s，start/stop 会比旧版更糟 | 兜底按路径给 200s（start/stop），其余 10s |
+
+未采纳（本轮）：
+
+- **Rust 纯用例抽成可 `cargo test` 的 lib 目标**：需要把 `classify_shutdown` /
+  `helper_client` 移出 bin crate，属于壳侧结构调整，留给批次 4 与前端拆分一起做。
+- **`api()` 的 AbortError/不回落/204 行为测试**：`api()` 直接依赖 `fetch`/DOM，
+  需随批次 4 把它抽成可注入的模块再测。本轮只覆盖了超时表。
+
+### 6.1 本轮真机验证
+
+| 场景 | 结果 |
+|---|---|
+| 导入 → 清除链式代理 | `import=200 enabled=true count=1` → `clear=200 enabled=false count=0`，`config/` 只剩 `settings.json` |
+| 备用配置首次导入 | `updatedAt=2026-11-28T20:02:27+08:00`（非空，与持久化一致） |
+| 30 天前的正结论 | `locked:false`，导入 200（F1 仍生效） |
+
+门禁：`go test -count=1 ./...` 全绿（helper 新增 4 个用例）、前端 **38/38**、
+`go vet`、`staticcheck v0.8.2`、`gofmt`、`cargo check --locked` 全部通过。

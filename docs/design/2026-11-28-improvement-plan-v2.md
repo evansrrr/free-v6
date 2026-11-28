@@ -534,6 +534,7 @@ python scripts/check-format.py   # 期望：exit 0（E4 落地后）
 | 2 | B1–B9（生命周期/Job/shutdown/会话锁/MarkVerified/CLI） | 1 合入 | 3–4 天 + 1 天真机 | §4.5 全表通过；无残留进程 | **已完成**（`2fafc73..bcf42f4`，记录 `2026-11-28-batch2-test-record.md`） |
 | 2.1 | 复核收尾：命名事故、`go-race`、4 条 P1/P2 | 2 | 0.5 天 | 发布构建全绿 | **已完成**（`0ce03be..ce30946`，发布 `0.5.7-beta.2`） |
 | 3 | C1–C3 + D1/D2 + F1（+ 复核新发现 G1–G5） | 可与 2 并行 | 1.5 天 | 并发导入/注入失败/弱网测试 | **已完成**（记录 `2026-11-28-batch3-test-record.md`） |
+| 3.1 | 复核收尾：clear/start 进 `configMu`、start 档位、warp 档位、父监视锁预算、`updatedAt` | 3 | 0.5 天 | clear/import 并发、真机清除顺序 | **已完成**（同一记录的 §6） |
 | 4 | D3/D4（UMD 拆分 + 纯逻辑测试） | 批次 3 | 2–3 天 | 首屏不劣化；每步单独提交 | 待开始 |
 | 5 | E1–E6 | 任意 | 0.5–1 天 | CI 绿；本机格式门禁绿 | 待开始 |
 
@@ -552,6 +553,11 @@ python scripts/check-format.py   # 期望：exit 0（E4 落地后）
 - **批次 3**：C1–C3、D1/D2、F1 全部落地，另修 G1（损坏 `settings.json` 时 reset
   闭环）、G2（并发导入两个出口同时开）、G3（内容文件非原子写）、G4（超时被当成
   端口错误二次重试）、G5（切换节点失败仍回填）。真机验证见批次 3 记录。
+- **批次 3.1**：外部复核查出"事务还差 clear 与 start 两个入口"，已补：两个 clear
+  进 `configMu` 且先关开关再删内容；`startProxy` 的读取段进锁（锁序
+  `h.mu → configMu → settingsMu`）；start 档位按各阶段之和提到 420s、stop 200s；
+  `/warp/register` 35s；父监视锁预算与 start 对齐到 420s；`cloudImport` 回传
+  本次写入的 `updatedAt`。未采纳：Rust lib 化与 `api()` 行为测试（随批次 4）。
 
 ---
 
