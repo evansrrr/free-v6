@@ -700,6 +700,9 @@ md-icon-button > md-icon {
 
 .traffic-speeds { display: flex; gap: 16px; margin-left: auto; }
 .speed-item { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--md-on-surface-variant); }
+.speed-dot { width: 6px; height: 6px; border-radius: 50%; }
+.speed-dot.upload { background: var(--series-up); }
+.speed-dot.download { background: var(--series-down); }
 .speed-arrow { --md-icon-size: 14px; }
 .speed-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; color: var(--md-on-surface); min-width: 60px; }
 .stats-legend-dot.dot-up { background: var(--series-up); }

@@ -1534,21 +1534,6 @@ function drawChart() {
   ctx.fillStyle = toRGBA(downColor, 0.06);
   ctx.fill();
 
-  // Endpoint markers, drawn after both fills so they are not covered. The last
-  // point sits exactly on chartW and the wrap clips overflow, so clamp it.
-  ctx.setLineDash([]);
-  const marker = (values, color) => {
-    if (!values.length) return;
-    const x = Math.min((TRAFFIC_POINTS - 1) * stepX, chartW - 3);
-    const y = chartH - (values[values.length - 1] / maxVal) * (chartH - 8) - 2;
-    ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-  };
-  marker(upVals, upColor);
-  marker(downVals, downColor);
-
   const canvas = $('#trafficCanvas');
   if (canvas) {
     canvas.setAttribute('aria-label',
