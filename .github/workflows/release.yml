@@ -213,6 +213,7 @@ jobs:
 
       # 上传后从 release 拉回来再验一次：证明"发出去的字节"和"签过的字节"一致
       # （本地文件被后续步骤改写、或上传通道做了任何转换，这里都会暴露）。
+      # 安装包也要按清单里的 sha256 复核：只验清单的话，附件被替换/传坏没人发现。
       - name: Verify the uploaded assets
         shell: pwsh
         env:
@@ -222,3 +223,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path verify | Out-Null
           gh release download $tag --pattern 'version.json' --pattern 'version.json.sig' --dir verify --clobber
           .\sign.exe -verify -in verify/version.json -sig verify/version.json.sig
+
+          $manifest = Get-Content verify/version.json -Raw | ConvertFrom-Json
+          if (-not $manifest.setup -or -not $manifest.sha256) {
+            throw 'version.json 缺少 setup 或 sha256'
+          }
+          gh release download $tag --pattern $manifest.setup --dir verify --clobber
+          $installer = Join-Path verify $manifest.setup
+          if (-not (Test-Path $installer)) {
+            throw "安装包 $($manifest.setup) 没有出现在 release 里"
+          }
+          $actual = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $manifest.sha256.ToLower()) {
+            throw "上传后的安装包 SHA256 与签名清单不一致: $actual != $($manifest.sha256)"
+          }
+          Write-Host "uploaded installer sha256 OK: $actual"
