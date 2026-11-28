@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "freev6-desktop"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "serde",
  "tauri",
