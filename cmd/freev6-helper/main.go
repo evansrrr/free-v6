@@ -1119,7 +1119,7 @@ func (h *helper) stopProxy(writer http.ResponseWriter, request *http.Request) {
 	// 顺序与失败策略都收在 internal/lifecycle：还原热点 → 关 TUN → 停核 →
 	// 重读 → 清路由 → 删快照。用 Background 而不是请求上下文：客户端断开
 	// 不能把一次热点还原砍在半截。
-	result, stopErr := h.runStopSession(context.Background())
+	result, stopErr := runStopSession(context.Background(), h.root)
 	h.logStopResult(result)
 	if stopErr != nil {
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": stopErr.Error()})

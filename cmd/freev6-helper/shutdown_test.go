@@ -1,11 +1,31 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yourname/freev6/internal/lifecycle"
 )
+
+// stubStopSession 把共用停止流程换成记录器。
+//
+// 默认实现会调 ClearLeftoverTunRoutes（netsh 删路由）：在开发者机器上以管理员
+// 跑测试、同时真实免流在运行时，那会删掉正在使用的路由。测试必须隔离系统状态。
+func stubStopSession(t *testing.T) *int32 {
+	t.Helper()
+	var calls int32
+	original := runStopSession
+	runStopSession = func(context.Context, string) (lifecycle.Result, error) {
+		atomic.AddInt32(&calls, 1)
+		return lifecycle.Result{CoreExited: true}, nil
+	}
+	t.Cleanup(func() { runStopSession = original })
+	return &calls
+}
 
 func TestShutdownRequiresPost(t *testing.T) {
 	h := &helper{root: t.TempDir()}
@@ -21,6 +41,7 @@ func TestShutdownBusyReturnsConflict(t *testing.T) {
 	originalBudget := shutdownLockBudget
 	shutdownLockBudget = 100 * time.Millisecond
 	t.Cleanup(func() { shutdownLockBudget = originalBudget })
+	calls := stubStopSession(t)
 
 	h := &helper{root: t.TempDir()}
 	h.mu.Lock()
@@ -30,6 +51,9 @@ func TestShutdownBusyReturnsConflict(t *testing.T) {
 	h.shutdown(rec, httptest.NewRequest(http.MethodPost, "/api/v1/shutdown", nil))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("busy helper must answer 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(calls); got != 0 {
+		t.Fatalf("a busy helper must not start cleanup, calls=%d", got)
 	}
 }
 
@@ -46,6 +70,7 @@ func TestShutdownRunsOnceAndExits(t *testing.T) {
 		exitProcess = originalExit
 		resetShutdownState()
 	})
+	calls := stubStopSession(t)
 
 	h := &helper{root: t.TempDir()}
 	rec := httptest.NewRecorder()
@@ -69,6 +94,9 @@ func TestShutdownRunsOnceAndExits(t *testing.T) {
 		t.Fatal("exit must be requested only once")
 	case <-time.After(300 * time.Millisecond):
 	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Fatalf("cleanup must run exactly once, calls=%d", got)
+	}
 }
 
 // 父进程消失后同样只收尾一次，然后退出。
@@ -81,6 +109,7 @@ func TestShutdownFromParentStopsOnce(t *testing.T) {
 		exitProcess = originalExit
 		resetShutdownState()
 	})
+	calls := stubStopSession(t)
 
 	h := &helper{root: t.TempDir()}
 	h.shutdownFromParent()
@@ -91,5 +120,8 @@ func TestShutdownFromParentStopsOnce(t *testing.T) {
 	}
 	if beginShutdown() {
 		t.Fatal("the first caller must own the shutdown")
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Fatalf("cleanup must run exactly once, calls=%d", got)
 	}
 }

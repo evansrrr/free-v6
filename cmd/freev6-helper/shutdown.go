@@ -23,7 +23,11 @@ var (
 	// shutdownServiceBudget 是 http.Server.Shutdown 的上限。WriteTimeout=0，
 	// 不设上限的话"优雅退出"可以永不返回。
 	shutdownServiceBudget = 5 * time.Second
-	// parentWatchBudget 是父进程消失后允许的收尾时间（热点还原最长 120s）。
+	// parentWatchLockBudget 是父进程消失后等 h.mu 的上限。startProxy 持锁最坏
+	// 约 135s（就绪等待 + 热点切换），所以"等锁"与"收尾"必须分开计时：合成
+	// 一段时，一次长启动会把 120s 的热点还原预算挤到只剩十几秒，还原被截断。
+	parentWatchLockBudget = 150 * time.Second
+	// parentWatchBudget 是拿到锁之后的收尾预算（热点还原最长 120s）。
 	parentWatchBudget = 150 * time.Second
 )
 
@@ -62,13 +66,29 @@ func resetShutdownState() {
 //
 // 停止按钮、shutdown 端点、父进程监视都走这里，顺序只有一份
 // （见 internal/lifecycle 的包注释）。
-func (h *helper) runStopSession(ctx context.Context) (lifecycle.Result, error) {
-	secret, _ := mihomo.ReadControllerSecret(filepath.Join(h.root, "state"))
+//
+// 是变量而不是方法：单测必须能把它换成 fake。默认实现会调
+// ClearLeftoverTunRoutes（netsh 删路由），在开发者机器上以管理员跑测试、
+// 同时真实会话在运行时，那会删掉正在使用的路由。
+var runStopSession = func(ctx context.Context, root string) (lifecycle.Result, error) {
+	secret, _ := mihomo.ReadControllerSecret(filepath.Join(root, "state"))
 	return lifecycle.StopSession(ctx, lifecycle.Options{
-		PidPath:          filepath.Join(h.root, "state", "mihomo.pid"),
-		SnapshotPath:     filepath.Join(h.root, "state", "network-snapshot.json"),
+		PidPath:          filepath.Join(root, "state", "mihomo.pid"),
+		SnapshotPath:     filepath.Join(root, "state", "network-snapshot.json"),
 		ControllerSecret: secret,
 	})
+}
+
+// lockWithin 在有界时间内拿到 h.mu；false 表示超时（调用方自己决定降级）。
+func (h *helper) lockWithin(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for !h.mu.TryLock() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return true
 }
 
 // logStopResult 把阶段耗时写进 helper.log：teardown（关 TUN + 适配器消失）与
@@ -99,16 +119,12 @@ func (h *helper) shutdown(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	deadline := time.Now().Add(shutdownLockBudget)
-	for !h.mu.TryLock() {
-		if time.Now().After(deadline) {
-			writeJSON(writer, http.StatusConflict, map[string]string{
-				"code":  "proxy-busy",
-				"error": "a start/stop is still running",
-			})
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
+	if !h.lockWithin(shutdownLockBudget) {
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"code":  "proxy-busy",
+			"error": "a start/stop is still running",
+		})
+		return
 	}
 
 	var (
@@ -119,7 +135,7 @@ func (h *helper) shutdown(writer http.ResponseWriter, request *http.Request) {
 		// 收尾用 WithoutCancel：壳侧只等一会儿就会断开连接，断开不能把热点
 		// 还原砍掉。
 		ctx := context.WithoutCancel(request.Context())
-		result, stopErr = h.runStopSession(ctx)
+		result, stopErr = runStopSession(ctx, h.root)
 		h.logStopResult(result)
 		h.scheduleExit()
 	}
@@ -155,11 +171,17 @@ func (h *helper) scheduleExit() {
 // shutdownFromParent 是父进程监视的收尾入口：桌面壳被强杀/崩溃后，helper
 // 仍然把会话停干净再退出，而不是留下一个提权孤儿。
 func (h *helper) shutdownFromParent() {
+	// 先有界地等锁，再开收尾预算：见 parentWatchLockBudget 的注释。
+	if !h.lockWithin(parentWatchLockBudget) {
+		fmt.Fprintf(os.Stderr, "helper: parent gone: session lock still held after %v, exiting without cleanup\n",
+			parentWatchLockBudget)
+		exitProcess(0)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), parentWatchBudget)
 	defer cancel()
-	h.mu.Lock()
 	if beginShutdown() {
-		result, _ := h.runStopSession(ctx)
+		result, _ := runStopSession(ctx, h.root)
 		h.logStopResult(result)
 	}
 	h.mu.Unlock()
