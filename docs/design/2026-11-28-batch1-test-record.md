@@ -98,3 +98,19 @@
 ## 7. 回滚
 
 代码回滚只能回到"已带验签的客户端"之后的版本，且回滚后的版本**仍须产出签名清单**（否则新客户端拒绝更新）。`.sig` 是纯增量资产，留在 release 上无副作用。
+
+## 8. 批次 1.1 补丁验证（2026-11-28 晚）
+
+按下述三条复核意见打了补丁（另加两条流水线加固），逐条验证：
+
+| 补丁 | 验证 | 结果 |
+|---|---|---|
+| 清单/签名请求补齐重定向守卫（`redirectGuard`，与下载路径共用） | `TestFetchBodyRejectsRedirectOutsideAllowlist`（127.0.0.1 → localhost 被拒）、`TestFetchBodyFollowsAllowlistedRedirect`（同主机跳转仍可用） | 通过 |
+| 同上：不打断真实链路 | 临时用例走真实镜像链拉 `v0.5.7-beta.1` 的清单：`fetchVerifiedManifest` → `version=0.5.7-beta.1`，**0.74s** | 通过（GitHub → CDN 的 302 仍在白名单内） |
+| 前端改发原始 github.com URL | `node --check` + 32/32 前端测试；helper 侧 `updateDownloadCandidates` 对 github.com 才展开镜像（单测 `TestUpdateDownloadCandidatesRewritesGitHubURL` 覆盖） | 通过（真机多镜像下载待下次更新演练） |
+| 发布流水线上传后校验安装包 SHA | YAML 解析通过；`Get-FileHash` 对比清单 `sha256`，不一致即失败 | 待下一次发布执行 |
+| beta 指针定时对账（4 次/天）+ 上传前验签 + 幂等 | YAML 解析通过；解析目标 tag 用 `gh release list` 过滤 `beta-channel` 自身 | 待下一次 `schedule` 或手动 dispatch |
+
+全量回归：`go test -count=1 ./...` 全绿、`go vet`、`staticcheck v0.8.2`、`gofmt`（改动文件）、`node --test` 32/32 均通过。
+
+未验证：`beta-channel` 指针仍未更新（需要手动 dispatch 或等定时任务）；投毒演练（T5）与旧客户端升级（T4）仍待指针修好后执行。
