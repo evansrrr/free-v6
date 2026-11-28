@@ -1119,12 +1119,6 @@ function guideForced() {
 
 const UPDATE_OWNER_REPO = 'evansrrr/free-v6';
 const SKIP_VERSION_KEY = 'freev6-skip-version';
-const GITHUB_PROXY = 'https://gh-proxy.com/';
-
-// 大陆访问加速：请求前部拼接代理前缀；已是代理地址则不重复拼接。
-function proxiedGitHub(url) {
-  return url.startsWith(GITHUB_PROXY) ? url : GITHUB_PROXY + url;
-}
 
 // Version source: the 关于 row (kept in sync with tauri.conf.json / Cargo.toml
 // by the release workflow's tag-version guard). The prerelease suffix matters:
@@ -1304,7 +1298,10 @@ async function startUpdate() {
   try {
     const ack = await api('/update/download', {
       method: 'PUT',
-      body: JSON.stringify({ url: proxiedGitHub(info.url), sha256: info.sha }),
+      // 发原始的 github.com URL：helper 会把它展开成「5 个镜像 + 直连」并做
+      // 停滞换线。前端若先拼 gh-proxy 前缀，host 不再是 github.com，helper
+      // 只走单条线路——那家镜像一挂就退化成 3 分钟硬超时。
+      body: JSON.stringify({ url: info.url, sha256: info.sha }),
     });
     if (!ack?.ok) throw new Error(ack?.error || '下载任务创建失败');
     prog = await pollUpdateProgress();
