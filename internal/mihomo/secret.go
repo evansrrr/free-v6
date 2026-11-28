@@ -54,11 +54,11 @@ func LoadOrCreateSecret(stateDir string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	// A present-but-unusable file (empty, truncated, whitespace) must not block
-	// the atomic publish below: clear it so Link/O_EXCL can install a fresh one.
-	if _, statErr := os.Stat(path); statErr == nil {
-		_ = os.Remove(path)
-	}
+	// publishSecret handles "already exists" (adopt the winner) and a
+	// pre-existing corrupt/empty file (clear + re-link) atomically — do NOT
+	// remove the file here: a concurrent creator may already have published a
+	// valid secret, and a blind Remove would clobber it (observed as a secret
+	// mismatch under -race).
 	if err := publishSecret(stateDir, path, fresh); err != nil {
 		return "", err
 	}
@@ -112,29 +112,19 @@ func publishSecret(stateDir, path, secret string) error {
 	if err := os.Link(tmpName, path); err == nil {
 		return nil
 	}
+	// Already exists: either a valid winner (adopt it — first-writer-wins keeps
+	// every caller on the same secret) or a corrupt/empty file left by a
+	// pre-atomic build (clear it and re-link). Read-back before clearing so a
+	// valid secret is never removed.
 	for attempt := 0; attempt < 5; attempt++ {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			if os.IsExist(err) {
-				if stored, rerr := ReadControllerSecret(stateDir); rerr == nil && validSecret(stored) {
-					return nil
-				}
-				time.Sleep(20 * time.Millisecond)
-				continue
-			}
-			return err
+		if stored, rerr := ReadControllerSecret(stateDir); rerr == nil && validSecret(stored) {
+			return nil
 		}
-		if _, err := file.WriteString(secret + "\n"); err != nil {
-			_ = file.Close()
-			_ = os.Remove(path)
-			return err
+		_ = os.Remove(path)
+		if err := os.Link(tmpName, path); err == nil {
+			return nil
 		}
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			_ = os.Remove(path)
-			return err
-		}
-		return file.Close()
+		time.Sleep(20 * time.Millisecond)
 	}
 	return errors.New("controller secret already exists with an unusable value")
 }

@@ -236,11 +236,11 @@ func TestValidCoreAssetURL(t *testing.T) {
 	cases := map[string]bool{
 		"https://github.com/evansrrr/f6-core/releases/download/core-v0.3.0/core.zip": true,
 		"https://objects.githubusercontent.com/x/y":                                  true,
-		"https://release-assets.githubusercontent.com/x/y":                            true,
-		"http://github.com/x":                                                        false, // plain http
-		"https://evil.example/x.zip":                                                 false, // arbitrary host
-		"https://127.0.0.1/x.zip":                                                    false, // loopback
-		"https://github.com.evil.net/x.zip":                                          false, // suffix squat
+		"https://release-assets.githubusercontent.com/x/y":                           true,
+		"http://github.com/x":               false, // plain http
+		"https://evil.example/x.zip":        false, // arbitrary host
+		"https://127.0.0.1/x.zip":           false, // loopback
+		"https://github.com.evil.net/x.zip": false, // suffix squat
 	}
 	for rawURL, want := range cases {
 		if got := validCoreAssetURL(rawURL); got != want {

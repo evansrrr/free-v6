@@ -13,18 +13,18 @@ func TestDNSResetCandidate(t *testing.T) {
 		want           bool
 	}{
 		// 真实形态：名 Server 与 DhcpNameServer 分隔符不同，值集合相同。
-		"frozen by the old bug":      {1, "202.204.52.89,202.204.52.94", "202.204.52.89 202.204.52.94", true},
-		"single server":              {1, "202.204.52.89", "202.204.52.89", true},
-		"order and spaces ignored":   {1, "202.204.52.94, 202.204.52.89", "202.204.52.89  202.204.52.94", true},
+		"frozen by the old bug":       {1, "202.204.52.89,202.204.52.94", "202.204.52.89 202.204.52.94", true},
+		"single server":               {1, "202.204.52.89", "202.204.52.89", true},
+		"order and spaces ignored":    {1, "202.204.52.94, 202.204.52.89", "202.204.52.89  202.204.52.94", true},
 		"ipv6 compressed vs expanded": {1, "2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001", true},
-		"user set their own dns":     {1, "1.1.1.1", "202.204.52.89 202.204.52.94", false},
-		"user set one of two":        {1, "202.204.52.89", "202.204.52.89 202.204.52.94", false},
-		"still dhcp":                 {1, "", "192.0.2.1", false},
-		"static ip, static dns":      {0, "192.0.2.53", "192.0.2.53", false},
-		"dhcp without dhcp dns":      {1, "192.0.2.53", "", false},
-		"blank static":               {1, "   ", "192.0.2.1", false},
-		"no dhcp key (zero value)":   {0, "192.0.2.53", "192.0.2.1", false},
-		"unparseable values":         {1, "dns.example", "dns.example", true},
+		"user set their own dns":      {1, "1.1.1.1", "202.204.52.89 202.204.52.94", false},
+		"user set one of two":         {1, "202.204.52.89", "202.204.52.89 202.204.52.94", false},
+		"still dhcp":                  {1, "", "192.0.2.1", false},
+		"static ip, static dns":       {0, "192.0.2.53", "192.0.2.53", false},
+		"dhcp without dhcp dns":       {1, "192.0.2.53", "", false},
+		"blank static":                {1, "   ", "192.0.2.1", false},
+		"no dhcp key (zero value)":    {0, "192.0.2.53", "192.0.2.1", false},
+		"unparseable values":          {1, "dns.example", "dns.example", true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

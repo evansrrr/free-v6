@@ -17,16 +17,16 @@ func TestResetSettingsRestoresDefaults(t *testing.T) {
 
 	// 写入一份非默认的 settings.json + 一个 chain-proxy.yaml
 	custom := settings{
-		Mode:        "global",
-		CampusCIDRs: []string{"10.0.0.0/8"},
-		Blacklist:   []string{"ads.example.com"},
-		DevMode:     true,
-		AutoStart:   false, // 测试环境无法操作 Task Scheduler，保持 false
-		SilentStart: true,
-		AutoRunProxy: true,
-		HotkeyEnabled: true,
-		HotspotShare: true,
-		ChainEnabled: true,
+		Mode:            "global",
+		CampusCIDRs:     []string{"10.0.0.0/8"},
+		Blacklist:       []string{"ads.example.com"},
+		DevMode:         true,
+		AutoStart:       false, // 测试环境无法操作 Task Scheduler，保持 false
+		SilentStart:     true,
+		AutoRunProxy:    true,
+		HotkeyEnabled:   true,
+		HotspotShare:    true,
+		ChainEnabled:    true,
 		ChainSourceType: "url",
 		ChainSourceURL:  "https://example.com/sub.yaml",
 	}
