@@ -67,7 +67,7 @@ type Options struct {
 // Result 记录每个阶段的结果。调用方据此决定响应体与日志，不需要自己再判断。
 type Result struct {
 	RestoreErr     error // 热点还原失败（快照保留，下次启动自愈）
-	RestoreSkipped error // 快照损坏或不存在，没有可还原的基线
+	RestoreSkipped error // 快照损坏/读不了；快照不存在不算（那是正常情况）
 
 	TunAttempted bool // 停之前核心在运行，尝试过关 TUN
 	AdapterGone  bool
@@ -97,8 +97,12 @@ func StopSession(ctx context.Context, opt Options) (Result, error) {
 	//    失败不阻断停止：快照保留，下次启动自愈。
 	snapshot, err := opt.LoadSnapshot(opt.SnapshotPath)
 	if err != nil {
-		// 坏文件/不存在都只记录：没有可还原的基线，但停止必须继续。
-		result.RestoreSkipped = err
+		// 没有快照是正常情况（从没成功启动过会话，或上次启动没写快照）：不该
+		// 报"还原已跳过"，否则前端每次停止都多一条红色提示。损坏/权限错误才
+		// 是需要提示的异常。
+		if !errors.Is(err, os.ErrNotExist) {
+			result.RestoreSkipped = err
+		}
 	} else {
 		restoreCtx, cancel := context.WithTimeout(ctx, opt.HotspotBudget)
 		result.RestoreErr = opt.RestoreHotspot(restoreCtx, snapshot)

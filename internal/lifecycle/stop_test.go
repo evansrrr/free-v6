@@ -3,17 +3,31 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/yourname/freev6/internal/network"
 )
 
-type recorder struct{ steps []string }
+// recorder 记录步骤顺序。disableTun 在 goroutine 里调 DisableTun，同一时刻
+// 主 goroutine 在调 WaitAdapterGone，两者都会 add —— 不加锁时 `go test -race`
+// 会直接判失败（CI 的 go-race job 就是这么抓到的）。
+type recorder struct {
+	mu    sync.Mutex
+	steps []string
+}
 
-func (r *recorder) add(step string) { r.steps = append(r.steps, step) }
+func (r *recorder) add(step string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.steps = append(r.steps, step)
+}
 
 func (r *recorder) index(step string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i, value := range r.steps {
 		if value == step {
 			return i
@@ -27,6 +41,7 @@ type fake struct {
 	rec *recorder
 
 	restoreErr  error
+	snapshotErr error
 	stopErr     error
 	lockErr     error
 	adapterGone bool
@@ -43,7 +58,7 @@ func (f *fake) options() Options {
 		SnapshotPath: "state/network-snapshot.json",
 		LoadSnapshot: func(string) (network.Snapshot, error) {
 			f.rec.add("load-snapshot")
-			return network.Snapshot{}, nil
+			return network.Snapshot{}, f.snapshotErr
 		},
 		RestoreHotspot: func(context.Context, network.Snapshot) error {
 			f.rec.add("restore")
@@ -214,6 +229,37 @@ func TestStopSessionSkipsTunWhenCoreNotRunning(t *testing.T) {
 	}
 	if f.rec.index("core") < 0 {
 		t.Fatal("StopCore is still the idempotent path")
+	}
+}
+
+// 快照不存在是正常情况（从没成功启动过会话）：不能当成"还原已跳过"报给前端，
+// 否则每次停止都多一条红色提示。停止照常继续。
+func TestStopSessionIgnoresMissingSnapshot(t *testing.T) {
+	f := &fake{adapterGone: true, coreRunningBeforeStop: true, snapshotErr: os.ErrNotExist}
+	result, err := StopSession(context.Background(), f.options())
+	if err != nil {
+		t.Fatalf("missing snapshot must not fail the stop: %v", err)
+	}
+	if result.RestoreSkipped != nil {
+		t.Fatalf("a missing snapshot is not an anomaly: %v", result.RestoreSkipped)
+	}
+	if f.rec.index("restore") >= 0 {
+		t.Fatalf("nothing to restore: %v", f.rec.steps)
+	}
+	if f.rec.index("core") < 0 {
+		t.Fatal("stop must continue after a missing snapshot")
+	}
+}
+
+// 快照存在但读不出来（损坏/权限）仍然要提示：那是需要人看一眼的异常。
+func TestStopSessionReportsUnreadableSnapshot(t *testing.T) {
+	f := &fake{adapterGone: true, snapshotErr: errors.New("snapshot: invalid character '}'")}
+	result, err := StopSession(context.Background(), f.options())
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if result.RestoreSkipped == nil {
+		t.Fatal("an unreadable snapshot must be reported")
 	}
 }
 
